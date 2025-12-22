@@ -1,0 +1,28 @@
+experiment_name: "arc_hybrid"
+seed: 42
+
+env:
+  kind: "arc"
+  dataset_path: "data/arc_original/"
+  split: "train"
+  num_tasks: 10
+
+agent:
+  kind: "hybrid"
+  model_name: "gpt-4.1-mini"
+  max_steps: 4
+  use_symbolic_patterns: true
+  use_memory: true
+
+optimization:
+  kind: "geq"
+  num_trials: 3
+  search_space:
+    temperature: [0.2, 0.4]
+    max_tokens: [256, 512]
+
+evaluation:
+  metrics:
+    - "task_success_rate"
+  save_predictions: true
+  output_dir: "results/arc/arc_hybrid/"

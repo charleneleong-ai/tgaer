@@ -1,0 +1,329 @@
+#################################################################################
+# GLOBALS                                                                       #
+#################################################################################
+
+[tools]
+gh = "2.74.2"
+jq = "1.8.0"
+pre-commit = "4.2.0"
+rg = "latest"
+usage = "latest"
+uv = "0.7.17"
+yq = "4.45.4"
+
+[env]
+ENV = "local"
+LOG_LEVEL = "DEBUG"
+TARGET_PLATFORM = "$(mise run detect-platform)"
+
+[settings]
+# Explicitly enable idiomatic version file detection
+# See: https://github.com/jdx/mise/discussions/4345
+# This enables mise to read versions from .python-version
+idiomatic_version_file_enable_tools = ["python"]
+
+#################################################################################
+# SETUP                                                                         #
+#################################################################################
+
+[tasks.env-setup]
+description = "Add tool configurations to your shell config file"
+run = """
+#!/usr/bin/env zsh
+autoload -Uz compinit
+compinit
+if [[ ! -z "${ZSH_NAME}" ]]; then
+  echo "Running on Zsh..."
+  echo '' | tee -a ~/.zshrc
+  echo '# Setup mise' | tee -a ~/.zshrc
+  echo 'eval "$($HOME/.local/bin/mise activate zsh)"' | tee -a ~/.zshrc
+  echo 'eval "$($HOME/.local/bin/mise completion zsh)"' | tee -a ~/.zshrc
+  echo "##################################################"
+  echo "# Now run 'source ~/.zshrc' to apply the changes #"
+  echo "##################################################"
+elif [[ ! -z "${BASH}" ]]; then
+  echo "Running on Bash..."
+  echo '' | tee -a ~/.bashrc
+  echo '# Setup mise' | tee -a ~/.bashrc
+  echo 'eval "$($HOME/.local/bin/mise activate bash)"' | tee -a ~/.bashrc
+  echo 'eval "$($HOME/.local/bin/mise completion bash)"' | tee -a ~/.bashrc
+  echo "###################################################"
+  echo "# Now run 'source ~/.bashrc' to apply the changes #"
+  echo "###################################################"
+elif [[ ! -z "${FISH_VERSION}" ]]; then
+  echo "Running on Fish..."
+  echo '' | tee -a ~/.config/fish/config.fish
+  echo '# Setup mise' | tee -a ~/.config/fish/config.fish
+  echo 'eval "$($HOME/.local/bin/mise activate fish)"' | tee -a ~/.config/fish/config.fish
+  echo 'eval "$($HOME/.local/bin/mise completion fish)"' | tee -a ~/.config/fish/config.fish
+  echo "####################################################################"
+  echo "# Now run 'source ~/.config/fish/config.fish' to apply the changes #"
+  echo "####################################################################"
+else
+  echo "Unknown shell"
+  exit 1
+fi
+"""
+
+[tasks.brew-install]
+description = "Install Homebrew"
+run = """
+#!/usr/bin/env zsh
+if [[ "${OS}" == "Darwin" ]]; then
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  echo >> ~/.zprofile
+  echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+else
+  echo "Unsupported OS $(OS)"
+  exit 1
+fi
+"""
+
+#################################################################################
+# DEPENDENCIES                                                                  #
+#################################################################################
+
+[tasks.detect-platform]
+description = "Detect and return the target platform"
+run = """
+#!/usr/bin/env zsh
+export OS="$(uname -s)"
+ARCH="$(uname -m)"
+ARM_ARCHS=(arm64 aarch64)
+
+if [[ "${OS}" == "Darwin" ]]; then
+  if [[ "${ARCH}" == "arm64" ]]; then
+    echo "darwin-arm64"
+  elif [[ "${ARCH}" == "x86_64" ]]; then
+    echo "darwin-amd64"
+  else
+    echo "Unsupported architecture ${ARCH} on macOS" >&2
+    exit 1
+  fi
+elif [[ "${OS}" == "Linux" ]]; then
+  if [[ "${ARCH}" == "x86_64" ]]; then
+    echo "linux-amd64"
+  elif (($ARM_ARCHS[(Ie)${ARCH}])); then
+    echo "linux-arm64"
+  else
+    echo "Unsupported architecture ${ARCH} on Linux" >&2
+    exit 1
+  fi
+else
+  echo "Unsupported OS ${OS}" >&2
+  exit 1
+fi
+"""
+
+[tasks.uv-init]
+description = "Initialise the uv environment and create virtual environment"
+run = """
+#!/usr/bin/env zsh
+PYTHON_VERSION="$(mise ls python --current --json | jq -r '.[].version')"
+uv venv --python "${PYTHON_VERSION}"
+"""
+
+[tasks.uv-install]
+description = "Install dependencies using uv"
+depends = ["uv-init"]
+run = """
+#!/usr/bin/env zsh
+uv pip install -e ".[dev]"
+"""
+
+[tasks.uv-sync]
+description = "Sync the uv dependencies and update the lock file"
+run = """
+#!/usr/bin/env zsh
+uv lock
+uv pip install -e ".[dev]"
+uv sync
+"""
+
+[tasks.pre-commit-run]
+description = "Install and run the pre-commit hooks"
+run = """
+#!/usr/bin/env zsh
+uv run pre-commit install --install-hooks --overwrite
+uv run pre-commit run --all-files
+"""
+
+[tasks.uv-cache-clean]
+description = "Clear uv cache to ensure environment is clean"
+run = """
+#!/usr/bin/env zsh
+uv cache clean
+"""
+
+#################################################################################
+# DEVELOPMENT                                                                   #
+#################################################################################
+
+[tasks.run-experiment]
+description = "Run an experiment with specified config (CONFIG arg required)"
+run = """
+#!/usr/bin/env zsh
+if [ -z "${CONFIG:-}" ]; then
+  echo "CONFIG environment variable is required"
+  echo "Available experiments:"
+  find configs/experiments -name "*.yaml" -type f | sed 's|configs/experiments/||'
+  echo ""
+  echo "Usage: CONFIG=arc_hybrid mise run run-experiment"
+  exit 1
+fi
+
+uv run python experiments/runner.py --config configs/experiments/${CONFIG}.yaml
+"""
+
+[tasks.run-cli]
+description = "Run the TGAER CLI"
+run = """
+#!/usr/bin/env zsh
+uv run python -m tgaer.cli.main "$@"
+"""
+
+#################################################################################
+# TESTING                                                                       #
+#################################################################################
+
+[tasks.test]
+description = "Run full test suite"
+run = """
+#!/usr/bin/env zsh
+uv run pytest tests/ -v
+"""
+
+[tasks.test-unit]
+description = "Run unit tests only"
+run = """
+#!/usr/bin/env zsh
+uv run pytest tests/unit/ -v
+"""
+
+[tasks.test-integration]
+description = "Run integration tests"
+run = """
+#!/usr/bin/env zsh
+uv run pytest tests/integration/ -v
+"""
+
+[tasks.test-cov]
+description = "Run tests with coverage report"
+run = """
+#!/usr/bin/env zsh
+uv run pytest tests/ --cov=src/tgaer --cov-report=term-missing --cov-report=html
+"""
+
+#################################################################################
+# CODE QUALITY                                                                  #
+#################################################################################
+
+[tasks.lint]
+description = "Format and lint code"
+run = """
+#!/usr/bin/env zsh
+uv run ruff format .
+uv run ruff check --fix
+uv run black .
+uv run isort .
+"""
+
+[tasks.lint-check]
+description = "Check code formatting and linting without making changes"
+run = """
+#!/usr/bin/env zsh
+uv run ruff format --check .
+uv run ruff check .
+uv run black --check .
+uv run isort --check-only .
+"""
+
+#################################################################################
+# EVALUATION                                                                    #
+#################################################################################
+
+[tasks.run-arc-eval]
+description = "Run ARC evaluation benchmark"
+run = """
+#!/usr/bin/env zsh
+uv run python -m tgaer.evaluation.arc_benchmark
+"""
+
+[tasks.run-orak-eval]
+description = "Run ORAK evaluation benchmark"
+run = """
+#!/usr/bin/env zsh
+uv run python -m tgaer.evaluation.orak_benchmark
+"""
+
+[tasks.mlflow-ui]
+description = "Launch MLflow UI for viewing experiment results"
+run = """
+#!/usr/bin/env zsh
+uv run mlflow ui
+"""
+
+#################################################################################
+# DASHBOARDS                                                                    #
+#################################################################################
+
+[tasks.dashboard]
+description = "Launch Streamlit dashboard (requires dashboards extra)"
+run = """
+#!/usr/bin/env zsh
+if ! uv pip show streamlit &> /dev/null; then
+  echo "Streamlit not installed. Installing dashboards extras..."
+  uv pip install -e ".[dashboards]"
+fi
+uv run streamlit run dashboards/app.py
+"""
+
+#################################################################################
+# CLEANUP                                                                       #
+#################################################################################
+
+[tasks.clean]
+description = "Delete all compiled Python files and cache dirs"
+run = """
+#!/usr/bin/env zsh
+find . -type f -name "*.DS_Store" -ls -delete
+find . -type f -name "*.py[co]" -delete
+find . -type f -name "*.log" -delete
+find . -type f -name "*.coverage*" -delete
+find . -type d -name "__pycache__" -exec rm -rf {} +
+find . -type d -name "*.egg-info" -exec rm -rf {} +
+find . -type d -name "*.pytest_cache" -exec rm -rf {} +
+find . -type d -name "*.mypy_cache" -exec rm -rf {} +
+find . -type d -name "*.ruff_cache" -exec rm -rf {} +
+find . -type d -name ".ipynb_checkpoints" -exec rm -rf {} +
+find . -type d -name "htmlcov" -exec rm -rf {} +
+find . -type d -empty -delete
+"""
+
+[tasks.clean-all]
+description = "Deep clean including virtual environment and MLflow artifacts"
+depends = ["clean"]
+run = """
+#!/usr/bin/env zsh
+rm -rf .venv
+rm -rf mlruns
+rm -rf .pytest_cache
+rm -rf .coverage
+echo "Deep clean completed. Run 'mise run uv-install' to reinstall dependencies."
+"""
+
+#################################################################################
+# DOCUMENTATION                                                                 #
+#################################################################################
+
+[tasks.docs-serve]
+description = "Serve documentation locally (if using mkdocs or similar)"
+run = """
+#!/usr/bin/env zsh
+if [ -f "mkdocs.yml" ]; then
+  uv run mkdocs serve
+else
+  echo "No documentation server configured"
+  echo "Add mkdocs or similar to pyproject.toml if needed"
+fi
+"""

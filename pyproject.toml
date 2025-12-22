@@ -1,0 +1,27 @@
+[project]
+name = "tgaer"
+version = "0.1.0"
+description = "Toward General-Purpose Abstraction & Embodied Reasoning"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Charlene Leong" }]
+
+dependencies = [
+  ## Modelling
+  "numpy>=2.2.6", # https://numpy.org/doc/stable/release.html
+  "pandas>=2.2.3", # https://github.com/pandas-dev/pandas/releases
+  "tqdm>=4.67.1", # https://github.com/tqdm/tqdm/releases
+  "PyYAML>=6.0.2", # https://github.com/yaml/pyyaml/releases
+  "typer>=0.12.3", # https://github.com/tiangolo/typer/releases
+  "rich", # https://github.com/Textualize/rich/releases
+  "dspy-ai", # https://github.com/stanfordnlp/dspy/releases/
+  "mlflow",
+  "langsmith",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff", "isort"]
+dashboards = ["streamlit"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

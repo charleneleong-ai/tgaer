@@ -1,0 +1,34 @@
+experiment_name: "orak_geq_opt"
+seed: 123
+
+env:
+  kind: "orak"
+  api_endpoint: "https://orak-api.example.com"
+  missions:
+    - "mission_001"
+    - "mission_002"
+  max_steps_per_mission: 50
+
+agent:
+  kind: "planning"
+  model_name: "gpt-4.1"
+  use_skill_registry: true
+  use_memory: true
+  planner:
+    strategy: "lookahead"
+    depth: 3
+
+optimization:
+  kind: "geq"
+  num_trials: 3
+  search_space:
+    temperature: [0.1, 0.3]
+    planning_depth: [2, 3]
+    exploration_bias: [0.1, 0.3]
+
+evaluation:
+  metrics:
+    - "mission_success_rate"
+    - "avg_steps_to_success"
+  save_traces: true
+  output_dir: "results/orak/orak_geq_opt/"
