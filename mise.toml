@@ -22,62 +22,6 @@ TARGET_PLATFORM = "$(mise run detect-platform)"
 # This enables mise to read versions from .python-version
 idiomatic_version_file_enable_tools = ["python"]
 
-#################################################################################
-# SETUP                                                                         #
-#################################################################################
-
-[tasks.env-setup]
-description = "Add tool configurations to your shell config file"
-run = """
-#!/usr/bin/env zsh
-autoload -Uz compinit
-compinit
-if [[ ! -z "${ZSH_NAME}" ]]; then
-  echo "Running on Zsh..."
-  echo '' | tee -a ~/.zshrc
-  echo '# Setup mise' | tee -a ~/.zshrc
-  echo 'eval "$($HOME/.local/bin/mise activate zsh)"' | tee -a ~/.zshrc
-  echo 'eval "$($HOME/.local/bin/mise completion zsh)"' | tee -a ~/.zshrc
-  echo "##################################################"
-  echo "# Now run 'source ~/.zshrc' to apply the changes #"
-  echo "##################################################"
-elif [[ ! -z "${BASH}" ]]; then
-  echo "Running on Bash..."
-  echo '' | tee -a ~/.bashrc
-  echo '# Setup mise' | tee -a ~/.bashrc
-  echo 'eval "$($HOME/.local/bin/mise activate bash)"' | tee -a ~/.bashrc
-  echo 'eval "$($HOME/.local/bin/mise completion bash)"' | tee -a ~/.bashrc
-  echo "###################################################"
-  echo "# Now run 'source ~/.bashrc' to apply the changes #"
-  echo "###################################################"
-elif [[ ! -z "${FISH_VERSION}" ]]; then
-  echo "Running on Fish..."
-  echo '' | tee -a ~/.config/fish/config.fish
-  echo '# Setup mise' | tee -a ~/.config/fish/config.fish
-  echo 'eval "$($HOME/.local/bin/mise activate fish)"' | tee -a ~/.config/fish/config.fish
-  echo 'eval "$($HOME/.local/bin/mise completion fish)"' | tee -a ~/.config/fish/config.fish
-  echo "####################################################################"
-  echo "# Now run 'source ~/.config/fish/config.fish' to apply the changes #"
-  echo "####################################################################"
-else
-  echo "Unknown shell"
-  exit 1
-fi
-"""
-
-[tasks.brew-install]
-description = "Install Homebrew"
-run = """
-#!/usr/bin/env zsh
-if [[ "${OS}" == "Darwin" ]]; then
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  echo >> ~/.zprofile
-  echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-else
-  echo "Unsupported OS $(OS)"
-  exit 1
-fi
-"""
 
 #################################################################################
 # DEPENDENCIES                                                                  #
@@ -256,27 +200,6 @@ run = """
 uv run python -m tgaer.evaluation.orak_benchmark
 """
 
-[tasks.mlflow-ui]
-description = "Launch MLflow UI for viewing experiment results"
-run = """
-#!/usr/bin/env zsh
-uv run mlflow ui
-"""
-
-#################################################################################
-# DASHBOARDS                                                                    #
-#################################################################################
-
-[tasks.dashboard]
-description = "Launch Streamlit dashboard (requires dashboards extra)"
-run = """
-#!/usr/bin/env zsh
-if ! uv pip show streamlit &> /dev/null; then
-  echo "Streamlit not installed. Installing dashboards extras..."
-  uv pip install -e ".[dashboards]"
-fi
-uv run streamlit run dashboards/app.py
-"""
 
 #################################################################################
 # CLEANUP                                                                       #
@@ -312,18 +235,3 @@ rm -rf .coverage
 echo "Deep clean completed. Run 'mise run uv-install' to reinstall dependencies."
 """
 
-#################################################################################
-# DOCUMENTATION                                                                 #
-#################################################################################
-
-[tasks.docs-serve]
-description = "Serve documentation locally (if using mkdocs or similar)"
-run = """
-#!/usr/bin/env zsh
-if [ -f "mkdocs.yml" ]; then
-  uv run mkdocs serve
-else
-  echo "No documentation server configured"
-  echo "Add mkdocs or similar to pyproject.toml if needed"
-fi
-"""
