@@ -39,6 +39,9 @@ class PoetiqAgent(Agent):
         submodule = Path(config.get("submodule_path", _DEFAULT_SUBMODULE)).expanduser().resolve()
         _ensure_poetiq_on_path(submodule)
 
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
+        load_dotenv(submodule / ".env")
+
         from arc_agi.solve import solve  # type: ignore[import-not-found]
         from arc_agi.io import build_kaggle_two_attempts  # type: ignore[import-not-found]
 
