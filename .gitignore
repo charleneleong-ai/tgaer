@@ -94,3 +94,6 @@ tmp_*.*
 .mlflow/
 mlflow.db
 mlruns/
+
+# autoresearch sweep artifacts (per-tag subdirs under experiments/)
+experiments/*/

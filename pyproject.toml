@@ -17,6 +17,8 @@ dependencies = [
   "dspy-ai", # https://github.com/stanfordnlp/dspy/releases/
   "mlflow",
   "langsmith",
+  "autoresearch @ git+https://github.com/charleneleong-ai/autoresearch.git@v0.26.2", # https://github.com/charleneleong-ai/autoresearch/releases
+  "matplotlib>=3.8", # required by autoresearch.render
 ]
 
 [project.optional-dependencies]
