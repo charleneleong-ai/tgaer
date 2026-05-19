@@ -3,7 +3,7 @@ name = "tgaer"
 version = "0.1.0"
 description = "Toward General-Purpose Abstraction & Embodied Reasoning"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "Charlene Leong" }]
 
 dependencies = [
@@ -22,6 +22,12 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "isort"]
 dashboards = ["streamlit"]
+poetiq = [
+  "litellm==1.78.2",
+  "asynciolimiter==1.2.0",
+  "python-dotenv==1.1.1",
+  "scipy==1.16.3",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

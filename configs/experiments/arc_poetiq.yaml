@@ -1,0 +1,20 @@
+experiment_name: "arc_poetiq"
+seed: 0
+
+env:
+  kind: "arc"
+  dataset_path: "challenges/poetiq-arc-agi-solver/data/arc-prize-2024/"
+  split: "evaluation"
+  num_tasks: 5
+
+agent:
+  kind: "poetiq"
+  # Uses Poetiq's CONFIG_LIST (defaults to gemini/gemini-3-pro-preview).
+  # Override the submodule path here if vendored elsewhere:
+  # submodule_path: "challenges/poetiq-arc-agi-solver"
+
+evaluation:
+  metrics:
+    - "task_success_rate"
+  save_predictions: true
+  output_dir: "results/arc/arc_poetiq/"

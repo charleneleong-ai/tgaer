@@ -10,6 +10,7 @@ from tgaer.envs.orak.orak_api import OrakClient
 from tgaer.agents.llm_agent import LLMAgent
 from tgaer.agents.hybrid_agent import HybridAgent
 from tgaer.agents.planning_agent import PlanningAgent
+from tgaer.agents.poetiq_agent import PoetiqAgent
 
 from tgaer.optimization.geq_loop import GEQOptimizer, expand_search_space
 from tgaer.evaluation.arc_eval import evaluate_arc_agent
@@ -41,6 +42,8 @@ def _build_agent(agent_cfg: Dict[str, Any]):
         return HybridAgent(config=agent_cfg)
     if kind == "planning":
         return PlanningAgent(config=agent_cfg)
+    if kind == "poetiq":
+        return PoetiqAgent(config=agent_cfg)
     raise ValueError(f"Unknown agent kind: {kind}")
 
 

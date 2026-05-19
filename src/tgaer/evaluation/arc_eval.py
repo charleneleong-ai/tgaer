@@ -8,12 +8,14 @@ from tgaer.evaluation.metrics import EvalResult
 
 
 def evaluate_arc_agent(agent: Agent, env: Environment, cfg: Dict[str, Any]) -> EvalResult:
-    _ = env.reset()
-    observation = env.render()
-    # In practice, you will adapt observation to the HybridAgent expectation
-    if not isinstance(observation, dict):
-        observation = {"input_grid": str(observation)}
+    observation = env.reset()
     action = agent.act(observation)
     transition = env.step(action)
-    score = float(transition.reward)
-    return EvalResult(score=score, details={"done": transition.done})
+    return EvalResult(
+        score=float(transition.reward),
+        details={
+            "task_id": observation.get("task_id"),
+            "done": transition.done,
+            **(transition.info or {}),
+        },
+    )

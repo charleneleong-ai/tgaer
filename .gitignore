@@ -90,5 +90,7 @@ tmp_*.*
 # Langgraph
 .langgraph_api/**
 
-#
+# MLflow local tracking
 .mlflow/
+mlflow.db
+mlruns/
