@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List
+
+from autoresearch.render import render as render_progress
+from autoresearch.results import STATUS_DISCARD, STATUS_KEEP, log_experiment
 
 from tgaer.envs.arc.arc_env import ArcEnvironment
 from tgaer.envs.arc.arc_dataset import load_arc_tasks
@@ -84,8 +88,32 @@ def run_experiment(cfg: Dict[str, Any]) -> None:
     else:
         agent = _build_agent(agent_cfg)
         scores: List[float] = []
+        ar_dir = eval_cfg.get("experiments_dir", "experiments")
+        ar_game = f"{env_cfg['kind']}-{env_cfg.get('split', 'default')}"
+        agent_kind = agent_cfg.get("kind", "?")
         for env in envs:
+            t0 = time.time()
             res = eval_fn(agent, env, eval_cfg)
+            elapsed_min = (time.time() - t0) / 60.0
             scores.append(res.score)
+            log_experiment(
+                experiments_dir=ar_dir,
+                tag=experiment_name,
+                game=ar_game,
+                score=res.score,
+                status=STATUS_KEEP if res.score >= 1.0 else STATUS_DISCARD,
+                description=f"{agent_kind} -> {res.details.get('task_id', '?')}",
+                runtime_min=elapsed_min,
+                extra={"details": res.details},
+            )
         avg_score = sum(scores) / len(scores) if scores else 0.0
         print(f"[RESULT] Avg score over {len(envs)} envs: {avg_score}")
+        if scores:
+            out_path = render_progress(
+                experiments_dir=ar_dir,
+                tag=experiment_name,
+                title=f"{experiment_name} progress",
+                score_field="score",
+                score_label="ARC task accuracy (1.0 = solved)",
+            )
+            print(f"[CHART] {out_path}")
