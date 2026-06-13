@@ -19,6 +19,7 @@ dependencies = [
   "langsmith",
   "autoresearch @ git+https://github.com/charleneleong-ai/autoresearch.git@v0.26.2", # https://github.com/charleneleong-ai/autoresearch/releases
   "matplotlib>=3.8", # required by autoresearch.render
+  "requests>=2.31", # ARC-AGI-3 hosted API transport (three.arcprize.org)
 ]
 
 [project.optional-dependencies]
