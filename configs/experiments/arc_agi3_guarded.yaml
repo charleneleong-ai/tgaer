@@ -1,0 +1,18 @@
+experiment_name: "arc_agi3_guarded"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-016295f7601e"
+  max_actions: 80
+
+agent:
+  kind: "random"
+
+guards:
+  futile_action: true
+  repeated_plan: true
+
+evaluation:
+  max_steps: 80
+  output_dir: "results/arc_agi3/arc_agi3_guarded/"

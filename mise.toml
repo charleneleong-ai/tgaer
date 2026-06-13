@@ -256,6 +256,14 @@ run = """
 uv run python -m tgaer.evaluation.orak_benchmark
 """
 
+[tasks.run-eval]
+description = "Run a guarded eval loop, dispatched on env.kind (CONFIG arg, default arc_agi3_guarded)"
+run = """
+#!/usr/bin/env zsh
+CONFIG="${CONFIG:-arc_agi3_guarded}"
+uv run python -m tgaer.cli.evaluate run configs/experiments/${CONFIG}.yaml "$@"
+"""
+
 [tasks.mlflow-ui]
 description = "Launch MLflow UI for viewing experiment results"
 run = """
