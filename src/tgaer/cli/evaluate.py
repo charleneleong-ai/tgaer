@@ -4,8 +4,14 @@ from pathlib import Path
 
 import typer
 import yaml
+from dotenv import load_dotenv
 
 from tgaer.evaluation.dispatch import run_eval
+
+# Load .env (ARC_API_KEY, ...) once at import so every entry path — the
+# tgaer-eval console script, `python -m`, or importing `app` — sees it.
+# Real env vars take precedence (load_dotenv override=False).
+load_dotenv()
 
 app = typer.Typer(
     help="Run a guarded TGAER eval loop, dispatched on the config's env.kind."
