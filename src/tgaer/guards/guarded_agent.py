@@ -12,17 +12,21 @@ class GuardedAgent(Agent):
     to ``inner.act``.
 
     Guards whose ``can_run(env)`` is False are dropped at construction, so the
-    hot path stays branch-free.
+    hot path stays branch-free. ``hint_count`` records how many steps fired at
+    least one hint — a cheap eval signal for how often the agent looped.
     """
 
     def __init__(self, inner: Agent, guards: list[Guard], *, env: Any = None) -> None:
         self._inner = inner
         self._guards = [g for g in guards if env is None or g.can_run(env)]
+        self.hint_count = 0
 
     def act(self, observation: Any) -> Any:
         for guard in self._guards:
             guard.observe(observation)
         hints = [h for guard in self._guards if (h := guard.hint())]
+        if hints:
+            self.hint_count += 1
         action = self._inner.act(_augment(observation, hints) if hints else observation)
         for guard in self._guards:
             guard.record_action(action)
@@ -32,6 +36,7 @@ class GuardedAgent(Agent):
         self._inner.update_context(feedback)
 
     def reset(self) -> None:
+        self.hint_count = 0
         for guard in self._guards:
             guard.reset()
 
