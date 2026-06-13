@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Callable
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 from tgaer.agents.arc_agi3_random import RandomArcAgi3Agent
 from tgaer.core.agent_base import Agent
@@ -48,17 +49,33 @@ def _run_arc_agi3(
     agent: Agent | None = None,
 ) -> EvalResult:
     env_cfg = cfg["env"]
+    transport = transport or _live_arc_agi3_transport()
     env = ArcAgi3Environment(
-        transport or _live_arc_agi3_transport(),
-        env_cfg["game_id"],
-        max_actions=env_cfg.get("max_actions", 80),
+        transport, env_cfg["game_id"], max_actions=env_cfg.get("max_actions", 80)
     )
     eval_cfg = {
         "guards": build_guards(cfg),
         "max_steps": cfg.get("evaluation", {}).get("max_steps", 1000),
     }
     agent = agent or _build_arc_agi3_agent(cfg, cfg.get("seed", 0))
-    return evaluate_arc_agi3_agent(agent, env, eval_cfg)
+    with _scorecard(transport):
+        return evaluate_arc_agi3_agent(agent, env, eval_cfg)
+
+
+@contextmanager
+def _scorecard(transport: ArcTransport) -> Iterator[None]:
+    """Open a scorecard around the run so a live play is scored, and always
+    close it. No-ops for transports without scorecard support (test fakes)."""
+    scored = hasattr(transport, "open_scorecard") and hasattr(
+        transport, "close_scorecard"
+    )
+    if scored:
+        transport.open_scorecard()
+    try:
+        yield
+    finally:
+        if scored:
+            transport.close_scorecard()
 
 
 def _not_wired(kind: str) -> Loader:

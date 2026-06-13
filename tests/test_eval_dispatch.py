@@ -11,8 +11,8 @@ from tgaer.cli import evaluate as cli
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcFrame
 from tgaer.evaluation import dispatch
 
-GAME_ID = "ls20-016295f7601e"
 CONFIG_PATH = Path("configs/experiments/arc_agi3_guarded.yaml")
+GAME_ID = yaml.safe_load(CONFIG_PATH.read_text())["env"]["game_id"]
 
 
 def _frame(state="NOT_FINISHED", levels=0) -> ArcFrame:
@@ -35,6 +35,20 @@ class _ScriptedTransport:
         return _frame(state="WIN", levels=1)
 
 
+class _ScoredTransport(_ScriptedTransport):
+    """Scripted transport that also records scorecard open/close, like the
+    live client — to verify the run is wrapped in a scorecard."""
+
+    def __init__(self):
+        self.events: list[str] = []
+
+    def open_scorecard(self):
+        self.events.append("open")
+
+    def close_scorecard(self):
+        self.events.append("close")
+
+
 def _cfg() -> dict:
     return yaml.safe_load(CONFIG_PATH.read_text())
 
@@ -52,6 +66,11 @@ class TestDispatch:
         assert result.score == 1.0
         assert result.details["task_id"] == GAME_ID
         assert result.details["done"] is True
+
+    def test_wraps_run_in_a_scorecard_when_supported(self):
+        transport = _ScoredTransport()
+        dispatch.run_eval(_cfg(), transport=transport)
+        assert transport.events == ["open", "close"]
 
     def test_unknown_kind_raises(self):
         with pytest.raises(ValueError, match="unknown env.kind"):

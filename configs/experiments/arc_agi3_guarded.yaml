@@ -3,7 +3,7 @@ seed: 0
 
 env:
   kind: "arc_agi3"
-  game_id: "ls20-016295f7601e"
+  game_id: "ls20-9607627b"  # a live game on three.arcprize.org (see GET /api/games)
   max_actions: 80
 
 agent:
