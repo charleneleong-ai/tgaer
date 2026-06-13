@@ -1,6 +1,6 @@
 [submodule "challenges/orak-2025-starter-kit"]
 	path = challenges/orak-2025-starter-kit
-	url = git@gitlab.aicrowd.com:charlene_leong/orak-2025-starter-kit.git
+	url = git@github.com:charleneleong-ai/orak-2025-starter-kit.git
 [submodule "challenges/poetiq-arc-agi-solver"]
 	path = challenges/poetiq-arc-agi-solver
 	url = https://github.com/poetiq-ai/poetiq-arc-agi-solver
