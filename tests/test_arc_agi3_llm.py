@@ -11,7 +11,7 @@ AVAILABLE = [1, 2, 3, 6]
 def _agent(reply: str, available=AVAILABLE) -> ArcAgi3LLMAgent:
     """Agent whose LLM call returns a canned string — no network."""
     a = ArcAgi3LLMAgent(seed=0)
-    a._complete = lambda _prompt: reply  # type: ignore[method-assign]
+    a._complete = lambda _prompt, _img=None: reply  # type: ignore[method-assign]
     return a
 
 
@@ -59,7 +59,7 @@ class TestFallback:
     def test_llm_exception_falls_back(self):
         a = ArcAgi3LLMAgent(seed=0)
 
-        def _boom(_prompt):
+        def _boom(_prompt, _img=None):
             raise RuntimeError("gemini down")
 
         a._complete = _boom  # type: ignore[method-assign]
@@ -74,7 +74,7 @@ class TestPromptContext:
     def test_prompt_lists_available_actions_and_grid(self):
         seen = {}
         a = ArcAgi3LLMAgent(seed=0)
-        a._complete = lambda prompt: seen.setdefault("p", prompt) and '{"id": 1}'  # type: ignore[method-assign]
+        a._complete = lambda prompt, _img=None: seen.setdefault("p", prompt) and '{"id": 1}'  # type: ignore[method-assign]
         a.act(_obs())
         assert "2" in seen["p"] and "3" in seen["p"]  # available action ids surfaced
 
@@ -117,6 +117,22 @@ class TestPerception:
         a = _agent('{"id": 1}')
         a.act(_obs())
         assert a._prev_grid == _obs()["frame"][-1]
+
+
+class TestVision:
+    def test_vision_passes_an_image_to_complete(self):
+        seen = {}
+        a = ArcAgi3LLMAgent(seed=0, vision=True)
+        a._complete = lambda _p, img=None: seen.setdefault("img", img) or '{"id": 1}'  # type: ignore[method-assign]
+        a.act(_obs())
+        assert seen["img"] is not None and seen["img"].startswith("data:image/png;base64,")
+
+    def test_no_vision_sends_no_image(self):
+        seen = {}
+        a = ArcAgi3LLMAgent(seed=0, vision=False)
+        a._complete = lambda _p, img=None: seen.setdefault("img", img) or '{"id": 1}'  # type: ignore[method-assign]
+        a.act(_obs())
+        assert seen["img"] is None
 
 
 class TestLocalEndpoint:

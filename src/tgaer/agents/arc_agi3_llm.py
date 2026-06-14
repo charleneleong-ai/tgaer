@@ -48,12 +48,15 @@ class ArcAgi3LLMAgent(Agent):
         max_history: int = 8,
         api_base: str | None = None,
         api_key: str | None = None,
+        vision: bool = False,
     ) -> None:
         self._rng = random.Random(seed)
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._max_history = max_history
+        # When True, also send the board rendered as an image (VL models).
+        self._vision = vision
         # Set for an OpenAI-compatible local server (e.g. vLLM on :8000); leave
         # None to use the provider keyed off the model prefix (gemini/, etc.).
         self._api_base = api_base
@@ -72,7 +75,8 @@ class ArcAgi3LLMAgent(Agent):
         self.last_reasoning = ""
         self.last_reply = ""
         try:
-            self.last_reply = self._complete(self._build_prompt(obs, available))
+            image_url = self._image_of(obs) if self._vision else None
+            self.last_reply = self._complete(self._build_prompt(obs, available), image_url)
             action = self._parse(self.last_reply, available)
         except Exception:
             action = self._fallback(available)
@@ -83,17 +87,28 @@ class ArcAgi3LLMAgent(Agent):
         self._prev_grid = self._grid_of(obs)  # compare against this next step
         return action
 
-    def _complete(self, prompt: str) -> str:
+    def _image_of(self, obs: dict) -> str | None:
+        from tgaer.envs.arc_agi3.rendering import grid_to_png_data_url
+
+        return grid_to_png_data_url(obs.get("frame"))
+
+    def _complete(self, prompt: str, image_url: str | None = None) -> str:
         from litellm import completion
 
         extra = {}
         if self._api_base:
             extra = {"api_base": self._api_base, "api_key": self._api_key}
+        content: Any = prompt
+        if image_url:
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ]
         resp = completion(
             model=self._model,
             messages=[
                 {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": prompt},
+                {"role": "user", "content": content},
             ],
             temperature=self._temperature,
             max_tokens=self._max_tokens,

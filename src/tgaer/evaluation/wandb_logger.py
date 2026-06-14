@@ -2,25 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-# ARC colour palette: grid index 0-15 -> RGB. Index 0 is the background/black.
-ARC_PALETTE: list[tuple[int, int, int]] = [
-    (0, 0, 0),
-    (0, 116, 217),
-    (255, 65, 54),
-    (46, 204, 64),
-    (255, 220, 0),
-    (170, 170, 170),
-    (240, 18, 190),
-    (255, 133, 27),
-    (127, 219, 255),
-    (135, 12, 37),
-    (60, 60, 60),
-    (0, 80, 160),
-    (180, 40, 30),
-    (30, 140, 40),
-    (180, 150, 0),
-    (90, 90, 90),
-]
+from tgaer.envs.arc_agi3.rendering import grid_to_rgb
+
+__all__ = ["build_logger", "WandbRunLogger", "grid_to_rgb"]
 
 
 def build_logger(
@@ -39,20 +23,6 @@ def build_logger(
         log_images=wandb_cfg.get("log_images", True),
         image_every=int(wandb_cfg.get("image_every", 1)),
     )
-
-
-def grid_to_rgb(frame: list[list[list[int]]] | None):
-    """Render the most recent 64x64 grid in an ARC-AGI-3 frame to an HxWx3 uint8
-    RGB array via the palette. Returns None if the frame is empty/malformed."""
-    import numpy as np
-
-    if not frame:
-        return None
-    arr = np.asarray(frame[-1], dtype=int)
-    if arr.ndim != 2:
-        return None
-    palette = np.asarray(ARC_PALETTE, dtype=np.uint8)
-    return palette[np.clip(arr, 0, len(palette) - 1)]
 
 
 class WandbRunLogger:

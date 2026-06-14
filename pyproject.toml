@@ -23,6 +23,7 @@ dependencies = [
   "python-dotenv>=1.0", # tgaer-eval loads .env (ARC_API_KEY) on startup
   "litellm>=1.78", # ArcAgi3LLMAgent backend (Gemini / local vLLM via one client)
   "wandb>=0.27", # ARC-AGI-3 eval metric + frame-image logging
+  "pillow>=10", # render the board to PNG for the vision agent + wandb images
 ]
 
 [project.scripts]

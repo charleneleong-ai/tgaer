@@ -1,0 +1,31 @@
+experiment_name: "arc_agi3_qwen3vl"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-9607627b"  # a live game on three.arcprize.org
+  max_actions: 80
+
+agent:
+  kind: "llm"
+  # Vision baseline: Qwen3-VL served on vLLM. The board is sent BOTH as the text
+  # grid and as a rendered image (vision: true). 4B is the cached model; swap to
+  # Qwen3-VL-30B-A3B-Instruct-AWQ (orak-twin) for a stronger run.
+  model: "openai/Qwen/Qwen3-VL-4B-Instruct"
+  api_base: "http://localhost:8000/v1"
+  vision: true
+  temperature: 0.3
+  max_tokens: 1024
+
+guards:
+  futile_action: true
+  repeated_plan: true
+
+evaluation:
+  max_steps: 80
+
+wandb:
+  enabled: true
+  project: "tgaer-arc-agi3"
+  log_images: true
+  image_every: 1
