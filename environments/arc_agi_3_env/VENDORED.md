@@ -17,12 +17,13 @@ Read in full. No `subprocess`/`eval`/`exec`/`socket`/`pickle`/`os.system`; the o
 network is `requests` to the ARC API (`ROOT_URL`). `load_dotenv` reads `.env` for
 `ARC_API_KEY`. Clean.
 
-## Our extensions (planned — see docs/specs/2026-06-14-arc-agi3-rl-design.md)
-- Port the tgaer perception work into `_format_observation`: legible board encoding,
-  per-step action feedback (diff), and the board image for VL policies
-  (`tgaer.envs.arc_agi3.rendering.grid_to_png_data_url`).
-- Add reward shaping (novelty / sub-goal / anti-stall) for the harder remote games;
-  keep binary WIN for the solvable mazes.
+## Our extensions
+- **Shaped reward (done):** `shaped_reward.py` — a `ShapedArcAgi3Env` + `load_environment`
+  that keeps binary WIN and adds dense novelty / anti-stall signal. Reward logic lives in
+  `tgaer.envs.arc_agi3.shaping` (unit-tested); this module is just the verifiers wiring.
+- **Planned (see docs/specs/2026-06-14-arc-agi3-rl-design.md):** port the tgaer perception work
+  into `_format_observation` (legible encoding, action feedback, board image via
+  `tgaer.envs.arc_agi3.rendering.grid_to_png_data_url`); add sub-goal credit for remote games.
 
 ## Dependency
 Needs `arcengine>=0.9.3` (the local-game engine) — install into the training venv
