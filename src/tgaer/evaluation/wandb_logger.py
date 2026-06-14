@@ -74,7 +74,10 @@ class WandbRunLogger:
         if self._log_images and step % self._image_every == 0:
             rgb = grid_to_rgb(frame)
             if rgb is not None:
-                board = self._wandb.Image(rgb, caption=f"step {step}")
+                # Caption carries the reasoning so the media panel shows the
+                # board image AND the model's thinking together.
+                caption = f"step {step} · a{action_id}: {(reasoning or '').strip()[:240]}"
+                board = self._wandb.Image(rgb, caption=caption)
                 data["frame"] = board
         self._run.log(data)
         # Board image as a table cell so it sits SIDE BY SIDE with the reasoning.
