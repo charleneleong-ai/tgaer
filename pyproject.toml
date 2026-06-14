@@ -20,7 +20,11 @@ dependencies = [
   "autoresearch @ git+https://github.com/charleneleong-ai/autoresearch.git@v0.26.2", # https://github.com/charleneleong-ai/autoresearch/releases
   "matplotlib>=3.8", # required by autoresearch.render
   "requests>=2.31", # ARC-AGI-3 hosted API transport (three.arcprize.org)
+  "python-dotenv>=1.0", # tgaer-eval loads .env (ARC_API_KEY) on startup
 ]
+
+[project.scripts]
+tgaer-eval = "tgaer.cli.evaluate:main"
 
 [project.optional-dependencies]
 dev = ["pytest", "black", "ruff", "isort"]
@@ -34,3 +38,7 @@ poetiq = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
