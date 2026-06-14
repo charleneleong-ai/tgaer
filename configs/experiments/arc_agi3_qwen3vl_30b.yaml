@@ -1,0 +1,29 @@
+experiment_name: "arc_agi3_qwen3vl_30b"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-9607627b"  # a live game on three.arcprize.org
+  max_actions: 80
+
+agent:
+  kind: "llm"
+  # Stronger vision baseline: the orak Qwen3.6-35B-A3B twin (MoE A3B), AWQ 4-bit.
+  model: "openai/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ"
+  api_base: "http://localhost:8000/v1"
+  vision: true
+  temperature: 0.3
+  max_tokens: 1536
+
+guards:
+  futile_action: true
+  repeated_plan: true
+
+evaluation:
+  max_steps: 80
+
+wandb:
+  enabled: true
+  project: "tgaer-arc-agi3"
+  log_images: true
+  image_every: 1
