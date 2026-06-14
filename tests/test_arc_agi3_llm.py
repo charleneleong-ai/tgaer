@@ -85,6 +85,40 @@ class TestPromptContext:
         assert len(a._history) <= a._max_history
 
 
+class TestPerception:
+    def test_render_grid_prefixes_row_indices(self):
+        a = ArcAgi3LLMAgent(seed=0)
+        out = a._render_grid([[0, 1], [12, 15]])
+        assert out.splitlines() == [" 0|01", " 1|cf"]  # 12->c, 15->f
+
+    def test_prompt_states_board_dims(self):
+        a = ArcAgi3LLMAgent(seed=0)
+        prompt = a._build_prompt(_obs(), AVAILABLE)
+        assert "4 rows x 4 cols" in prompt
+
+    def test_diff_first_move(self):
+        a = ArcAgi3LLMAgent(seed=0)
+        assert "first move" in a._diff_feedback([[0]]).lower()
+
+    def test_diff_no_change_flags_it(self):
+        a = ArcAgi3LLMAgent(seed=0)
+        a._prev_grid = [[0, 0], [0, 0]]
+        a._history = ["3"]
+        assert "NOTHING" in a._diff_feedback([[0, 0], [0, 0]])
+
+    def test_diff_reports_changed_cells(self):
+        a = ArcAgi3LLMAgent(seed=0)
+        a._prev_grid = [[0, 0], [0, 0]]
+        a._history = ["2"]
+        msg = a._diff_feedback([[0, 5], [0, 0]])
+        assert "1 cells" in msg and "(0,1)" in msg
+
+    def test_prev_grid_tracked_across_steps(self):
+        a = _agent('{"id": 1}')
+        a.act(_obs())
+        assert a._prev_grid == _obs()["frame"][-1]
+
+
 class TestLocalEndpoint:
     def test_api_base_sets_default_local_key(self):
         a = ArcAgi3LLMAgent(model="openai/qwen", api_base="http://localhost:8000/v1")

@@ -15,10 +15,14 @@ from tgaer.envs.arc_agi3.arc_agi3_api import (
 
 _SYSTEM = (
     "You are playing ARC-AGI-3, an interactive grid puzzle. Each turn you see the "
-    "current 64x64 grid (colour indices 0-15) and the action ids available to you. "
-    "Pick ONE action that makes progress toward completing levels. Actions other than "
+    "board as a grid of integer cell values. Each character is ONE cell's value, a "
+    "palette index 0-15 written 0-9 then a-f (a=10 ... f=15) — these are category "
+    "labels, NOT hex colour codes. Rows are 0-indexed top-to-bottom (label on the "
+    "left); columns 0-indexed left-to-right. You also get feedback on what your last "
+    "action changed. Infer the rules from how the board responds, then pick ONE action "
+    "that makes progress toward completing levels. Actions other than "
     f"{COMPLEX_ACTION_ID} are simple moves; action {COMPLEX_ACTION_ID} acts on a single "
-    "cell and needs x,y coordinates in [0,63]. "
+    "cell at (x, y) with x=column and y=row in [0,63]. "
     'Reply with ONLY a JSON object: {"id": <available action id>, "x": <int|null>, '
     '"y": <int|null>}.'
 )
@@ -57,6 +61,7 @@ class ArcAgi3LLMAgent(Agent):
             api_key if api_key is not None else ("local" if api_base else None)
         )
         self._history: list[str] = []
+        self._prev_grid: list[list[int]] | None = None  # last frame, for diff feedback
         # Last turn's model trace, surfaced for logging/audit (empty on fallback).
         self.last_reasoning: str = ""
         self.last_reply: str = ""
@@ -75,6 +80,7 @@ class ArcAgi3LLMAgent(Agent):
         if action.id == COMPLEX_ACTION_ID:
             tag += f"@({action.x},{action.y})"
         self._history = [*self._history, tag][-self._max_history :]
+        self._prev_grid = self._grid_of(obs)  # compare against this next step
         return action
 
     def _complete(self, prompt: str) -> str:
@@ -99,18 +105,48 @@ class ArcAgi3LLMAgent(Agent):
         self.last_reasoning = getattr(msg, "reasoning_content", "") or ""
         return msg.content or ""
 
-    def _build_prompt(self, obs: dict, available: list[int]) -> str:
+    @staticmethod
+    def _grid_of(obs: dict) -> list[list[int]]:
         frames = obs.get("frame") or []
-        grid = frames[-1] if frames else []
-        grid_txt = "\n".join("".join(format(c, "x") for c in row) for row in grid)
+        return frames[-1] if frames else []
+
+    def _build_prompt(self, obs: dict, available: list[int]) -> str:
+        grid = self._grid_of(obs)
         history = ", ".join(self._history) or "(none)"
         return (
             f"State: {obs.get('state')}  Levels completed: {obs.get('levels_completed')}\n"
             f"Available action ids: {available}\n"
             f"Recent actions: {history}\n"
-            f"Current grid (hex colour per cell):\n{grid_txt}\n"
+            f"{self._diff_feedback(grid)}\n"
+            f"Board ({len(grid)} rows x {len(grid[0]) if grid else 0} cols), "
+            "each char = one cell's value 0-f:\n"
+            f"{self._render_grid(grid)}\n"
             "Choose the next action as JSON."
         )
+
+    @staticmethod
+    def _render_grid(grid: list[list[int]]) -> str:
+        # Row index on the left so the model can read coordinates unambiguously.
+        return "\n".join(
+            f"{r:2d}|" + "".join(format(c, "x") for c in row)
+            for r, row in enumerate(grid)
+        )
+
+    def _diff_feedback(self, grid: list[list[int]]) -> str:
+        prev = self._prev_grid
+        if prev is None:
+            return "Feedback: first move (no prior action)."
+        last = self._history[-1] if self._history else "?"
+        changed = [
+            (r, c)
+            for r in range(min(len(grid), len(prev)))
+            for c in range(min(len(grid[r]), len(prev[r])))
+            if grid[r][c] != prev[r][c]
+        ]
+        if not changed:
+            return f"Feedback: your last action ({last}) changed NOTHING — try something different."
+        sample = ", ".join(f"({r},{c})" for r, c in changed[:8])
+        return f"Feedback: your last action ({last}) changed {len(changed)} cells, e.g. {sample}."
 
     def _parse(self, raw: str, available: list[int]) -> ArcAction:
         match = _JSON_RE.search(raw)
