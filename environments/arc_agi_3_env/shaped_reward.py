@@ -16,7 +16,8 @@ from typing import Any
 
 import verifiers as vf
 
-from arc_agi_3_env import ArcAgi3Env, _build_dataset  # vendored upstream
+from arc_agi_3_env import ArcAgi3Env  # vendored upstream (package re-export)
+from arc_agi_3_env import load_environment as _upstream_load_environment
 
 from tgaer.envs.arc_agi3 import shaping
 
@@ -51,8 +52,9 @@ def load_environment(
     w_stall: float = 0.1,
     **_: Any,
 ) -> vf.Environment:
-    dataset = _build_dataset(
-        game_family=game_family, level_index=level_index, game_id=game_id
+    # Reuse upstream to build the dataset, then swap in our class + shaped rubric.
+    base = _upstream_load_environment(
+        game_family=game_family, max_turns=max_turns, level_index=level_index, game_id=game_id
     )
     rubric = build_shaped_rubric(w_win=w_win, w_novelty=w_novelty, w_stall=w_stall)
-    return ShapedArcAgi3Env(dataset=dataset, rubric=rubric, max_turns=max_turns)
+    return ShapedArcAgi3Env(dataset=base.dataset, rubric=rubric, max_turns=max_turns)
