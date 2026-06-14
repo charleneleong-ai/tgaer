@@ -16,6 +16,7 @@ def evaluate_arc_agi3_agent(
     agent: Agent,
     env: ArcAgi3Environment,
     cfg: dict[str, Any] | None = None,
+    logger: Any | None = None,
 ) -> EvalResult:
     """Run one interactive ARC-AGI-3 episode, with trajectory guards wrapped
     around ``agent`` so degenerate loops get a planner hint mid-episode.
@@ -34,6 +35,7 @@ def evaluate_arc_agi3_agent(
     guarded.reset()
     total_reward = 0.0
     steps = 0
+    prev_hints = 0
     done = False
     info: dict[str, Any] = {}
 
@@ -45,14 +47,28 @@ def evaluate_arc_agi3_agent(
         info = transition.info or {}
         done = transition.done
         steps += 1
+        if logger is not None:
+            hints = guarded.hint_count
+            logger.log_step(
+                step=steps,
+                action_id=getattr(action, "id", None),
+                reward=transition.reward,
+                score=total_reward,
+                levels_completed=info.get("levels_completed"),
+                guard_fired=hints > prev_hints,
+                frame=observation.get("frame"),
+                reasoning=getattr(agent, "last_reasoning", None),
+                reply=getattr(agent, "last_reply", None),
+            )
+            prev_hints = hints
 
-    return EvalResult(
-        score=total_reward,
-        details={
-            **info,
-            "task_id": env.task_id(),
-            "done": done,
-            "steps": steps,
-            "guard_hints_fired": guarded.hint_count,
-        },
-    )
+    details = {
+        **info,
+        "task_id": env.task_id(),
+        "done": done,
+        "steps": steps,
+        "guard_hints_fired": guarded.hint_count,
+    }
+    if logger is not None:
+        logger.finish({"score": total_reward, **details})
+    return EvalResult(score=total_reward, details=details)

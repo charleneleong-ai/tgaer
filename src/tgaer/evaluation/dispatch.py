@@ -4,17 +4,19 @@ import os
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
+from tgaer.agents.arc_agi3_llm import ArcAgi3LLMAgent
 from tgaer.agents.arc_agi3_random import RandomArcAgi3Agent
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcTransport
 from tgaer.envs.arc_agi3.arc_agi3_env import ArcAgi3Environment
 from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
 from tgaer.evaluation.metrics import EvalResult
+from tgaer.evaluation.wandb_logger import build_logger
 from tgaer.guards import FutileActionGuard, Guard, RepeatedPlanGuard
 
 Loader = Callable[..., EvalResult]
 
-_ARC_AGI3_AGENTS = {"random": RandomArcAgi3Agent}
+_ARC_AGI3_AGENTS = {"random": RandomArcAgi3Agent, "llm": ArcAgi3LLMAgent}
 _GUARDS = {"futile_action": FutileActionGuard, "repeated_plan": RepeatedPlanGuard}
 
 
@@ -24,9 +26,11 @@ def build_guards(cfg: dict[str, Any]) -> list[Guard]:
 
 
 def _build_arc_agi3_agent(cfg: dict[str, Any], seed: int) -> Agent:
-    kind = cfg.get("agent", {}).get("kind", "random")
+    agent_cfg = cfg.get("agent", {})
+    kind = agent_cfg.get("kind", "random")
+    params = {k: v for k, v in agent_cfg.items() if k != "kind"}
     try:
-        return _ARC_AGI3_AGENTS[kind](seed=seed)
+        return _ARC_AGI3_AGENTS[kind](seed=seed, **params)
     except KeyError:
         raise ValueError(
             f"unknown agent kind {kind!r}; known: {sorted(_ARC_AGI3_AGENTS)}"
@@ -58,8 +62,9 @@ def _run_arc_agi3(
         "max_steps": cfg.get("evaluation", {}).get("max_steps", 1000),
     }
     agent = agent or _build_arc_agi3_agent(cfg, cfg.get("seed", 0))
+    logger = build_logger(cfg.get("wandb"), run_config=cfg)
     with _scorecard(transport):
-        return evaluate_arc_agi3_agent(agent, env, eval_cfg)
+        return evaluate_arc_agi3_agent(agent, env, eval_cfg, logger=logger)
 
 
 @contextmanager

@@ -95,5 +95,11 @@ tmp_*.*
 mlflow.db
 mlruns/
 
+# wandb run artifacts (regenerable; metrics live on wandb.ai)
+wandb/
+
+# eval output_dir (regenerable)
+results/
+
 # autoresearch sweep artifacts (per-tag subdirs under experiments/)
 experiments/*/

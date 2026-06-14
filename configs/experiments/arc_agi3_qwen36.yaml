@@ -1,0 +1,31 @@
+experiment_name: "arc_agi3_qwen36"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-9607627b"  # a live game on three.arcprize.org (see GET /api/games)
+  max_actions: 80
+
+agent:
+  kind: "llm"
+  # Local open-weights baseline (Kaggle-eligible): the orak Qwen3.6 MoE served on
+  # vLLM at :8000. litellm 'openai/<served-model>' + api_base routes to the local
+  # OpenAI-compatible endpoint (no external API / internet needed at inference).
+  model: "openai/palmfuture/Qwen3.6-35B-A3B-GPTQ-Int4"
+  api_base: "http://localhost:8000/v1"
+  temperature: 0.3
+  max_tokens: 2048  # reasoning model: needs room for <think> + the JSON action
+
+guards:
+  futile_action: true
+  repeated_plan: true
+
+evaluation:
+  max_steps: 80
+  output_dir: "results/arc_agi3/arc_agi3_qwen36/"
+
+wandb:
+  enabled: true
+  project: "tgaer-arc-agi3"
+  log_images: true
+  image_every: 1  # log the board frame every step
