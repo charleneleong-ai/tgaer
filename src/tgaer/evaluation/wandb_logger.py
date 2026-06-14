@@ -70,14 +70,18 @@ class WandbRunLogger:
             "action_id": action_id,
             "guard_fired": int(guard_fired),
         }
+        board = None
         if self._log_images and step % self._image_every == 0:
             rgb = grid_to_rgb(frame)
             if rgb is not None:
-                data["frame"] = self._wandb.Image(rgb, caption=f"step {step}")
+                board = self._wandb.Image(rgb, caption=f"step {step}")
+                data["frame"] = board
         self._run.log(data)
+        # Board image as a table cell so it sits SIDE BY SIDE with the reasoning.
         self._rows.append(
             [
                 step,
+                board,
                 action_id,
                 reward,
                 score,
@@ -90,6 +94,7 @@ class WandbRunLogger:
 
     TRAJECTORY_COLUMNS = [
         "step",
+        "board",
         "action_id",
         "reward",
         "score",
