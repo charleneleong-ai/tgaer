@@ -23,11 +23,14 @@ _SYSTEM = (
     "that makes progress toward completing levels. Actions other than "
     f"{COMPLEX_ACTION_ID} are simple moves; action {COMPLEX_ACTION_ID} acts on a single "
     "cell at (x, y) with x=column and y=row in [0,63]. "
-    'Reply with ONLY a JSON object: {"id": <available action id>, "x": <int|null>, '
+    "Briefly explain your reasoning in 1-3 sentences, then on the FINAL line output "
+    'the action as a JSON object: {"id": <available action id>, "x": <int|null>, '
     '"y": <int|null>}.'
 )
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
+# Match the action object specifically (no nested braces) and take the last one,
+# so a rationale that precedes the JSON — or even mentions braces — is ignored.
+_JSON_RE = re.compile(r"\{[^{}]*\}")
 
 
 class ArcAgi3LLMAgent(Agent):
@@ -76,7 +79,9 @@ class ArcAgi3LLMAgent(Agent):
         self.last_reply = ""
         try:
             image_url = self._image_of(obs) if self._vision else None
-            self.last_reply = self._complete(self._build_prompt(obs, available), image_url)
+            self.last_reply = self._complete(
+                self._build_prompt(obs, available), image_url
+            )
             action = self._parse(self.last_reply, available)
         except Exception:
             action = self._fallback(available)
@@ -136,7 +141,8 @@ class ArcAgi3LLMAgent(Agent):
             f"Board ({len(grid)} rows x {len(grid[0]) if grid else 0} cols), "
             "each char = one cell's value 0-f:\n"
             f"{self._render_grid(grid)}\n"
-            "Choose the next action as JSON."
+            "Reason step by step about the board and what your last action did, "
+            "then output the action JSON on the final line."
         )
 
     @staticmethod
@@ -164,10 +170,10 @@ class ArcAgi3LLMAgent(Agent):
         return f"Feedback: your last action ({last}) changed {len(changed)} cells, e.g. {sample}."
 
     def _parse(self, raw: str, available: list[int]) -> ArcAction:
-        match = _JSON_RE.search(raw)
-        if not match:
+        matches = _JSON_RE.findall(raw)
+        if not matches:
             raise ValueError("no JSON object in reply")
-        data = json.loads(match.group(0))
+        data = json.loads(matches[-1])  # the action is the last object
         action_id = int(data["id"])
         if action_id not in available:
             raise ValueError(f"action {action_id} not in available {available}")

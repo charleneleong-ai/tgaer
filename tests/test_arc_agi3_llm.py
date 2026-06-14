@@ -35,6 +35,10 @@ class TestParsing:
         )
         assert _agent(reply).act(_obs()) == ArcAction(id=3)
 
+    def test_rationale_then_json_takes_the_action_object(self):
+        reply = 'The player is top-left, so I move down.\n{"id": 2}'
+        assert _agent(reply).act(_obs()) == ArcAction(id=2)
+
     def test_action6_carries_coords(self):
         act = _agent('{"id": 6, "x": 10, "y": 40}').act(_obs())
         assert (act.id, act.x, act.y) == (6, 10, 40)
@@ -74,7 +78,9 @@ class TestPromptContext:
     def test_prompt_lists_available_actions_and_grid(self):
         seen = {}
         a = ArcAgi3LLMAgent(seed=0)
-        a._complete = lambda prompt, _img=None: seen.setdefault("p", prompt) and '{"id": 1}'  # type: ignore[method-assign]
+        a._complete = lambda prompt, _img=None: (
+            seen.setdefault("p", prompt) and '{"id": 1}'
+        )  # type: ignore[method-assign]
         a.act(_obs())
         assert "2" in seen["p"] and "3" in seen["p"]  # available action ids surfaced
 
@@ -125,7 +131,9 @@ class TestVision:
         a = ArcAgi3LLMAgent(seed=0, vision=True)
         a._complete = lambda _p, img=None: seen.setdefault("img", img) or '{"id": 1}'  # type: ignore[method-assign]
         a.act(_obs())
-        assert seen["img"] is not None and seen["img"].startswith("data:image/png;base64,")
+        assert seen["img"] is not None and seen["img"].startswith(
+            "data:image/png;base64,"
+        )
 
     def test_no_vision_sends_no_image(self):
         seen = {}

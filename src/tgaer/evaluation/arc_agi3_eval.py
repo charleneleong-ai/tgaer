@@ -57,7 +57,10 @@ def evaluate_arc_agi3_agent(
                 levels_completed=info.get("levels_completed"),
                 guard_fired=hints > prev_hints,
                 frame=observation.get("frame"),
-                reasoning=getattr(agent, "last_reasoning", None),
+                # instruct models have no separate <think> trace — fall back to
+                # the reply (which now carries the rationale) so the column fills.
+                reasoning=getattr(agent, "last_reasoning", None)
+                or getattr(agent, "last_reply", None),
                 reply=getattr(agent, "last_reply", None),
             )
             prev_hints = hints

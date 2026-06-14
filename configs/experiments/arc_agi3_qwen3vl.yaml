@@ -15,7 +15,7 @@ agent:
   api_base: "http://localhost:8000/v1"
   vision: true
   temperature: 0.3
-  max_tokens: 1024
+  max_tokens: 1536  # room for the rationale + the final JSON line
 
 guards:
   futile_action: true
