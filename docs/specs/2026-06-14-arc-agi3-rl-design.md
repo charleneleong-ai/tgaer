@@ -50,6 +50,18 @@ Layer tgaer's harness onto `arc_agi_3_env._format_observation` (it's barebones t
   but you supply the rollout loop verifiers gives free).
 - **Single A100-40GB:** LoRA + vLLM rollouts + grad on one card (the orak RLVR pattern).
 
+## Validation (2026-06-14, `evals/variance_check.py`)
+
+Ran the shaped env on local `simple_maze` L0 via verifiers + Gemini:
+- **gemini-2.5-flash, 40 turns:** 8/8 **WIN**; total reward mean 1.155, stdev 0.027 — strong variance
+  from the shaped components (novelty 0.59–0.91, turns 11–22). When everyone wins, shaping gives the
+  *efficiency* gradient.
+- **gemini-3.1-flash-lite, 10 turns:** 0/8 win; weak variance (stdev 0.004) from anti-stall only.
+
+Confirms the pipeline + that the shaped reward is non-degenerate. **Corollary:** the trainable
+frontier is a task the policy wins *some* (not all / none) of the time — set the curriculum level so
+the WIN signal itself has variance, with shaping as the dense backstop.
+
 ## Phased plan
 
 1. **Wire the vendored env** into the RLVR venv (`arcengine` dep) and `vf-eval` the **local mazes**
