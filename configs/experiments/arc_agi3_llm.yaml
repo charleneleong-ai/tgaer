@@ -1,0 +1,20 @@
+experiment_name: "arc_agi3_llm"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-9607627b"  # a live game on three.arcprize.org (see GET /api/games)
+  max_actions: 80
+
+agent:
+  kind: "llm"
+  model: "gemini/gemini-3.1-flash-lite"  # litellm route; needs GEMINI_API_KEY
+  temperature: 0.3
+
+guards:
+  futile_action: true
+  repeated_plan: true
+
+evaluation:
+  max_steps: 80
+  output_dir: "results/arc_agi3/arc_agi3_llm/"

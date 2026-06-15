@@ -4,10 +4,7 @@ import random
 from typing import Any
 
 from tgaer.core.agent_base import Agent
-from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
-
-GRID_SIZE = 64  # ARC-AGI-3 grids are fixed 64x64 (colour indices 0-15)
-COMPLEX_ACTION_ID = 6  # ACTION6 carries (x, y) coordinates
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction, random_action
 
 
 class RandomArcAgi3Agent(Agent):
@@ -21,11 +18,4 @@ class RandomArcAgi3Agent(Agent):
 
     def act(self, observation: Any) -> ArcAction:
         available = (observation or {}).get("available_actions") or [1]
-        action_id = self._rng.choice(available)
-        if action_id == COMPLEX_ACTION_ID:
-            return ArcAction(
-                id=action_id,
-                x=self._rng.randrange(GRID_SIZE),
-                y=self._rng.randrange(GRID_SIZE),
-            )
-        return ArcAction(id=action_id)
+        return random_action(available, self._rng)
