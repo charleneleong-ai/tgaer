@@ -1,0 +1,18 @@
+experiment_name: "arc_agi3_planner"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-9607627b"  # a live game on three.arcprize.org (see GET /api/games)
+  max_actions: 80
+
+agent:
+  kind: "planner"  # in-episode key->door navigator (no LLM); learns moves+walls online
+
+guards:
+  futile_action: false   # planner is deterministic; loop-breaking hints would only disrupt it
+  repeated_plan: false
+
+evaluation:
+  max_steps: 80
+  output_dir: "results/arc_agi3/arc_agi3_planner/"
