@@ -29,34 +29,9 @@ from typing import Any
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import (
-    KeyDoorController,
-    LS20_DEFAULT,
-    cells,
-    components,
-    field_box,
-    find_role,
-    to_action,
-)
+from tgaer.agents.arc_agi3_grid import KeyDoorController, LS20_DEFAULT, to_action
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
-
-# Back-compat aliases so existing callers of _cells / _components still work.
-_cells = cells
-_components = components
-
-AVATAR, DOOR_V = 12, 9
-KEY_VS = (0, 1)  # key markers consumed on contact (black/blue)
-WALL = (4, 11)  # yellow background + darkblue move-budget bar
-
-
-def _keys(arr: np.ndarray) -> list[np.ndarray]:
-    return find_role(arr, KEY_VS, field_box(arr))
-
-
-def _door(arr: np.ndarray) -> np.ndarray | None:
-    ds = find_role(arr, (DOOR_V,), field_box(arr))
-    return ds[0] if ds else None
 
 
 class PlannerArcAgi3Agent(Agent):
