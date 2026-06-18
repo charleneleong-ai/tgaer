@@ -1,0 +1,31 @@
+# tests/test_arc_agi3_grid.py
+from __future__ import annotations
+
+import numpy as np
+
+from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics, field_box, find_role
+
+
+def test_find_role_filters_to_field_box():
+    arr = np.full((10, 10), 3, dtype=int)
+    arr[5, 5] = 9
+    arr[0, 0] = 9  # a second door cell; both are inside the field box here
+    box = field_box(arr)
+    found = find_role(arr, (9,), box)
+    assert any(abs(c[0] - 5) < 1 and abs(c[1] - 5) < 1 for c in found)
+
+
+def test_find_role_excludes_centroid_outside_field():
+    arr = np.zeros((12, 12), dtype=int)  # background 0, NOT green
+    arr[5:8, 5:8] = 3  # small green play-field
+    arr[6, 6] = 9  # door inside the field
+    arr[0, 0] = 9  # stray door cell far outside (pad=4 won't reach)
+    box = field_box(arr)
+    found = find_role(arr, (9,), box)
+    assert any(abs(c[0] - 6) < 1 and abs(c[1] - 6) < 1 for c in found)  # inside found
+    assert not any(c[0] < 1 and c[1] < 1 for c in found)  # (0,0) excluded
+
+
+def test_ls20_default_is_navigate():
+    assert LS20_DEFAULT.verb == "navigate"
+    assert isinstance(LS20_DEFAULT, Semantics)
