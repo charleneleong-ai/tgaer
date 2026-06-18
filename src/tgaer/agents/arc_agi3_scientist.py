@@ -6,7 +6,14 @@ from typing import Any
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import Semantics
+from tgaer.agents.arc_agi3_grid import (
+    KeyDoorController,
+    LS20_DEFAULT,
+    Semantics,
+    to_action,
+)
+from tgaer.core.agent_base import Agent
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 from tgaer.envs.arc_agi3.rendering import grid_to_png_data_url
 
 _JSON_RE = re.compile(r"\{[^{}]*\}")
@@ -103,3 +110,50 @@ class Scientist:
             **extra,
         )
         return resp.choices[0].message.content or ""
+
+
+class ScientistPlannerAgent(Agent):
+    """Planner agent that queries a VL scientist once per level for semantics.
+
+    The scientist is injected via ``scientist=`` for tests; defaults to a real
+    ``Scientist`` talking to a local vLLM/SGLang endpoint. If ``infer`` returns
+    ``None`` the agent degrades gracefully to ``LS20_DEFAULT``.
+    """
+
+    def __init__(
+        self,
+        seed: int = 0,
+        model: str = "openai/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ",
+        api_base: str | None = "http://localhost:8000/v1",
+        stall_limit: int = 8,
+        scientist: Scientist | None = None,
+        **_: Any,
+    ) -> None:
+        self._sci = scientist or Scientist(model=model, api_base=api_base)
+        self._ctl = KeyDoorController()
+        self._stall_limit = stall_limit
+        self._levels = -1
+        self._sem = LS20_DEFAULT
+        self._stall = 0
+        self.last_reply: str | None = None
+
+    def act(self, observation: Any) -> ArcAction:
+        obs = observation or {}
+        frame = obs.get("frame") or []
+        if not frame:
+            return to_action((obs.get("available_actions") or [1])[0])
+        arr = np.asarray(frame[-1])
+        levels = obs.get("levels_completed", self._levels)
+        if levels != self._levels:
+            self._levels = levels
+            self._ctl.on_new_level()
+            self._stall = 0
+            self._sem = self._sci.infer(frame) or LS20_DEFAULT
+        self._ctl.learn(arr, self._sem)
+        aid = self._ctl.step(arr, self._sem, obs.get("available_actions") or [1])
+        self._stall = 0 if self._ctl.made_progress() else self._stall + 1
+        if self._stall >= self._stall_limit:  # re-query once on a stall
+            self._sem = self._sci.infer(frame) or self._sem
+            self._stall = 0
+        self.last_reply = f"[scientist] act={aid} verb={self._sem.verb}"
+        return to_action(aid)

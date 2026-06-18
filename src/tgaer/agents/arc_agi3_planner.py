@@ -36,13 +36,10 @@ from tgaer.agents.arc_agi3_grid import (
     components,
     field_box,
     find_role,
+    to_action,
 )
 from tgaer.core.agent_base import Agent
-from tgaer.envs.arc_agi3.arc_agi3_api import (
-    COMPLEX_ACTION_ID,
-    GRID_SIZE,
-    ArcAction,
-)
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 # Back-compat aliases so existing callers of _cells / _components still work.
 _cells = cells
@@ -62,15 +59,6 @@ def _door(arr: np.ndarray) -> np.ndarray | None:
     return ds[0] if ds else None
 
 
-def _to_action(action_id: int) -> ArcAction:
-    # This is a keyboard-game navigator; if only the coordinate action is
-    # offered (a non-keyboard game) it must still send valid x/y or the API
-    # rejects it — a centre click is a harmless no-op there.
-    if action_id == COMPLEX_ACTION_ID:
-        return ArcAction(id=action_id, x=GRID_SIZE // 2, y=GRID_SIZE // 2)
-    return ArcAction(id=action_id)
-
-
 class PlannerArcAgi3Agent(Agent):
     def __init__(self, seed: int = 0, **_: Any) -> None:
         self._ctl = KeyDoorController()
@@ -81,7 +69,7 @@ class PlannerArcAgi3Agent(Agent):
         obs = observation or {}
         frame = obs.get("frame") or []
         if not frame:
-            return _to_action((obs.get("available_actions") or [1])[0])
+            return to_action((obs.get("available_actions") or [1])[0])
         arr = np.asarray(frame[-1])
         levels = obs.get("levels_completed", self._levels)
         if levels != self._levels:
@@ -90,7 +78,7 @@ class PlannerArcAgi3Agent(Agent):
         self._ctl.learn(arr, LS20_DEFAULT)
         aid = self._ctl.step(arr, LS20_DEFAULT, obs.get("available_actions") or [1])
         self.last_reply = f"[planner] act={aid}"
-        return _to_action(aid)
+        return to_action(aid)
 
     # Proxy properties so Task 1's tests can still read a.delta / a.phase
     # without knowing about _ctl (both forms work; the brief updates the tests
