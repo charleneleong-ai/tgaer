@@ -128,3 +128,27 @@ class TestScientistAgent:
         sci = _FakeSci(None)  # infer returns None -> degrade
         act = ScientistPlannerAgent(scientist=sci).act(_obs())
         assert act.id in (1, 2, 3, 4)  # still plays via LS20_DEFAULT
+
+    def test_stall_requery_fires_after_limit(self):
+        class _CountSci:
+            def __init__(self):
+                self.calls = 0
+
+            def infer(self, frame):
+                self.calls += 1
+                return LS20_DEFAULT
+
+        sci = _CountSci()
+        # walls everywhere -> controller cannot progress -> stalls
+        g = np.full((10, 10), 4, dtype=int)
+        g[2, 2] = 12
+        obs = {
+            "frame": [g.tolist()],
+            "available_actions": [1, 2, 3, 4],
+            "levels_completed": 0,
+            "state": "NOT_FINISHED",
+        }
+        a = ScientistPlannerAgent(scientist=sci, stall_limit=3)
+        for _ in range(6):
+            a.act(obs)
+        assert sci.calls >= 2  # initial + at least one stall re-query

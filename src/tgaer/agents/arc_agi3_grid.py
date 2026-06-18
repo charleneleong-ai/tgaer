@@ -177,8 +177,25 @@ class KeyDoorController:
         keyboard = [a for a in avail if a != COMPLEX_ACTION_ID]
         return keyboard[0] if keyboard else COMPLEX_ACTION_ID
 
+    @staticmethod
+    def _interaction(avail: list[int]) -> int:
+        for a in (5, 7):
+            if a in avail:
+                return a
+        return COMPLEX_ACTION_ID
+
+    @staticmethod
+    def _adjacent(av: np.ndarray, target: np.ndarray) -> bool:
+        """True when the avatar footprint is adjacent to (covers within 1 of) ``target``."""
+        fp = (av - av.min(0)).astype(int)
+        tl = av.min(0)
+        g = (int(round(target[0])), int(round(target[1])))
+        return (
+            min(abs(tl[0] + dr - g[0]) + abs(tl[1] + dc - g[1]) for dr, dc in fp) <= 1
+        )
+
     def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> int:
-        """Choose and return the next action id. Only handles the ``navigate`` verb."""
+        """Choose and return the next action id for ``navigate`` or ``press`` verbs."""
         self._progressed = False
         move_avail = [a for a in avail if a in _MOVES]
 
@@ -203,6 +220,12 @@ class KeyDoorController:
 
         fp = (av - av.min(0)).astype(int)
         tl = av.min(0)
+
+        if sem.verb == "press":
+            target = self.last_key_goal if ks and self.last_key_goal is not None else d
+            if target is not None and self._adjacent(av, target):
+                self._progressed = True
+                return self._interaction(avail)
 
         if self.phase == "key" and self.last_key_goal is not None:
             path = self._plan(arr, fp, tl, self.last_key_goal, sem)
