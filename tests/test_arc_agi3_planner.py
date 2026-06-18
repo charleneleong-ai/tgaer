@@ -56,12 +56,12 @@ class TestPlannerNavigates:
         moved[2, 2] = 3
         moved[3, 2] = 12  # avatar shifted down one row
         a.act(_obs(moved))
-        assert a.delta  # learned at least one action->vector
-        assert next(iter(a.delta.values())).shape == (2,)
+        assert a._ctl.delta  # learned at least one action->vector
+        assert next(iter(a._ctl.delta.values())).shape == (2,)
 
     def test_resets_phase_on_new_level(self):
         a = PlannerArcAgi3Agent()
         a.phase = "door"
         a.act(_obs(_board(), levels=1))  # level changed 0->1
-        assert a.phase == "key"
+        assert a._ctl.phase == "key"
         assert a._levels == 1

@@ -77,6 +77,143 @@ def find_role(arr: np.ndarray, values: tuple[int, ...], box: Box) -> list[np.nda
     return [c.mean(0) for c in components(arr, values) if in_field(c.mean(0), box)]
 
 
+_MOVES = (1, 2, 3, 4)  # directional action ids — constant across LS20 games
+_COMPLEX_ACTION_ID = 5  # coordinate-click; local to avoid circular import
+
+
+class KeyDoorController:
+    """Per-step navigation state and logic for LS20-family key→door games.
+
+    Owns the online-learned move map (``delta``), wall memory (``blocked``),
+    two-phase key→door goal tracking, and bootstrap probing. Parameterised by
+    a ``Semantics`` so a VL scientist can supply per-game role values without
+    touching this class.
+
+    ``step`` returns an **action id** (int); the agent wraps it via ``to_action``.
+    """
+
+    def __init__(self) -> None:
+        self.delta: dict[int, np.ndarray] = {}
+        self.blocked: set[tuple[int, int]] = set()
+        self.probed: set[int] = set()
+        self.phase = "key"
+        self.last_key_goal: np.ndarray | None = None
+        self._prev_action: int | None = None
+        self._prev_tl: np.ndarray | None = None
+        self._progressed = False
+
+    def on_new_level(self) -> None:
+        """Reset goal state for a fresh level; keep the learned move map."""
+        self.phase = "key"
+        self.last_key_goal = None
+        self.blocked = set()
+
+    def made_progress(self) -> bool:
+        """True if the last ``step`` advanced the avatar closer to the goal."""
+        return self._progressed
+
+    def learn(self, arr: np.ndarray, sem: Semantics) -> None:
+        """Update delta + blocked from the last move."""
+        if (
+            self._prev_action is None
+            or self._prev_tl is None
+            or self._prev_action not in _MOVES
+        ):
+            return
+        av = cells(arr, sem.avatar)
+        if not len(av):
+            return
+        now = av.min(0)
+        if (now != self._prev_tl).any():
+            self.delta[self._prev_action] = now - self._prev_tl
+        elif self._prev_action in self.delta:
+            refused = self._prev_tl + self.delta[self._prev_action]
+            self.blocked.add(tuple(refused.astype(int).tolist()))
+
+    def _remember(self, arr: np.ndarray, action: int, sem: Semantics) -> None:
+        av = cells(arr, sem.avatar)
+        self._prev_action = action
+        self._prev_tl = av.min(0) if len(av) else None
+        self.probed.add(action)
+
+    def _keys(self, arr: np.ndarray, sem: Semantics) -> list[np.ndarray]:
+        return find_role(arr, sem.keys, field_box(arr))
+
+    def _door(self, arr: np.ndarray, sem: Semantics) -> np.ndarray | None:
+        ds = find_role(arr, (sem.door,), field_box(arr))
+        return ds[0] if ds else None
+
+    def _plan(
+        self,
+        arr: np.ndarray,
+        fp: np.ndarray,
+        tl: np.ndarray,
+        goal: np.ndarray,
+        sem: Semantics,
+    ) -> list[int] | None:
+        for walls in (sem.walls, (11,)):  # green-only first, yellow-passable fallback
+            planner = Planner(arr, fp, self.delta, walls)
+            planner.blocked = self.blocked
+            if path := planner.path(tl, goal):
+                return path
+        return None
+
+    @staticmethod
+    def _fallback(avail: list[int], move_avail: list[int]) -> int:
+        if move_avail:
+            return move_avail[0]
+        keyboard = [a for a in avail if a != _COMPLEX_ACTION_ID]
+        return keyboard[0] if keyboard else _COMPLEX_ACTION_ID
+
+    def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> int:
+        """Choose and return the next action id. Only handles the ``navigate`` verb."""
+        self._progressed = False
+        move_avail = [a for a in avail if a in _MOVES]
+
+        # Bootstrap: probe each directional action once to learn its move vector.
+        unprobed = [a for a in move_avail if a not in self.probed]
+        if unprobed and len(self.delta) < len(move_avail):
+            action = unprobed[0]
+            self._remember(arr, action, sem)
+            return action
+
+        av = cells(arr, sem.avatar)
+        if not len(av) or not self.delta:
+            action = self._fallback(avail, move_avail)
+            self._remember(arr, action, sem)
+            return action
+
+        ks = self._keys(arr, sem)
+        d = self._door(arr, sem)
+        if ks:
+            centre = av.mean(0)
+            self.last_key_goal = min(ks, key=lambda c: abs(c - centre).sum())
+
+        fp = (av - av.min(0)).astype(int)
+        tl = av.min(0)
+
+        if self.phase == "key" and self.last_key_goal is not None:
+            path = self._plan(arr, fp, tl, self.last_key_goal, sem)
+            if path:
+                self._progressed = True
+                action = path[0]
+                self._remember(arr, action, sem)
+                return action
+            self.phase = "door"  # reached the key — commit to the door this step
+
+        if d is not None:
+            path = self._plan(arr, fp, tl, d, sem)
+            if path:
+                self._progressed = True
+                action = path[0]
+                self._remember(arr, action, sem)
+                return action
+
+        action = self._fallback(avail, move_avail)
+        self._remember(arr, action, sem)
+        return action
+
+
 class Planner:
     """BFS over the avatar's rigid footprint on its learned move lattice. The
     avatar is a multi-cell block, so a state is its top-left corner and a move is

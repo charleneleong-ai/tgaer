@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics, field_box, find_role
+from tgaer.agents.arc_agi3_grid import (
+    KeyDoorController,
+    LS20_DEFAULT,
+    Semantics,
+    field_box,
+    find_role,
+)
 
 
 def test_find_role_filters_to_field_box():
@@ -29,3 +35,35 @@ def test_find_role_excludes_centroid_outside_field():
 def test_ls20_default_is_navigate():
     assert LS20_DEFAULT.verb == "navigate"
     assert isinstance(LS20_DEFAULT, Semantics)
+
+
+def _ld_board():
+    g = np.full((10, 10), 3, dtype=int)
+    g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+    g[2, 2] = 12
+    g[5, 5] = 0
+    g[7, 7] = 9
+    return g
+
+
+class TestKeyDoorController:
+    def test_step_returns_directional_action(self):
+        c = KeyDoorController()
+        aid = c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])
+        assert aid in (1, 2, 3, 4)
+
+    def test_on_new_level_resets_phase_keeps_delta(self):
+        c = KeyDoorController()
+        c.delta = {1: np.array([1, 0])}
+        c.phase = "door"
+        c.on_new_level()
+        assert c.phase == "key" and 1 in c.delta
+
+    def test_learn_records_delta_on_real_move(self):
+        c = KeyDoorController()
+        c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])  # records prev_tl + action
+        moved = _ld_board()
+        moved[2, 2] = 3
+        moved[3, 2] = 12
+        c.learn(moved, LS20_DEFAULT)
+        assert c.delta
