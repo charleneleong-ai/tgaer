@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import Semantics
-from tgaer.agents.arc_agi3_scientist import Scientist
+from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics
+from tgaer.agents.arc_agi3_scientist import Scientist, ScientistPlannerAgent
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 # board uses indices 3 (floor), 12 (avatar), 0/1 (key), 9 (door), 4 (wall)
@@ -77,3 +78,53 @@ class TestInfer:
         sem = _sci(reply).infer(_frame())
         assert sem is not None
         assert sem.keys == (0, 1)
+
+
+class _FakeSci:
+    def __init__(self, sem):
+        self.sem = sem
+        self.calls = 0
+
+    def infer(self, frame):
+        self.calls += 1
+        return self.sem
+
+
+def _obs(levels=0, actions=(1, 2, 3, 4)):
+    g = np.full((10, 10), 3, dtype=int)
+    g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+    g[2, 2] = 12
+    g[5, 5] = 0
+    g[7, 7] = 9
+    return {
+        "frame": [g.tolist()],
+        "available_actions": list(actions),
+        "levels_completed": levels,
+        "state": "NOT_FINISHED",
+    }
+
+
+class TestScientistAgent:
+    def test_emits_legal_action_from_scientist_semantics(self):
+        sci = _FakeSci(LS20_DEFAULT)
+        act = ScientistPlannerAgent(scientist=sci).act(_obs())
+        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
+
+    def test_scientist_queried_once_per_level(self):
+        sci = _FakeSci(LS20_DEFAULT)
+        a = ScientistPlannerAgent(scientist=sci)
+        for _ in range(5):
+            a.act(_obs(levels=0))
+        assert sci.calls == 1  # cached after first query of the level
+
+    def test_requeries_on_new_level(self):
+        sci = _FakeSci(LS20_DEFAULT)
+        a = ScientistPlannerAgent(scientist=sci)
+        a.act(_obs(levels=0))
+        a.act(_obs(levels=1))
+        assert sci.calls == 2
+
+    def test_none_from_scientist_falls_back_to_ls20(self):
+        sci = _FakeSci(None)  # infer returns None -> degrade
+        act = ScientistPlannerAgent(scientist=sci).act(_obs())
+        assert act.id in (1, 2, 3, 4)  # still plays via LS20_DEFAULT

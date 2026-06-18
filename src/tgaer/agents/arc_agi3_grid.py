@@ -15,6 +15,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, GRID_SIZE, ArcAction
+
 GREEN = 3
 NBRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Box = tuple[np.ndarray, np.ndarray]  # (top-left, bottom-right) of the play-field
@@ -30,6 +32,17 @@ class Semantics:
 
 
 LS20_DEFAULT = Semantics(avatar=12, keys=(0, 1), door=9, walls=(4, 11), verb="navigate")
+
+
+def to_action(action_id: int) -> ArcAction:
+    """Wrap an action-id int into an ``ArcAction``.
+
+    ACTION6 (coordinate-click) requires x/y; a centre click is a harmless no-op
+    in keyboard games. Every other id maps to a plain ``ArcAction``.
+    """
+    if action_id == COMPLEX_ACTION_ID:
+        return ArcAction(id=action_id, x=GRID_SIZE // 2, y=GRID_SIZE // 2)
+    return ArcAction(id=action_id)
 
 
 def cells(arr: np.ndarray, v: int) -> np.ndarray:
@@ -78,7 +91,6 @@ def find_role(arr: np.ndarray, values: tuple[int, ...], box: Box) -> list[np.nda
 
 
 _MOVES = (1, 2, 3, 4)  # directional action ids — constant across LS20 games
-_COMPLEX_ACTION_ID = 5  # coordinate-click; local to avoid circular import
 
 
 class KeyDoorController:
@@ -162,8 +174,8 @@ class KeyDoorController:
     def _fallback(avail: list[int], move_avail: list[int]) -> int:
         if move_avail:
             return move_avail[0]
-        keyboard = [a for a in avail if a != _COMPLEX_ACTION_ID]
-        return keyboard[0] if keyboard else _COMPLEX_ACTION_ID
+        keyboard = [a for a in avail if a != COMPLEX_ACTION_ID]
+        return keyboard[0] if keyboard else COMPLEX_ACTION_ID
 
     def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> int:
         """Choose and return the next action id. Only handles the ``navigate`` verb."""
