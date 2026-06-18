@@ -7,6 +7,7 @@ import yaml
 from typer.testing import CliRunner
 
 from tgaer.agents.arc_agi3_random import RandomArcAgi3Agent
+from tgaer.agents.arc_agi3_scientist import Scientist
 from tgaer.cli import evaluate as cli
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcFrame
 from tgaer.evaluation import dispatch
@@ -112,6 +113,19 @@ class TestRandomAgent:
 
     def test_empty_available_actions_falls_back(self):
         assert RandomArcAgi3Agent(seed=0).act({"available_actions": []}).id == 1
+
+
+class TestScientistAgent:
+    def test_scientist_kind_is_registered(self):
+        assert "scientist" in dispatch._ARC_AGI3_AGENTS
+
+    def test_scientist_config_runs_with_injected_transport(self, monkeypatch):
+        cfg = yaml.safe_load(
+            Path("configs/experiments/arc_agi3_scientist.yaml").read_text()
+        )
+        monkeypatch.setattr(Scientist, "infer", lambda self, frame: None)
+        result = dispatch.run_eval(cfg, transport=_ScriptedTransport())
+        assert result.score == 1.0
 
 
 class TestCli:
