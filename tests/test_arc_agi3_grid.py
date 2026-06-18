@@ -67,3 +67,52 @@ class TestKeyDoorController:
         moved[3, 2] = 12
         c.learn(moved, LS20_DEFAULT)
         assert c.delta
+
+    def test_press_verb_emits_interaction_when_adjacent(self):
+        # avatar already next to the door; press verb -> interaction action, not a step
+        g = np.full((6, 6), 3, dtype=int)
+        g[2, 2] = 12
+        g[2, 3] = 9  # door directly to the right (adjacent)
+        sem = Semantics(avatar=12, keys=(), door=9, walls=(4,), verb="press")
+        c = KeyDoorController()
+        c.delta = {
+            1: np.array([1, 0]),
+            2: np.array([-1, 0]),
+            3: np.array([0, 1]),
+            4: np.array([0, -1]),
+        }
+        aid = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert aid == 5  # keyboard interaction preferred
+
+    def test_press_verb_emits_interaction_adjacent_to_key(self):
+        # keys present; avatar adjacent to nearest key -> targets key, emits interaction
+        g = np.full((6, 6), 3, dtype=int)
+        g[2, 2] = 12  # avatar
+        g[2, 3] = 0  # key directly to the right (adjacent, cover=1)
+        g[5, 5] = 9  # door far away
+        sem = Semantics(avatar=12, keys=(0,), door=9, walls=(4,), verb="press")
+        c = KeyDoorController()
+        c.delta = {
+            1: np.array([1, 0]),
+            2: np.array([-1, 0]),
+            3: np.array([0, 1]),
+            4: np.array([0, -1]),
+        }
+        aid = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert aid == 5  # interaction emitted at the key, not a movement
+
+    def test_press_verb_navigates_when_target_distant(self):
+        # no keys; door is far away -> controller navigates (move), does NOT press
+        g = np.full((8, 8), 3, dtype=int)
+        g[1, 1] = 12  # avatar top-left
+        g[6, 6] = 9  # door far away (cover >> 1)
+        sem = Semantics(avatar=12, keys=(), door=9, walls=(4,), verb="press")
+        c = KeyDoorController()
+        c.delta = {
+            1: np.array([1, 0]),
+            2: np.array([-1, 0]),
+            3: np.array([0, 1]),
+            4: np.array([0, -1]),
+        }
+        aid = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert aid in (1, 2, 3, 4)  # moves toward target; does NOT press yet
