@@ -7,6 +7,7 @@ from typing import Any, Callable, Iterator
 from tgaer.agents.arc_agi3_llm import ArcAgi3LLMAgent
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
 from tgaer.agents.arc_agi3_random import RandomArcAgi3Agent
+from tgaer.agents.arc_agi3_scientist import ScientistPlannerAgent
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcTransport
 from tgaer.envs.arc_agi3.arc_agi3_env import ArcAgi3Environment
@@ -21,6 +22,7 @@ _ARC_AGI3_AGENTS = {
     "random": RandomArcAgi3Agent,
     "llm": ArcAgi3LLMAgent,
     "planner": PlannerArcAgi3Agent,
+    "scientist": ScientistPlannerAgent,
 }
 _GUARDS = {"futile_action": FutileActionGuard, "repeated_plan": RepeatedPlanGuard}
 
