@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent, _components, _door, _keys
+from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, components, field_box, find_role
+from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
@@ -33,13 +34,14 @@ class TestGeometry:
         arr = np.full((6, 6), 3, dtype=int)
         arr[1, 1] = arr[1, 2] = 0
         arr[4, 4] = 0
-        comps = _components(arr, (0,))
+        comps = components(arr, (0,))
         assert sorted(len(c) for c in comps) == [1, 2]
 
     def test_keys_and_door_found_inside_field(self):
         board = _board()
-        assert len(_keys(board)) == 1
-        assert _door(board) is not None
+        box = field_box(board)
+        assert len(find_role(board, LS20_DEFAULT.keys, box)) == 1
+        assert find_role(board, (LS20_DEFAULT.door,), box)
 
 
 class TestPlannerNavigates:
