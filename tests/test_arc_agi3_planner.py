@@ -3,7 +3,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, components, field_box, find_role
+from tgaer.agents.arc_agi3_grid import (
+    LS20_DEFAULT,
+    avatar_is_sprite,
+    components,
+    field_box,
+    find_role,
+)
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
@@ -42,6 +48,11 @@ class TestGeometry:
         box = field_box(board)
         assert len(find_role(board, LS20_DEFAULT.keys, box)) == 1
         assert find_role(board, (LS20_DEFAULT.door,), box)
+
+    def test_avatar_sprite_accepts_piece_rejects_structure(self):
+        board = _board()
+        assert avatar_is_sprite(board, LS20_DEFAULT.avatar)  # one compact in-field cell
+        assert not avatar_is_sprite(board, 4)  # wall border: large, structural
 
 
 class TestPlannerNavigates:

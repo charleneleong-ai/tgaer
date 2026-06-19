@@ -10,6 +10,7 @@ from tgaer.agents.arc_agi3_grid import (
     KeyDoorController,
     LS20_DEFAULT,
     Semantics,
+    avatar_is_sprite,
     to_action,
 )
 from tgaer.core.agent_base import Agent
@@ -49,14 +50,15 @@ class Scientist:
     def infer(self, frame) -> Semantics | None:
         try:
             arr = np.asarray((frame or [None])[-1])
-            present = set(int(v) for v in np.unique(arr))
-            prompt = f"Palette indices present on the board: {sorted(present)}."
+            present = sorted(int(v) for v in np.unique(arr))
+            prompt = f"Palette indices present on the board: {present}."
             self.last_reply = self._complete(prompt, grid_to_png_data_url(frame))
-            return self._parse(self.last_reply, present)
+            return self._parse(self.last_reply, arr)
         except Exception:
             return None
 
-    def _parse(self, raw: str, present: set[int]) -> Semantics | None:
+    def _parse(self, raw: str, arr: np.ndarray) -> Semantics | None:
+        present = set(int(v) for v in np.unique(arr))
         matches = _JSON_RE.findall(raw)
         if not matches:
             return None
@@ -79,6 +81,12 @@ class Scientist:
                 or not walls
                 or not any(w in present for w in walls)
             ):
+                return None
+            # Geometry guard: the any-present check only proves the indices exist,
+            # not that the avatar role is correct. A confidently-wrong avatar (a
+            # wall/floor index) is structural rather than a sprite — reject it so the
+            # agent keeps its trusted heuristic instead of navigating a wall index.
+            if not avatar_is_sprite(arr, avatar):
                 return None
             return Semantics(avatar, keys, door, walls, verb)
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
