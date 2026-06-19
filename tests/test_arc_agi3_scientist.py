@@ -72,6 +72,16 @@ class TestInfer:
         )
         assert _sci(bad).infer(_frame()) is None
 
+    def test_structural_avatar_rejected(self):
+        # All indices present and verb valid, but avatar=4 is the wall border —
+        # the geometry guard rejects the structural mislabel where any-present can't.
+        g = np.full((12, 12), 3, dtype=int)
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4  # wall border
+        g[5, 5] = 0  # key
+        g[8, 8] = 9  # door
+        bad = '{"avatar": 4, "keys": [0], "door": 9, "walls": [3], "verb": "navigate"}'
+        assert _sci(bad).infer([g.tolist()]) is None
+
     def test_partial_multi_index_key_accepted(self):
         # keys=[0,1]: only 0 is on _frame() (1 is absent) → any-present rule accepts it
         reply = '{"avatar": 12, "keys": [0, 1], "door": 9, "walls": [4], "verb": "navigate"}'
