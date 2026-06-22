@@ -4,8 +4,8 @@ from __future__ import annotations
 import numpy as np
 
 from tgaer.agents.arc_agi3_grid import (
-    KeyDoorController,
     LS20_DEFAULT,
+    KeyDoorController,
     Semantics,
     field_box,
     find_role,

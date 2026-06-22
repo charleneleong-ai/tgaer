@@ -29,7 +29,7 @@ from typing import Any
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import KeyDoorController, LS20_DEFAULT, to_action
+from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, KeyDoorController, to_action
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
