@@ -31,7 +31,9 @@ class EmpiricalPlannerAgent(Agent):
         scientist: Scientist | None = None,
         **_: Any,
     ) -> None:
-        self._sci = scientist or (Scientist(model=model, api_base=api_base) if api_base else None)
+        self._sci = scientist or (
+            Scientist(model=model, api_base=api_base) if api_base else None
+        )
         self._ctl = KeyDoorController()
         self._det = EmpiricalSemantics()
         self._cold = LS20_DEFAULT

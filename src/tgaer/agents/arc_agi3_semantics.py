@@ -60,7 +60,9 @@ class EmpiricalSemantics:
             if p is None or c is None:
                 continue
             delta = (int(round(c[0] - p[0])), int(round(c[1] - p[1])))
-            self._deltas.setdefault(int(v), {}).setdefault(action, Counter())[delta] += 1
+            self._deltas.setdefault(int(v), {}).setdefault(action, Counter())[
+                delta
+            ] += 1
             if self._is_controllable(int(v)):
                 self._avatar = int(v)
                 return
@@ -89,7 +91,9 @@ class EmpiricalSemantics:
         for v in gone:
             if v in (3, 4, self._avatar):  # floor / wall / avatar are not keys
                 continue
-            near = any(abs(r - av[0]) + abs(c - av[1]) <= 1 for r, c in cells(prev, int(v)))
+            near = any(
+                abs(r - av[0]) + abs(c - av[1]) <= 1 for r, c in cells(prev, int(v))
+            )
             if near:
                 self._keys.add(int(v))
 

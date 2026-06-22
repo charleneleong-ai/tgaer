@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics, cells  # noqa: E402
+from tgaer.agents.arc_agi3_empirical import EmpiricalPlannerAgent
+from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics
 from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
+from tgaer.evaluation import dispatch
 
 
 def _grid(avatar_rc: tuple[int, int], avatar: int = 12) -> np.ndarray:
@@ -33,6 +36,7 @@ class TestAvatarDetection:
 
     def test_action_independent_distractor_never_pins(self):
         det = EmpiricalSemantics()
+
         # value 7 drifts (0,+1) every step REGARDLESS of action -> same Δ across
         # actions -> not controllable -> never the avatar.
         def g(col: int) -> np.ndarray:
@@ -109,10 +113,6 @@ class TestSemanticsMerge:
         assert sem.door == 8
 
 
-from tgaer.agents.arc_agi3_empirical import EmpiricalPlannerAgent  # noqa: E402
-from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction  # noqa: E402
-
-
 class _FakeSci:
     def __init__(self, sem):
         self.sem = sem
@@ -152,3 +152,8 @@ class TestAgentIntegration:
         agent = EmpiricalPlannerAgent(scientist=None, api_base=None)
         act = agent.act(_obs())  # no VL, no crash, still plays
         assert act.id in (1, 2, 3, 4)
+
+
+class TestDispatchWiring:
+    def test_empirical_kind_registered(self):
+        assert dispatch._ARC_AGI3_AGENTS["empirical"] is EmpiricalPlannerAgent
