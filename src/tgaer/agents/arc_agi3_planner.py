@@ -51,9 +51,9 @@ class PlannerArcAgi3Agent(Agent):
             self._levels = levels
             self._ctl.on_new_level()
         self._ctl.learn(arr, LS20_DEFAULT)
-        aid = self._ctl.step(arr, LS20_DEFAULT, obs.get("available_actions") or [1])
-        self.last_reply = f"[planner] act={aid}"
-        return to_action(aid)
+        action = self._ctl.step(arr, LS20_DEFAULT, obs.get("available_actions") or [1])
+        self.last_reply = f"[planner] act={action.id}"
+        return action
 
     # Proxy properties so Task 1's tests can still read a.delta / a.phase
     # without knowing about _ctl (both forms work; the brief updates the tests
