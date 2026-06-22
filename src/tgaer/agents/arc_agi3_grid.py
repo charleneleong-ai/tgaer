@@ -32,6 +32,7 @@ class Semantics:
 
 
 LS20_DEFAULT = Semantics(avatar=12, keys=(0, 1), door=9, walls=(4, 11), verb="navigate")
+CLICK_DEFAULT = Semantics(avatar=12, keys=(0, 1), door=9, walls=(4, 11), verb="click")
 
 
 def to_action(action_id: int) -> ArcAction:
@@ -171,6 +172,21 @@ class KeyDoorController:
         ds = find_role(arr, (sem.door,), field_box(arr))
         return ds[0] if ds else None
 
+    def _click_target(
+        self, arr: np.ndarray, sem: Semantics, avail: list[int]
+    ) -> ArcAction | None:
+        """Direct-click at the two-phase target: a key while any remain, else the
+        door. Emits ACTION6 at the target centroid (x=col, y=row). None when
+        ACTION6 is unavailable or no target is on the board."""
+        if COMPLEX_ACTION_ID not in avail:
+            return None
+        ks = self._keys(arr, sem)
+        target = ks[0] if ks else self._door(arr, sem)
+        if target is None:
+            return None
+        r, c = int(round(target[0])), int(round(target[1]))
+        return ArcAction(id=COMPLEX_ACTION_ID, x=c, y=r)
+
     def _plan(
         self,
         arr: np.ndarray,
@@ -214,6 +230,12 @@ class KeyDoorController:
         """Choose and return the next action for navigate / press / click verbs."""
         self._progressed = False
         move_avail = [a for a in avail if a in _MOVES]
+
+        if sem.verb == "click":
+            if (clk := self._click_target(arr, sem, avail)) is not None:
+                self._progressed = True
+                return clk
+            return ArcAction(id=self._fallback(avail, move_avail))
 
         # Bootstrap: probe each directional action once to learn its move vector.
         unprobed = [a for a in move_avail if a not in self.probed]
