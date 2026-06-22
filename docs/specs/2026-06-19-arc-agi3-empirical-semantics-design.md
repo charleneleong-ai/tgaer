@@ -74,8 +74,9 @@ frame's component index (value → set of cells) for cross-frame diffing.
 
 - `observe(prev, action, cur, levels) -> None` — one step of evidence:
   - **avatar:** for the value whose single in-field component translated, record `action→Δ`;
-    when an action has ≥2 consistent non-zero Δ, pin avatar = that value and seed the
-    controller's `delta[action]`.
+    when an action has ≥2 consistent non-zero Δ, pin avatar = that value. (The detector does
+    *not* write the controller's `delta` map — the `KeyDoorController` owns its move-lattice
+    via its own bootstrap probe; keeping a single source of truth avoids a coupled double-write.)
   - **key:** diff component sets prev→cur; a value present under/adjacent to the avatar in
     `prev` and *absent* in `cur` pins key.
   - **door:** if `levels` increased this step, the value of the cell the avatar occupied/was
