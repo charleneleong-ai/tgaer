@@ -14,7 +14,7 @@
 - **Coordinate convention (probe-pinned, verbatim):** `ACTION6 x = column, y = row`. A target at array cell `[r][c]` ⇒ `ArcAction(id=6, x=c, y=r)`.
 - **Mechanic (probe-pinned):** direct-click — emit one click at the target centroid; no navigation.
 - `COMPLEX_ACTION_ID == 6`, `GRID_SIZE == 64` (from `arc_agi3_api.py`).
-- Lint gate before any push: `uvx ruff@<ci-ver> check .` AND `uvx ruff@<ci-ver> format --check .`; fold fixes into the same commit.
+- Lint gate before any push (no CI lint workflow / no `[tool.ruff]` config exists; `ruff format` is the repo convention): `uv run ruff check .` AND `uv run ruff format --check .`; fold fixes into the same commit.
 - No `Co-Authored-By` trailers. Conventional commits.
 - Verb is **config/Semantics-supplied**, never auto-detected (auto-routing is out of scope).
 
@@ -245,8 +245,8 @@ Expected: PASS (TestClickVerb + the migrated TestKeyDoorController).
 
 - [ ] **Step 5: Lint**
 
-Run: `cd /workspace/tgaer && uvx ruff@<ci-ver> check src/tgaer/agents/arc_agi3_grid.py tests/test_arc_agi3_grid.py && uvx ruff@<ci-ver> format --check src/tgaer/agents/arc_agi3_grid.py tests/test_arc_agi3_grid.py`
-(Pin `<ci-ver>` to the version in `.github/workflows/*lint*.yml` / `pyproject.toml`. Apply `ruff format` + `ruff check --fix` and re-stage if anything changes.)
+Run: `cd /workspace/tgaer && uv run ruff check src/tgaer/agents/arc_agi3_grid.py tests/test_arc_agi3_grid.py && uv run ruff format --check src/tgaer/agents/arc_agi3_grid.py tests/test_arc_agi3_grid.py`
+(Apply `ruff format` + `ruff check --fix` and re-stage if anything changes.)
 Expected: clean.
 
 - [ ] **Step 6: Commit**
