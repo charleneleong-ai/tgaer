@@ -1,0 +1,23 @@
+[sweep] 25 games
+[sweep] scorecard 3f33bb6f-571d-40ca-9349-297c465b99df
+[sweep] DONE total_levels=0 scorecard={'card_id': '3f33bb6f-571d-40ca-9349-297c465b99df', 'environments': [{'actions': 0, 'completed': False, 'id': 's5i5-18d95033', 'level_count': 8, 'levels_completed': 0, 'resets': 0, 'runs': [{'actions': 0, 'completed': False, 'guid': 'd384cdc5-94f8-4091-9be0-c7ea4bfe3d2d', 'level_actions': [0, 0, 0, 0, 0, 0, 0, 0], 'level_baseline_actions': [20, 89, 106, 54, 162, 38, 86, 83], 'level_scores': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 'levels_completed': 0, 'resets': 0, 'score': 0.0, 'state': 'NOT_FINISHED'}], 'score': 0.0}], 'score': 0.0, 'tags': ['agent'], 'tags_scores': [{'actions': 0, 'id': 'click', 'levels_completed': 0, 'number_of_environments': 1, 'number_of_levels': 8, 'score': 0.0}], 'total_actions': 0, 'total_environments': 1, 'total_environments_completed': 0, 'total_levels': 8, 'total_levels_completed': 0}
+Traceback (most recent call last):
+  File "/workspace/tgaer/experiments/sweep_roster.py", line 55, in <module>
+    main()
+  File "/workspace/tgaer/experiments/sweep_roster.py", line 39, in main
+    result = evaluate_arc_agi3_agent(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/tgaer/src/tgaer/evaluation/arc_agi3_eval.py", line 44, in evaluate_arc_agi3_agent
+    transition = env.step(action)
+                 ^^^^^^^^^^^^^^^^
+  File "/workspace/tgaer/src/tgaer/envs/arc_agi3/arc_agi3_env.py", line 41, in step
+    frame = self._transport.act(
+            ^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/tgaer/src/tgaer/envs/arc_agi3/arc_agi3_client.py", line 78, in act
+    return _to_frame(self._post(f"/api/cmd/ACTION{action_id}", body))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/tgaer/src/tgaer/envs/arc_agi3/arc_agi3_client.py", line 52, in _post
+    resp.raise_for_status()
+  File "/workspace/tgaer/.venv/lib/python3.12/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6

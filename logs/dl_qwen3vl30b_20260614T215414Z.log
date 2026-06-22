@@ -1,0 +1,2 @@
+Fetching 19 files:   0%|          | 0/19 [00:00<?, ?it/s]Fetching 19 files:   5%|▌         | 1/19 [00:00<00:08,  2.15it/s]Fetching 19 files:  26%|██▋       | 5/19 [00:00<00:01,  7.79it/s]Fetching 19 files:  42%|████▏     | 8/19 [00:29<00:50,  4.56s/it]Fetching 19 files:  53%|█████▎    | 10/19 [00:32<00:32,  3.63s/it]Fetching 19 files: 100%|██████████| 19/19 [00:32<00:00,  1.69s/it]
+DOWNLOADED -> /workspace/.hf_home/hub/models--QuantTrio--Qwen3-VL-30B-A3B-Instruct-AWQ/snapshots/a5ea10732e2c9330957864ece3ec66d806a4b00d
