@@ -10,6 +10,7 @@ from tgaer.agents.arc_agi3_grid import (
     field_box,
     find_role,
 )
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 def test_find_role_filters_to_field_box():
@@ -49,8 +50,8 @@ def _ld_board():
 class TestKeyDoorController:
     def test_step_returns_directional_action(self):
         c = KeyDoorController()
-        aid = c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])
-        assert aid in (1, 2, 3, 4)
+        act = c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])
+        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
 
     def test_on_new_level_resets_phase_keeps_delta(self):
         c = KeyDoorController()
@@ -81,8 +82,8 @@ class TestKeyDoorController:
             3: np.array([0, 1]),
             4: np.array([0, -1]),
         }
-        aid = c.step(g, sem, [1, 2, 3, 4, 5])
-        assert aid == 5  # keyboard interaction preferred
+        act = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert act.id == 5  # keyboard interaction preferred
 
     def test_press_verb_emits_interaction_adjacent_to_key(self):
         # keys present; avatar adjacent to nearest key -> targets key, emits interaction
@@ -98,8 +99,8 @@ class TestKeyDoorController:
             3: np.array([0, 1]),
             4: np.array([0, -1]),
         }
-        aid = c.step(g, sem, [1, 2, 3, 4, 5])
-        assert aid == 5  # interaction emitted at the key, not a movement
+        act = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert act.id == 5  # interaction emitted at the key, not a movement
 
     def test_press_verb_navigates_when_target_distant(self):
         # no keys; door is far away -> controller navigates (move), does NOT press
@@ -114,5 +115,5 @@ class TestKeyDoorController:
             3: np.array([0, 1]),
             4: np.array([0, -1]),
         }
-        aid = c.step(g, sem, [1, 2, 3, 4, 5])
-        assert aid in (1, 2, 3, 4)  # moves toward target; does NOT press yet
+        act = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert act.id in (1, 2, 3, 4)  # moves toward target; does NOT press yet

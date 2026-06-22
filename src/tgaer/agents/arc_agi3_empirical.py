@@ -62,8 +62,8 @@ class EmpiricalPlannerAgent(Agent):
         self._det.observe(self._prev, self._prev_action, arr, levels)
         sem = self._det.semantics(self._cold)
         self._ctl.learn(arr, sem)
-        aid = self._ctl.step(arr, sem, obs.get("available_actions") or [1])
+        action = self._ctl.step(arr, sem, obs.get("available_actions") or [1])
 
-        self._prev, self._prev_action = arr, aid
-        self.last_reply = f"[empirical] act={aid} avatar={sem.avatar}"
-        return to_action(aid)
+        self._prev, self._prev_action = arr, action.id
+        self.last_reply = f"[empirical] act={action.id} avatar={sem.avatar}"
+        return action

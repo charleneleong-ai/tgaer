@@ -210,8 +210,8 @@ class KeyDoorController:
             min(abs(tl[0] + dr - g[0]) + abs(tl[1] + dc - g[1]) for dr, dc in fp) <= 1
         )
 
-    def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> int:
-        """Choose and return the next action id for ``navigate`` or ``press`` verbs."""
+    def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> ArcAction:
+        """Choose and return the next action for navigate / press / click verbs."""
         self._progressed = False
         move_avail = [a for a in avail if a in _MOVES]
 
@@ -220,13 +220,13 @@ class KeyDoorController:
         if unprobed and len(self.delta) < len(move_avail):
             action = unprobed[0]
             self._remember(arr, action, sem)
-            return action
+            return ArcAction(id=action)
 
         av = cells(arr, sem.avatar)
         if not len(av) or not self.delta:
             action = self._fallback(avail, move_avail)
             self._remember(arr, action, sem)
-            return action
+            return ArcAction(id=action)
 
         ks = self._keys(arr, sem)
         d = self._door(arr, sem)
@@ -241,7 +241,7 @@ class KeyDoorController:
             target = self.last_key_goal if ks and self.last_key_goal is not None else d
             if target is not None and self._adjacent(av, target):
                 self._progressed = True
-                return self._interaction(avail)
+                return ArcAction(id=self._interaction(avail))
 
         if self.phase == "key" and self.last_key_goal is not None:
             path = self._plan(arr, fp, tl, self.last_key_goal, sem)
@@ -249,7 +249,7 @@ class KeyDoorController:
                 self._progressed = True
                 action = path[0]
                 self._remember(arr, action, sem)
-                return action
+                return ArcAction(id=action)
             self.phase = "door"  # reached the key — commit to the door this step
 
         if d is not None:
@@ -258,11 +258,11 @@ class KeyDoorController:
                 self._progressed = True
                 action = path[0]
                 self._remember(arr, action, sem)
-                return action
+                return ArcAction(id=action)
 
         action = self._fallback(avail, move_avail)
         self._remember(arr, action, sem)
-        return action
+        return ArcAction(id=action)
 
 
 class Planner:
