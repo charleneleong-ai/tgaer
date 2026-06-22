@@ -107,3 +107,48 @@ class TestSemanticsMerge:
         sem = det.semantics(Semantics(12, (0, 1), 9, (4,), "navigate"))
         assert sem.keys == (7,)
         assert sem.door == 8
+
+
+from tgaer.agents.arc_agi3_empirical import EmpiricalPlannerAgent  # noqa: E402
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction  # noqa: E402
+
+
+class _FakeSci:
+    def __init__(self, sem):
+        self.sem = sem
+        self.calls = 0
+
+    def infer(self, frame):
+        self.calls += 1
+        return self.sem
+
+
+def _obs(avatar_rc=(2, 2), levels=0):
+    g = _grid(avatar_rc)
+    g[5, 5] = 0
+    g[7, 7] = 9
+    return {
+        "frame": [g.tolist()],
+        "available_actions": [1, 2, 3, 4],
+        "levels_completed": levels,
+        "state": "NOT_FINISHED",
+    }
+
+
+class TestAgentIntegration:
+    def test_emits_legal_action(self):
+        agent = EmpiricalPlannerAgent(scientist=_FakeSci(LS20_DEFAULT))
+        act = agent.act(_obs())
+        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
+
+    def test_cold_start_queried_once_per_episode(self):
+        sci = _FakeSci(LS20_DEFAULT)
+        agent = EmpiricalPlannerAgent(scientist=sci)
+        for _ in range(5):
+            agent.act(_obs())
+        assert sci.calls == 1
+
+    def test_absent_scientist_falls_back_to_ls20(self):
+        agent = EmpiricalPlannerAgent(scientist=None, api_base=None)
+        act = agent.act(_obs())  # no VL, no crash, still plays
+        assert act.id in (1, 2, 3, 4)
