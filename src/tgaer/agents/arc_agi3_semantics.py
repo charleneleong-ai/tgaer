@@ -4,7 +4,7 @@ from collections import Counter
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import cells, components, field_box, in_field
+from tgaer.agents.arc_agi3_grid import Semantics, cells, components, field_box, in_field
 
 Delta = tuple[int, int]
 
@@ -104,6 +104,15 @@ class EmpiricalSemantics:
             if abs(r - av[0]) + abs(c - av[1]) <= 1:
                 self._door = v
                 return
+
+    def semantics(self, cold_start: Semantics) -> Semantics:
+        return Semantics(
+            avatar=self._avatar if self._avatar is not None else cold_start.avatar,
+            keys=self.keys if self._keys else cold_start.keys,
+            door=self._door if self._door is not None else cold_start.door,
+            walls=cold_start.walls,
+            verb=cold_start.verb,
+        )
 
 
 def _single_in_field_centroid(arr: np.ndarray, v: int) -> np.ndarray | None:
