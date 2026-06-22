@@ -4,6 +4,7 @@ import os
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
+from tgaer.agents.arc_agi3_empirical import EmpiricalPlannerAgent
 from tgaer.agents.arc_agi3_llm import ArcAgi3LLMAgent
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
 from tgaer.agents.arc_agi3_random import RandomArcAgi3Agent
@@ -23,6 +24,7 @@ _ARC_AGI3_AGENTS = {
     "llm": ArcAgi3LLMAgent,
     "planner": PlannerArcAgi3Agent,
     "scientist": ScientistPlannerAgent,
+    "empirical": EmpiricalPlannerAgent,
 }
 _GUARDS = {"futile_action": FutileActionGuard, "repeated_plan": RepeatedPlanGuard}
 
