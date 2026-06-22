@@ -24,14 +24,21 @@ class ArcTask:
 
 _SPLIT_FILES = {
     "train": ("arc-agi_training_challenges.json", "arc-agi_training_solutions.json"),
-    "evaluation": ("arc-agi_evaluation_challenges.json", "arc-agi_evaluation_solutions.json"),
+    "evaluation": (
+        "arc-agi_evaluation_challenges.json",
+        "arc-agi_evaluation_solutions.json",
+    ),
     "test": ("arc-agi_test_challenges.json", None),
 }
 
 
-def load_arc_tasks(dataset_path: str | Path, split: str = "evaluation") -> List[ArcTask]:
+def load_arc_tasks(
+    dataset_path: str | Path, split: str = "evaluation"
+) -> List[ArcTask]:
     if split not in _SPLIT_FILES:
-        raise ValueError(f"Unknown split: {split!r}. Expected one of {list(_SPLIT_FILES)}.")
+        raise ValueError(
+            f"Unknown split: {split!r}. Expected one of {list(_SPLIT_FILES)}."
+        )
 
     root = Path(dataset_path)
     if not root.exists():
@@ -48,7 +55,10 @@ def load_arc_tasks(dataset_path: str | Path, split: str = "evaluation") -> List[
 
     tasks: List[ArcTask] = []
     for task_id, blob in challenges.items():
-        train_pairs = [ArcPair(input=ex["input"], output=ex["output"]) for ex in blob.get("train", [])]
+        train_pairs = [
+            ArcPair(input=ex["input"], output=ex["output"])
+            for ex in blob.get("train", [])
+        ]
         test_inputs = [ex["input"] for ex in blob.get("test", [])]
         test_outputs = solutions.get(task_id) if solutions is not None else None
         tasks.append(

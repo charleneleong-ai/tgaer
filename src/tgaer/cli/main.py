@@ -8,7 +8,9 @@ import yaml
 
 from tgaer.experiments.runner import run_experiment
 
-app = typer.Typer(help="TGAER – Toward General-Purpose Abstraction & Embodied Reasoning")
+app = typer.Typer(
+    help="TGAER – Toward General-Purpose Abstraction & Embodied Reasoning"
+)
 
 
 def _load_experiment_config(name: str) -> dict:
@@ -26,8 +28,12 @@ def _load_experiment_config(name: str) -> dict:
 
 @app.command()
 def run(
-    experiment: str = typer.Argument(..., help="Experiment name, e.g. 'arc_hybrid' or 'orak_geq_opt'."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Only load and print config, do not execute."),
+    experiment: str = typer.Argument(
+        ..., help="Experiment name, e.g. 'arc_hybrid' or 'orak_geq_opt'."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Only load and print config, do not execute."
+    ),
 ) -> None:
     cfg = _load_experiment_config(experiment)
     typer.echo(f"[INFO] Loaded experiment config: {experiment}")

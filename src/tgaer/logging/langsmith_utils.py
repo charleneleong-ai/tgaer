@@ -5,7 +5,6 @@ from typing import Any, Dict, Generator, Optional
 
 from langsmith import Client
 
-
 _client: Optional[Client] = None
 
 

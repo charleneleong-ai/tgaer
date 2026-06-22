@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction, ArcFrame
-from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
 from tgaer.envs.arc_agi3.rendering import ARC_PALETTE, grid_to_rgb
+from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
 from tgaer.evaluation.wandb_logger import build_logger
 
 

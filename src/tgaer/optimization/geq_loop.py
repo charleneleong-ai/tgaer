@@ -6,8 +6,8 @@ from typing import Any, Callable, Dict, List
 from tgaer.core.agent_base import Agent
 from tgaer.core.env_base import Environment
 from tgaer.evaluation.metrics import EvalResult
-from tgaer.logging.mlflow_utils import log_eval_run
 from tgaer.logging.langsmith_utils import traced_run
+from tgaer.logging.mlflow_utils import log_eval_run
 
 
 class GEQOptimizer:

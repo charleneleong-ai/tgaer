@@ -38,7 +38,9 @@ def grid_to_rgb(frame: list[list[list[int]]] | None):
     return palette[np.clip(arr, 0, len(palette) - 1)]
 
 
-def grid_to_png_data_url(frame: list[list[list[int]]] | None, scale: int = 8) -> str | None:
+def grid_to_png_data_url(
+    frame: list[list[list[int]]] | None, scale: int = 8
+) -> str | None:
     """Render the frame to a PNG (nearest-neighbour upscaled by ``scale`` so each
     cell is a visible block) and return it as a base64 ``data:`` URL for the
     OpenAI vision message format. Returns None if the frame is empty."""

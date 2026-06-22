@@ -40,7 +40,9 @@ class ArcEnvironment(Environment):
         self._done = False
         return {
             "task_id": self._task.task_id,
-            "train_pairs": [{"input": p.input, "output": p.output} for p in self._task.train_pairs],
+            "train_pairs": [
+                {"input": p.input, "output": p.output} for p in self._task.train_pairs
+            ],
             "test_inputs": list(self._task.test_inputs),
         }
 
@@ -52,7 +54,9 @@ class ArcEnvironment(Environment):
             reward = _score_predictions(action or [], self._task.test_outputs)
             info = {"scored": True, "num_tests": len(self._task.test_outputs)}
         self._done = True
-        return Transition(state=None, action=action, reward=reward, done=True, info=info)
+        return Transition(
+            state=None, action=action, reward=reward, done=True, info=info
+        )
 
     def render(self) -> Any:
         return {
