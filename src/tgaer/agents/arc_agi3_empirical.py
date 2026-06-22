@@ -5,8 +5,8 @@ from typing import Any
 import numpy as np
 
 from tgaer.agents.arc_agi3_grid import (
-    KeyDoorController,
     LS20_DEFAULT,
+    KeyDoorController,
     to_action,
 )
 from tgaer.agents.arc_agi3_scientist import Scientist
