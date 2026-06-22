@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
 import dspy
 
@@ -53,7 +53,9 @@ def build_arc_program(
             self.reason = dspy.Predict(ARCReasoningSignature)
             self.act = dspy.Predict(ARCActionSignature)
 
-        def forward(self, task_description: str, examples: str, input_grid: str) -> Dict[str, str]:
+        def forward(
+            self, task_description: str, examples: str, input_grid: str
+        ) -> Dict[str, str]:
             hyp = self.reason(
                 task_description=task_description,
                 examples=examples,

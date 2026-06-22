@@ -7,7 +7,9 @@ from tgaer.core.env_base import Environment
 from tgaer.evaluation.metrics import EvalResult
 
 
-def evaluate_arc_agent(agent: Agent, env: Environment, cfg: Dict[str, Any]) -> EvalResult:
+def evaluate_arc_agent(
+    agent: Agent, env: Environment, cfg: Dict[str, Any]
+) -> EvalResult:
     observation = env.reset()
     action = agent.act(observation)
     transition = env.step(action)

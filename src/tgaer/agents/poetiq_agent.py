@@ -36,14 +36,21 @@ class PoetiqAgent(Agent):
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self.config = config
-        submodule = Path(config.get("submodule_path", _DEFAULT_SUBMODULE)).expanduser().resolve()
+        submodule = (
+            Path(config.get("submodule_path", _DEFAULT_SUBMODULE))
+            .expanduser()
+            .resolve()
+        )
         _ensure_poetiq_on_path(submodule)
 
         from dotenv import load_dotenv  # type: ignore[import-not-found]
+
         load_dotenv(submodule / ".env")
 
+        from arc_agi.io import (
+            build_kaggle_two_attempts,  # type: ignore[import-not-found]
+        )
         from arc_agi.solve import solve  # type: ignore[import-not-found]
-        from arc_agi.io import build_kaggle_two_attempts  # type: ignore[import-not-found]
 
         self._solve = solve
         self._build_kaggle = build_kaggle_two_attempts

@@ -30,7 +30,7 @@ dependencies = [
 tgaer-eval = "tgaer.cli.evaluate:main"
 
 [project.optional-dependencies]
-dev = ["pytest", "black", "ruff", "isort"]
+dev = ["pytest", "ruff==0.15.13"]
 dashboards = ["streamlit"]
 poetiq = [
   "litellm==1.78.2",
@@ -45,3 +45,13 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+# Vendored env + git submodules + loose research/runtime artefacts are not ours to lint.
+extend-exclude = ["challenges", "environments", "experiments", "wandb", "logs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]  # pyflakes, pycodestyle, warnings, isort (ruff owns import order + format)
+ignore = ["E501"]  # line length is owned by `ruff format`; it won't wrap strings/comments/URLs

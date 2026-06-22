@@ -7,8 +7,10 @@ from tgaer.core.env_base import Environment
 from tgaer.evaluation.metrics import EvalResult
 
 
-def evaluate_orak_agent(agent: Agent, env: Environment, cfg: Dict[str, Any]) -> EvalResult:
-    state = env.reset()
+def evaluate_orak_agent(
+    agent: Agent, env: Environment, cfg: Dict[str, Any]
+) -> EvalResult:
+    env.reset()
     total_reward = 0.0
     max_steps = cfg.get("max_steps_per_mission", 50)
     done = False
