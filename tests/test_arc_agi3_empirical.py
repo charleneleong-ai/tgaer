@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from tgaer.agents.arc_agi3_grid import cells  # noqa: E402
 from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
 
 
@@ -10,6 +11,13 @@ def _grid(avatar_rc: tuple[int, int], avatar: int = 12) -> np.ndarray:
     g = np.full((10, 10), 3, dtype=int)
     g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
     g[avatar_rc] = avatar
+    return g
+
+
+def _with(avatar_rc: tuple[int, int], extra: dict[tuple[int, int], int]) -> np.ndarray:
+    g = _grid(avatar_rc)
+    for rc, v in extra.items():
+        g[rc] = v
     return g
 
 
@@ -42,3 +50,39 @@ class TestAvatarDetection:
         det = EmpiricalSemantics()
         det.observe(_grid((2, 2)), 1, _grid((3, 2)), 0)
         assert det.avatar is None
+
+
+class TestKeyDetection:
+    def test_value_vanishing_under_avatar_pins_key(self):
+        det = EmpiricalSemantics()
+        det._avatar = 12  # avatar already known
+        prev = _with((3, 3), {(3, 4): 0})  # key(0) adjacent-right of avatar
+        cur = _grid((3, 4))  # avatar steps onto it; key gone
+        det.observe(prev, 1, cur, 0)
+        assert det.keys == (0,)
+
+    def test_value_vanishing_far_from_avatar_is_not_key(self):
+        det = EmpiricalSemantics()
+        det._avatar = 12
+        prev = _with((3, 3), {(8, 8): 0})  # value 0 nowhere near avatar
+        cur = _grid((3, 4))  # 0 vanished but not under avatar
+        det.observe(prev, 1, cur, 0)
+        assert det.keys == ()
+
+
+class TestDoorDetection:
+    def test_level_increment_pins_avatar_adjacent_value_as_door(self):
+        det = EmpiricalSemantics()
+        det._avatar = 12
+        prev = _with((3, 3), {(3, 4): 9})  # door(9) adjacent-right
+        cur = _grid((3, 4))  # avatar reaches door; levels ticks 0->1
+        det.observe(prev, 1, cur, 1)
+        assert det.door == 9
+
+    def test_no_increment_no_door(self):
+        det = EmpiricalSemantics()
+        det._avatar = 12
+        prev = _with((3, 3), {(3, 4): 9})
+        cur = _grid((3, 4))
+        det.observe(prev, 1, cur, 0)  # levels stayed 0
+        assert det.door is None
