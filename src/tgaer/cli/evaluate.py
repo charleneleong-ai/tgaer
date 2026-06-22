@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 # tgaer-eval console script, `python -m`, or importing `app`.
 load_dotenv()
 
-from tgaer.evaluation.dispatch import run_eval  # noqa: E402 — intentionally after load_dotenv
+from tgaer.evaluation.dispatch import run_eval  # noqa: E402
 
 app = typer.Typer(
     help="Run a guarded TGAER eval loop, dispatched on the config's env.kind."
