@@ -28,7 +28,7 @@ class Semantics:
     keys: tuple[int, ...]
     door: int
     walls: tuple[int, ...]
-    verb: str  # "navigate" | "press"
+    verb: str  # "navigate" | "press" | "click"
 
 
 LS20_DEFAULT = Semantics(avatar=12, keys=(0, 1), door=9, walls=(4, 11), verb="navigate")
