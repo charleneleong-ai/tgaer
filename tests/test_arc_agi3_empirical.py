@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import cells  # noqa: E402
+from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics, cells  # noqa: E402
 from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
 
 
@@ -86,3 +86,24 @@ class TestDoorDetection:
         cur = _grid((3, 4))
         det.observe(prev, 1, cur, 0)  # levels stayed 0
         assert det.door is None
+
+
+class TestSemanticsMerge:
+    def test_unpinned_falls_back_to_cold_start(self):
+        det = EmpiricalSemantics()
+        assert det.semantics(LS20_DEFAULT) == LS20_DEFAULT
+
+    def test_pinned_avatar_overrides_disagreeing_cold_start(self):
+        det = EmpiricalSemantics()
+        det._avatar = 5  # evidence says avatar is 5, cold-start said 12
+        sem = det.semantics(LS20_DEFAULT)
+        assert sem.avatar == 5
+        assert sem.walls == LS20_DEFAULT.walls  # walls untouched
+
+    def test_pinned_keys_and_door_override(self):
+        det = EmpiricalSemantics()
+        det._keys = {7}
+        det._door = 8
+        sem = det.semantics(Semantics(12, (0, 1), 9, (4,), "navigate"))
+        assert sem.keys == (7,)
+        assert sem.door == 8
