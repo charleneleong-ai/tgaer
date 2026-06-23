@@ -80,6 +80,13 @@ class TestProposals:
         # every click primitive carries an in-field (row, col)
         assert all(len(p) == 3 for p in prims)
 
+    def test_goal_value_clicks_come_first(self):
+        # value 7 is the bigger (more salient) blob; value 5 is a known goal. The
+        # goal-value click must be proposed before the larger blind salience pick.
+        board = _board(extra={5: [(6, 3)], 7: [(2, 2), (2, 3), (2, 4)]})
+        prims = proposals(board, [6], goal_values={5})
+        assert prims[0] == ("click", 6, 3)
+
 
 class TestStateGraph:
     def test_register_sets_untested_once(self):
@@ -158,3 +165,23 @@ class TestTerminalAvoidance:
         agent.act(_obs(other, levels=1, actions=(1, 2)))  # arrived at frontier T
         act = agent.act(_obs(start, levels=0, actions=(1, 2), terminal=True))  # respawn
         assert act.id == 2  # routes along the surviving start--act2-->T edge
+
+
+class TestWinInduction:
+    def test_advancing_click_value_is_learned_and_re_clicked(self):
+        # Click value 5; that advances the level. On the new level a bigger value-7
+        # blob would win blind salience, but the induced goal re-clicks value 5.
+        agent = ExplorerArcAgi3Agent()
+        a1 = agent.act(_obs(_board(extra={5: [(4, 6)]}), levels=0, actions=(6,)))
+        assert a1.id == 6 and (a1.y, a1.x) == (4, 6)  # clicked value 5
+        nxt = _board(extra={5: [(6, 3)], 7: [(2, 2), (2, 3), (2, 4)]})
+        a2 = agent.act(_obs(nxt, levels=1, actions=(6,)))  # level++ → induce value 5
+        assert a2.id == 6 and (a2.y, a2.x) == (6, 3)  # re-clicks value 5, not blob 7
+
+    def test_navigate_win_induces_no_click_goal(self):
+        # A level-up after a directional act must not crash or learn a click goal.
+        agent = ExplorerArcAgi3Agent()
+        board = _board()
+        agent.act(_obs(board, levels=0, actions=(1, 2)))  # took an ("act", _)
+        agent.act(_obs(board, levels=1, actions=(1, 2)))  # level++ after a non-click
+        assert agent._goal_values == set()

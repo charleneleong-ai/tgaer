@@ -7,12 +7,14 @@ action from the current state, or routes along known edges to the nearest state
 that still has one. This is the training-free, no-LLM spine that topped the
 ARC-AGI-3 2025 preview (algorithmic exploration ≫ frontier LLM ≫ random).
 
-Phase 1 here is exploration only — no win-model induction yet (that is Phase 3,
-which records the transition preceding each ``levels_completed++`` to synthesise
-a goal predicate, then exploits it via the existing BFS ``Planner``). Action
-primitives generalise across verbs: simple actions are ``("act", id)``; ACTION6
-becomes salience-ranked ``("click", row, col)`` targets at component centroids,
-so the click-only games the navigate planner cannot touch still get explored.
+Win-induction has begun (Phase 3a): when a click advances a level, the clicked
+cell's value is learned as a goal and re-clicked first on later levels, so
+multi-level click games climb instead of re-stumbling. The navigate-goal case
+(induce a target cell, exploit via the BFS ``Planner`` to re-solve ``ls20``
+without hardcoded semantics) is Phase 3b. Action primitives generalise across
+verbs: simple actions are ``("act", id)``; ACTION6 becomes salience-ranked
+``("click", row, col)`` targets at component centroids, so the click-only games
+the navigate planner cannot touch still get explored.
 """
 
 from __future__ import annotations
@@ -49,6 +51,10 @@ def _background(arr: np.ndarray, box) -> int:
     return int(Counter(sub.ravel().tolist()).most_common(1)[0][0]) if sub.size else 0
 
 
+def _centroid(comp: np.ndarray) -> tuple[int, int]:
+    return int(round(comp[:, 0].mean())), int(round(comp[:, 1].mean()))
+
+
 def click_targets(
     arr: np.ndarray, k: int = 12, max_field_frac: float = 0.25
 ) -> list[tuple[int, int]]:
@@ -70,23 +76,35 @@ def click_targets(
         for c in components(arr, (v,)):  # one colour at a time — never merge objects
             if not in_field(c.mean(0), box) or len(c) > max_field_frac * field_area:
                 continue
-            scored.append(
-                (len(c), int(round(c[:, 0].mean())), int(round(c[:, 1].mean())))
-            )
+            scored.append((len(c), *_centroid(c)))
     scored.sort(key=lambda t: t[0], reverse=True)
     return [(r, c) for _, r, c in scored[:k]]
 
 
-def proposals(arr: np.ndarray, available: list[int]) -> list[Primitive]:
-    """Ordered action primitives to try at the current frame. ACTION6 fans out
-    into salience-ranked click targets; every other id is a simple ``act``."""
+def goal_targets(arr: np.ndarray, goal_values) -> list[tuple[int, int]]:
+    """Centroids of components whose value is a learned goal — a click here has
+    previously advanced a level, so it is worth trying before blind salience."""
+    out: list[tuple[int, int]] = []
+    for v in goal_values:
+        for comp in components(arr, (v,)):
+            out.append((int(round(comp[:, 0].mean())), int(round(comp[:, 1].mean()))))
+    return out
+
+
+def proposals(arr: np.ndarray, available: list[int], goal_values=()) -> list[Primitive]:
+    """Ordered action primitives to try at the current frame. Clicks on learned
+    goal values come first; then ACTION6 fans out into salience-ranked click
+    targets; every other id is a simple ``act``. Duplicates are dropped."""
     prims: list[Primitive] = []
+    if COMPLEX_ACTION_ID in available and goal_values:
+        prims.extend(("click", r, c) for r, c in goal_targets(arr, goal_values))
     for a in available:
         if a == COMPLEX_ACTION_ID:
             prims.extend(("click", r, c) for r, c in click_targets(arr))
         else:
             prims.append(("act", a))
-    return prims
+    seen: set[Primitive] = set()
+    return [p for p in prims if not (p in seen or seen.add(p))]
 
 
 def to_arc(prim: Primitive) -> ArcAction:
@@ -163,6 +181,9 @@ class ExplorerArcAgi3Agent(Agent):
         self._levels = 0
         # Edges that led to GAME_OVER, persistent across deaths and level resets.
         self._fatal: set[tuple[Any, Primitive]] = set()
+        # Cell values whose click advanced a level — persistent goal prior.
+        self._goal_values: set[int] = set()
+        self._prev_arr: np.ndarray | None = None
         self.last_reply: str | None = None
 
     def _on_new_level(self) -> None:
@@ -189,11 +210,12 @@ class ExplorerArcAgi3Agent(Agent):
 
         levels = obs.get("levels_completed", self._levels)
         if levels > self._levels:  # genuine progress wipes the per-level map; a
-            self._on_new_level()  # death respawn (levels drop) must keep it
+            self._induce_goal()  # but first learn what the winning click targeted
+            self._on_new_level()  # death respawn (levels drop) must keep the map
         self._levels = levels
 
         sig = frame_signature(arr)
-        prims = proposals(arr, available)
+        prims = proposals(arr, available, self._goal_values)
         self._graph.register(sig, prims)
         if self._prev_sig is not None and self._prev_prim is not None:
             self._graph.connect(self._prev_sig, self._prev_prim, sig)
@@ -201,8 +223,20 @@ class ExplorerArcAgi3Agent(Agent):
         prim = self._choose(sig, prims)
         self._graph.take(sig, prim)
         self._prev_sig, self._prev_prim = sig, prim
+        self._prev_arr = arr
         self.last_reply = f"[explorer] {prim}"
         return to_arc(prim)
+
+    def _induce_goal(self) -> None:
+        """A level was just completed: if the preceding action clicked a cell,
+        learn that cell's value as a goal to re-click on later levels."""
+        if (
+            self._prev_arr is not None
+            and self._prev_prim
+            and self._prev_prim[0] == "click"
+        ):
+            _, r, c = self._prev_prim
+            self._goal_values.add(int(self._prev_arr[r, c]))
 
     def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
         # Drop a stale route the current frame can no longer execute.
