@@ -52,7 +52,14 @@ def main() -> None:
         try:
             for i, gid in enumerate(games, 1):
                 try:
-                    env = ArcAgi3Environment(client, gid, max_actions=MAX_ACTIONS)
+                    env = ArcAgi3Environment(
+                        client,
+                        gid,
+                        max_actions=MAX_ACTIONS,
+                        # let the explorer learn fatal transitions and respawn
+                        # within budget instead of forfeiting on first death
+                        reset_on_game_over=AGENT is ExplorerArcAgi3Agent,
+                    )
                     result = evaluate_arc_agi3_agent(
                         AGENT(),
                         env,

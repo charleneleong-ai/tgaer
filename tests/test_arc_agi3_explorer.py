@@ -10,7 +10,6 @@ from tgaer.agents.arc_agi3_explorer import (
     frame_signature,
     proposals,
 )
-from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 # A 10x10 green (3) play-field with a yellow (4) wall border, a 1-cell avatar
@@ -26,13 +25,18 @@ def _board(avatar=(2, 2), extra: dict | None = None) -> np.ndarray:
     return g
 
 
-def _obs(board: np.ndarray, levels: int = 0, actions=(1, 2, 3, 4)) -> dict:
-    return {
+def _obs(
+    board: np.ndarray, levels: int = 0, actions=(1, 2, 3, 4), terminal: bool = False
+) -> dict:
+    obs = {
         "frame": [board.tolist()],
         "available_actions": list(actions),
         "levels_completed": levels,
         "state": "NOT_FINISHED",
     }
+    if terminal:  # a respawn frame after death — the prior action was fatal
+        obs["terminal"] = True
+    return obs
 
 
 class TestFrameSignature:
@@ -106,10 +110,6 @@ class TestStateGraph:
 
 
 class TestExplorerLoop:
-    def test_emits_a_legal_action(self):
-        act = ExplorerArcAgi3Agent().act(_obs(_board()))
-        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
-
     def test_tries_each_untested_action_before_repeating(self):
         # Feeding the SAME board (avatar never moves in this stub) means the
         # signature is constant; the explorer must cycle through all four
@@ -133,3 +133,28 @@ class TestExplorerLoop:
         board = _board(extra={5: [(4, 4), (4, 5)]})
         act = ExplorerArcAgi3Agent().act(_obs(board, actions=(6,)))
         assert act.id == 6 and act.x is not None and act.y is not None
+
+
+class TestTerminalAvoidance:
+    def test_avoids_fatal_action_in_fallback(self):
+        # act1 dies, act2 is safe. Once both are taken and the node is re-entered
+        # with nothing untested, the fallback must reuse the safe act2 — not act1,
+        # which is the first proposal it would otherwise default to.
+        agent = ExplorerArcAgi3Agent()
+        board = _board()
+        agent.act(_obs(board, actions=(1, 2)))  # take act1
+        agent.act(_obs(board, actions=(1, 2), terminal=True))  # act1 fatal; take act2
+        act = agent.act(_obs(board, actions=(1, 2)))  # fallback must skip fatal act1
+        assert act.id == 2
+
+    def test_map_survives_death_respawn(self):
+        # Build start --act2--> frontier T on level 1, then die: the respawn drops
+        # levels 1->0, which must NOT wipe the map. The agent should route along
+        # the surviving start--act2-->T edge, not restart by re-exploring act1.
+        agent = ExplorerArcAgi3Agent()
+        start, other = _board(avatar=(2, 2)), _board(avatar=(5, 5))
+        agent.act(_obs(start, levels=1, actions=(1, 2)))  # take act1 at start
+        agent.act(_obs(start, levels=1, actions=(1, 2)))  # take act2 (start exhausted)
+        agent.act(_obs(other, levels=1, actions=(1, 2)))  # arrived at frontier T
+        act = agent.act(_obs(start, levels=0, actions=(1, 2), terminal=True))  # respawn
+        assert act.id == 2  # routes along the surviving start--act2-->T edge

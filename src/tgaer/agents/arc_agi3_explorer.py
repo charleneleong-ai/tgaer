@@ -161,6 +161,8 @@ class ExplorerArcAgi3Agent(Agent):
         self._prev_sig: Any | None = None
         self._prev_prim: Primitive | None = None
         self._levels = 0
+        # Edges that led to GAME_OVER, persistent across deaths and level resets.
+        self._fatal: set[tuple[Any, Primitive]] = set()
         self.last_reply: str | None = None
 
     def _on_new_level(self) -> None:
@@ -177,10 +179,18 @@ class ExplorerArcAgi3Agent(Agent):
             return to_arc(("act", available[0]))
         arr = np.asarray(frame[-1])
 
+        # A respawn after death: the action that led here was fatal. Record the
+        # edge so it is never repeated, and drop the cross-death link — the frame
+        # is a fresh level start, not a normal successor.
+        if obs.get("terminal") and self._prev_sig is not None and self._prev_prim:
+            self._fatal.add((self._prev_sig, self._prev_prim))
+            self._graph.take(self._prev_sig, self._prev_prim)
+            self._prev_sig = self._prev_prim = None
+
         levels = obs.get("levels_completed", self._levels)
-        if levels != self._levels:
-            self._levels = levels
-            self._on_new_level()
+        if levels > self._levels:  # genuine progress wipes the per-level map; a
+            self._on_new_level()  # death respawn (levels drop) must keep it
+        self._levels = levels
 
         sig = frame_signature(arr)
         prims = proposals(arr, available)
@@ -200,10 +210,16 @@ class ExplorerArcAgi3Agent(Agent):
             self._plan.clear()
         if self._plan:
             return self._plan.popleft()
+        # Untested prims are fatal-free by construction (fatal edges are taken out
+        # of untested when recorded), so only this last-resort reuse needs to screen
+        # them: prefer a primitive not known to end the game.
         if untested := self._graph.untested_at(sig):
             return untested[0]
         path = self._graph.path_to_frontier(sig)
         if path:
             self._plan = deque(path)
             return self._plan.popleft()
+        safe = [p for p in prims if (sig, p) not in self._fatal]
+        if safe:
+            return safe[0]
         return prims[0] if prims else ("act", 1)
