@@ -1,0 +1,209 @@
+"""Game-agnostic explorer for ARC-AGI-3 — the explore→induce→exploit controller.
+
+Unlike the LS20-tuned ``KeyDoorController``, this agent assumes nothing about a
+game's win condition. It builds a directed **state graph** of frame signatures
+and drives **frontier-directed exploration**: at each step it takes an untested
+action from the current state, or routes along known edges to the nearest state
+that still has one. This is the training-free, no-LLM spine that topped the
+ARC-AGI-3 2025 preview (algorithmic exploration ≫ frontier LLM ≫ random).
+
+Phase 1 here is exploration only — no win-model induction yet (that is Phase 3,
+which records the transition preceding each ``levels_completed++`` to synthesise
+a goal predicate, then exploits it via the existing BFS ``Planner``). Action
+primitives generalise across verbs: simple actions are ``("act", id)``; ACTION6
+becomes salience-ranked ``("click", row, col)`` targets at component centroids,
+so the click-only games the navigate planner cannot touch still get explored.
+"""
+
+from __future__ import annotations
+
+from collections import Counter, deque
+from typing import Any
+
+import numpy as np
+
+from tgaer.agents.arc_agi3_grid import components, field_box, in_field
+from tgaer.core.agent_base import Agent
+from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
+
+# A primitive is the atomic unit of exploration: ("act", id) or ("click", r, c).
+Primitive = tuple
+
+
+def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
+    """Hashable identity of the *play-field* — the region inside the green box,
+    so HUD / status-bar churn outside it doesn't fragment the state graph.
+
+    Field detection (``field_box``) keys on the green floor; a later phase should
+    replace it with a colour-free field detector for games without one."""
+    lo, hi = field_box(arr)
+    r0, c0, r1, c1 = int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
+    sub = arr[r0 : r1 + 1, c0 : c1 + 1]
+    return sub.shape, sub.tobytes()
+
+
+def _background(arr: np.ndarray, box) -> int:
+    """The most common in-field cell value — treated as floor and not a target."""
+    lo, hi = box
+    sub = arr[int(lo[0]) : int(hi[0]) + 1, int(lo[1]) : int(hi[1]) + 1]
+    return int(Counter(sub.ravel().tolist()).most_common(1)[0][0]) if sub.size else 0
+
+
+def click_targets(
+    arr: np.ndarray, k: int = 12, max_field_frac: float = 0.25
+) -> list[tuple[int, int]]:
+    """Salience-ranked click points: centroids of in-field, single-colour,
+    non-background components, largest compact object first, capped at ``k``.
+    Components spanning more than ``max_field_frac`` of the field are treated as
+    structure (walls / floor), not buttons, and dropped.
+
+    The size cutoff is a Phase-1 heuristic; Phase 2 (action-effect classification)
+    replaces it with empirical "does clicking here change the frame?" filtering."""
+    box = field_box(arr)
+    lo, hi = box
+    field_area = max(1.0, float((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1)))
+    bg = _background(arr, box)
+    scored: list[tuple[int, int, int]] = []
+    for v in (int(x) for x in np.unique(arr)):
+        if v == bg:
+            continue
+        for c in components(arr, (v,)):  # one colour at a time — never merge objects
+            if not in_field(c.mean(0), box) or len(c) > max_field_frac * field_area:
+                continue
+            scored.append(
+                (len(c), int(round(c[:, 0].mean())), int(round(c[:, 1].mean())))
+            )
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [(r, c) for _, r, c in scored[:k]]
+
+
+def proposals(arr: np.ndarray, available: list[int]) -> list[Primitive]:
+    """Ordered action primitives to try at the current frame. ACTION6 fans out
+    into salience-ranked click targets; every other id is a simple ``act``."""
+    prims: list[Primitive] = []
+    for a in available:
+        if a == COMPLEX_ACTION_ID:
+            prims.extend(("click", r, c) for r, c in click_targets(arr))
+        else:
+            prims.append(("act", a))
+    return prims
+
+
+def to_arc(prim: Primitive) -> ArcAction:
+    if prim[0] == "click":
+        return ArcAction(id=COMPLEX_ACTION_ID, x=prim[2], y=prim[1])  # x=col, y=row
+    return ArcAction(id=prim[1])
+
+
+class StateGraph:
+    """Directed graph of frame signatures. Nodes carry their untested primitives;
+    edges record observed ``(signature, primitive) -> signature`` transitions."""
+
+    def __init__(self) -> None:
+        self._untested: dict[Any, list[Primitive]] = {}
+        self._adj: dict[Any, list[tuple[Primitive, Any]]] = {}
+
+    def register(self, sig: Any, prims: list[Primitive]) -> None:
+        """Record a node's untested primitives on first sighting only — a
+        re-sighting must never resurrect primitives already taken."""
+        if sig not in self._untested:
+            self._untested[sig] = list(prims)  # _adj is filled lazily by connect()
+
+    def take(self, sig: Any, prim: Primitive) -> None:
+        rest = self._untested.get(sig)
+        if rest and prim in rest:
+            rest.remove(prim)
+
+    def connect(self, src: Any, prim: Primitive, dst: Any) -> None:
+        edges = self._adj.setdefault(src, [])
+        if (prim, dst) not in edges:
+            edges.append((prim, dst))
+
+    def untested_at(self, sig: Any) -> list[Primitive]:
+        return self._untested.get(sig, [])
+
+    def path_to_frontier(self, start: Any) -> list[Primitive] | None:
+        """Primitive sequence from ``start`` to the nearest node with untested
+        primitives. ``[]`` if ``start`` itself is a frontier; ``None`` if no
+        frontier is reachable over known edges."""
+        if self.untested_at(start):
+            return []
+        prev: dict[Any, tuple[Any, Primitive]] = {}
+        seen, q = {start}, deque([start])
+        while q:
+            node = q.popleft()
+            for prim, dst in self._adj.get(node, []):
+                if dst in seen:
+                    continue
+                seen.add(dst)
+                prev[dst] = (node, prim)
+                if self.untested_at(dst):
+                    return self._trace(prev, start, dst)
+                q.append(dst)
+        return None
+
+    @staticmethod
+    def _trace(prev, start, node) -> list[Primitive]:
+        path: list[Primitive] = []
+        while node != start:
+            node, prim = prev[node]
+            path.append(prim)
+        return path[::-1]
+
+
+class ExplorerArcAgi3Agent(Agent):
+    """Frontier-directed explorer. Per level: take an untested primitive at the
+    current state, else follow known edges to the nearest state that has one."""
+
+    def __init__(self, seed: int = 0, **_: Any) -> None:
+        self._graph = StateGraph()
+        self._plan: deque[Primitive] = deque()
+        self._prev_sig: Any | None = None
+        self._prev_prim: Primitive | None = None
+        self._levels = 0
+        self.last_reply: str | None = None
+
+    def _on_new_level(self) -> None:
+        self._graph = StateGraph()
+        self._plan.clear()
+        self._prev_sig = None
+        self._prev_prim = None
+
+    def act(self, observation: Any) -> ArcAction:
+        obs = observation or {}
+        frame = obs.get("frame") or []
+        available = obs.get("available_actions") or [1]
+        if not frame:
+            return to_arc(("act", available[0]))
+        arr = np.asarray(frame[-1])
+
+        levels = obs.get("levels_completed", self._levels)
+        if levels != self._levels:
+            self._levels = levels
+            self._on_new_level()
+
+        sig = frame_signature(arr)
+        prims = proposals(arr, available)
+        self._graph.register(sig, prims)
+        if self._prev_sig is not None and self._prev_prim is not None:
+            self._graph.connect(self._prev_sig, self._prev_prim, sig)
+
+        prim = self._choose(sig, prims)
+        self._graph.take(sig, prim)
+        self._prev_sig, self._prev_prim = sig, prim
+        self.last_reply = f"[explorer] {prim}"
+        return to_arc(prim)
+
+    def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
+        # Drop a stale route the current frame can no longer execute.
+        if self._plan and self._plan[0] not in set(prims):
+            self._plan.clear()
+        if self._plan:
+            return self._plan.popleft()
+        if untested := self._graph.untested_at(sig):
+            return untested[0]
+        path = self._graph.path_to_frontier(sig)
+        if path:
+            self._plan = deque(path)
+            return self._plan.popleft()
+        return prims[0] if prims else ("act", 1)

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 
 import requests
 
@@ -21,6 +20,11 @@ from tgaer.envs.arc_agi3.arc_agi3_env import ArcAgi3Environment
 from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
 
 OUT = "/workspace/tgaer/experiments/roster_results.jsonl"
+
+# tgaer's env default is 80, but the real ARC-AGI-3 budget is far larger (preview
+# winners used ~4k interactions). Systematic exploration is budget-hungry, so the
+# explorer needs a higher cap to be measured fairly — override via MAX_ACTIONS.
+MAX_ACTIONS = int(os.environ.get("MAX_ACTIONS", "80"))
 
 
 def main() -> None:
@@ -41,9 +45,11 @@ def main() -> None:
         try:
             for i, gid in enumerate(games, 1):
                 try:
-                    env = ArcAgi3Environment(client, gid, max_actions=80)
+                    env = ArcAgi3Environment(client, gid, max_actions=MAX_ACTIONS)
                     result = evaluate_arc_agi3_agent(
-                        PlannerArcAgi3Agent(), env, {"guards": [], "max_steps": 80}
+                        PlannerArcAgi3Agent(),
+                        env,
+                        {"guards": [], "max_steps": MAX_ACTIONS},
                     )
                     row = {"game": gid, "score": result.score, **result.details}
                     total_levels += int(result.details.get("levels_completed", 0) or 0)
