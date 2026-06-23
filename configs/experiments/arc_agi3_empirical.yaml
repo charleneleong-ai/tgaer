@@ -1,0 +1,20 @@
+experiment_name: "arc_agi3_empirical"
+seed: 0
+
+env:
+  kind: "arc_agi3"
+  game_id: "ls20-9607627b"
+  max_actions: 80
+
+agent:
+  kind: "empirical"  # key->door controller + stream-detected semantics, VL cold-start
+  model: "openai/QuantTrio/Qwen3-VL-30B-A3B-Instruct-AWQ"
+  api_base: "http://localhost:8000/v1"
+
+guards:
+  futile_action: false
+  repeated_plan: false
+
+evaluation:
+  max_steps: 80
+  output_dir: "results/arc_agi3/arc_agi3_empirical/"
