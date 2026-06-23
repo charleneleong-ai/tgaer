@@ -1,10 +1,11 @@
-"""Score the `planner` agent across the full ARC-AGI-3 roster (GET /api/games)
-under one scorecard — the competition-style aggregate. Writes one JSONL row per
-game as it finishes so progress is readable mid-run.
+"""Score an agent (AGENT=explorer|planner) across the full ARC-AGI-3 roster
+(GET /api/games) under one scorecard — the competition-style aggregate. Writes
+one JSONL row per game to roster_results_<agent>.jsonl as it finishes so progress
+is readable mid-run.
 
-The planner is LS20-tuned (key/door cell-value heuristic), so most non-LS20
-games are expected to score 0; the point is to measure where the key->door
-grammar transfers and the roster-wide total vs the 0-everywhere LLM baselines.
+The `planner` baseline is LS20-tuned (key/door cell-value heuristic) and scores
+on 1/25 games; the `explorer` is game-agnostic frontier exploration. Run both
+head-to-head to measure where the explorer lifts levels the planner can't touch.
 """
 
 from __future__ import annotations
@@ -14,12 +15,18 @@ import os
 
 import requests
 
+from tgaer.agents.arc_agi3_explorer import ExplorerArcAgi3Agent
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
 from tgaer.envs.arc_agi3.arc_agi3_client import BASE_URL, ArcAgi3Client
 from tgaer.envs.arc_agi3.arc_agi3_env import ArcAgi3Environment
 from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
 
-OUT = "/workspace/tgaer/experiments/roster_results.jsonl"
+# AGENT selects the controller under test: the game-agnostic explorer (default)
+# or the LS20-tuned planner baseline for head-to-head comparison.
+AGENTS = {"explorer": ExplorerArcAgi3Agent, "planner": PlannerArcAgi3Agent}
+AGENT_NAME = os.environ.get("AGENT", "explorer")
+AGENT = AGENTS[AGENT_NAME]
+OUT = f"/workspace/tgaer/experiments/roster_results_{AGENT_NAME}.jsonl"
 
 # tgaer's env default is 80, but the real ARC-AGI-3 budget is far larger (preview
 # winners used ~4k interactions). Systematic exploration is budget-hungry, so the
@@ -47,7 +54,7 @@ def main() -> None:
                 try:
                     env = ArcAgi3Environment(client, gid, max_actions=MAX_ACTIONS)
                     result = evaluate_arc_agi3_agent(
-                        PlannerArcAgi3Agent(),
+                        AGENT(),
                         env,
                         {"guards": [], "max_steps": MAX_ACTIONS},
                     )
