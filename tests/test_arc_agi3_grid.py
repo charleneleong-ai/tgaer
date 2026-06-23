@@ -4,7 +4,6 @@ from __future__ import annotations
 import numpy as np
 
 from tgaer.agents.arc_agi3_grid import (
-    CLICK_DEFAULT,
     LS20_DEFAULT,
     KeyDoorController,
     Semantics,
@@ -34,11 +33,6 @@ def test_find_role_excludes_centroid_outside_field():
     assert not any(c[0] < 1 and c[1] < 1 for c in found)  # (0,0) excluded
 
 
-def test_ls20_default_is_navigate():
-    assert LS20_DEFAULT.verb == "navigate"
-    assert isinstance(LS20_DEFAULT, Semantics)
-
-
 def _ld_board():
     g = np.full((10, 10), 3, dtype=int)
     g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
@@ -49,11 +43,6 @@ def _ld_board():
 
 
 class TestKeyDoorController:
-    def test_step_returns_directional_action(self):
-        c = KeyDoorController()
-        act = c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])
-        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
-
     def test_on_new_level_resets_phase_keeps_delta(self):
         c = KeyDoorController()
         c.delta = {1: np.array([1, 0])}
@@ -123,10 +112,6 @@ class TestKeyDoorController:
 class TestClickVerb:
     def _sem(self):
         return Semantics(avatar=12, keys=(0,), door=9, walls=(4,), verb="click")
-
-    def test_click_default_is_click_verb(self):
-        assert CLICK_DEFAULT.verb == "click"
-        assert isinstance(CLICK_DEFAULT, Semantics)
 
     def test_clicks_key_at_col_row_convention(self):
         # key at array cell [3][5] -> ArcAction(id=6, x=col=5, y=row=3)

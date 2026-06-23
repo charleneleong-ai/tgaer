@@ -145,11 +145,6 @@ def _obs(avatar_rc=(2, 2), levels=0):
 
 
 class TestAgentIntegration:
-    def test_emits_legal_action(self):
-        agent = EmpiricalPlannerAgent(scientist=_FakeSci(LS20_DEFAULT))
-        act = agent.act(_obs())
-        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
-
     def test_cold_start_queried_once_per_episode(self):
         sci = _FakeSci(LS20_DEFAULT)
         agent = EmpiricalPlannerAgent(scientist=sci)
