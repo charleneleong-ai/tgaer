@@ -28,10 +28,11 @@ class Semantics:
     keys: tuple[int, ...]
     door: int
     walls: tuple[int, ...]
-    verb: str  # "navigate" | "press"
+    verb: str  # "navigate" | "press" | "click"
 
 
 LS20_DEFAULT = Semantics(avatar=12, keys=(0, 1), door=9, walls=(4, 11), verb="navigate")
+CLICK_DEFAULT = Semantics(avatar=12, keys=(0, 1), door=9, walls=(4, 11), verb="click")
 
 
 def to_action(action_id: int) -> ArcAction:
@@ -171,6 +172,21 @@ class KeyDoorController:
         ds = find_role(arr, (sem.door,), field_box(arr))
         return ds[0] if ds else None
 
+    def _click_target(
+        self, arr: np.ndarray, sem: Semantics, avail: list[int]
+    ) -> ArcAction | None:
+        """Direct-click at the two-phase target: a key while any remain, else the
+        door. Emits ACTION6 at the target centroid (x=col, y=row). None when
+        ACTION6 is unavailable or no target is on the board."""
+        if COMPLEX_ACTION_ID not in avail:
+            return None
+        ks = self._keys(arr, sem)
+        target = ks[0] if ks else self._door(arr, sem)
+        if target is None:
+            return None
+        r, c = int(round(target[0])), int(round(target[1]))
+        return ArcAction(id=COMPLEX_ACTION_ID, x=c, y=r)
+
     def _plan(
         self,
         arr: np.ndarray,
@@ -210,23 +226,29 @@ class KeyDoorController:
             min(abs(tl[0] + dr - g[0]) + abs(tl[1] + dc - g[1]) for dr, dc in fp) <= 1
         )
 
-    def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> int:
-        """Choose and return the next action id for ``navigate`` or ``press`` verbs."""
+    def step(self, arr: np.ndarray, sem: Semantics, avail: list[int]) -> ArcAction:
+        """Choose and return the next action for navigate / press / click verbs."""
         self._progressed = False
         move_avail = [a for a in avail if a in _MOVES]
+
+        if sem.verb == "click":
+            if (clk := self._click_target(arr, sem, avail)) is not None:
+                self._progressed = True
+                return clk
+            return ArcAction(id=self._fallback(avail, move_avail))
 
         # Bootstrap: probe each directional action once to learn its move vector.
         unprobed = [a for a in move_avail if a not in self.probed]
         if unprobed and len(self.delta) < len(move_avail):
             action = unprobed[0]
             self._remember(arr, action, sem)
-            return action
+            return ArcAction(id=action)
 
         av = cells(arr, sem.avatar)
         if not len(av) or not self.delta:
             action = self._fallback(avail, move_avail)
             self._remember(arr, action, sem)
-            return action
+            return ArcAction(id=action)
 
         ks = self._keys(arr, sem)
         d = self._door(arr, sem)
@@ -241,7 +263,7 @@ class KeyDoorController:
             target = self.last_key_goal if ks and self.last_key_goal is not None else d
             if target is not None and self._adjacent(av, target):
                 self._progressed = True
-                return self._interaction(avail)
+                return ArcAction(id=self._interaction(avail))
 
         if self.phase == "key" and self.last_key_goal is not None:
             path = self._plan(arr, fp, tl, self.last_key_goal, sem)
@@ -249,7 +271,7 @@ class KeyDoorController:
                 self._progressed = True
                 action = path[0]
                 self._remember(arr, action, sem)
-                return action
+                return ArcAction(id=action)
             self.phase = "door"  # reached the key — commit to the door this step
 
         if d is not None:
@@ -258,11 +280,11 @@ class KeyDoorController:
                 self._progressed = True
                 action = path[0]
                 self._remember(arr, action, sem)
-                return action
+                return ArcAction(id=action)
 
         action = self._fallback(avail, move_avail)
         self._remember(arr, action, sem)
-        return action
+        return ArcAction(id=action)
 
 
 class Planner:

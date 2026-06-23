@@ -158,10 +158,10 @@ class ScientistPlannerAgent(Agent):
             self._stall = 0
             self._sem = self._sci.infer(frame) or LS20_DEFAULT
         self._ctl.learn(arr, self._sem)
-        aid = self._ctl.step(arr, self._sem, obs.get("available_actions") or [1])
+        action = self._ctl.step(arr, self._sem, obs.get("available_actions") or [1])
         self._stall = 0 if self._ctl.made_progress() else self._stall + 1
         if self._stall >= self._stall_limit:  # re-query once on a stall
             self._sem = self._sci.infer(frame) or self._sem
             self._stall = 0
-        self.last_reply = f"[scientist] act={aid} verb={self._sem.verb}"
-        return to_action(aid)
+        self.last_reply = f"[scientist] act={action.id} verb={self._sem.verb}"
+        return action

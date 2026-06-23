@@ -1,0 +1,15 @@
+score: 1.0
+state: NOT_FINISHED
+levels_completed: 1
+win_levels: 7
+available_actions:
+- 1
+- 2
+- 3
+- 4
+guid: 8e922b24-683e-4289-9249-a80799e9fa9b
+steps: 80
+task_id: ls20-9607627b
+done: true
+guard_hints_fired: 0
+

@@ -4,12 +4,14 @@ from __future__ import annotations
 import numpy as np
 
 from tgaer.agents.arc_agi3_grid import (
+    CLICK_DEFAULT,
     LS20_DEFAULT,
     KeyDoorController,
     Semantics,
     field_box,
     find_role,
 )
+from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 def test_find_role_filters_to_field_box():
@@ -49,8 +51,8 @@ def _ld_board():
 class TestKeyDoorController:
     def test_step_returns_directional_action(self):
         c = KeyDoorController()
-        aid = c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])
-        assert aid in (1, 2, 3, 4)
+        act = c.step(_ld_board(), LS20_DEFAULT, [1, 2, 3, 4])
+        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
 
     def test_on_new_level_resets_phase_keeps_delta(self):
         c = KeyDoorController()
@@ -81,8 +83,8 @@ class TestKeyDoorController:
             3: np.array([0, 1]),
             4: np.array([0, -1]),
         }
-        aid = c.step(g, sem, [1, 2, 3, 4, 5])
-        assert aid == 5  # keyboard interaction preferred
+        act = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert act.id == 5  # keyboard interaction preferred
 
     def test_press_verb_emits_interaction_adjacent_to_key(self):
         # keys present; avatar adjacent to nearest key -> targets key, emits interaction
@@ -98,8 +100,8 @@ class TestKeyDoorController:
             3: np.array([0, 1]),
             4: np.array([0, -1]),
         }
-        aid = c.step(g, sem, [1, 2, 3, 4, 5])
-        assert aid == 5  # interaction emitted at the key, not a movement
+        act = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert act.id == 5  # interaction emitted at the key, not a movement
 
     def test_press_verb_navigates_when_target_distant(self):
         # no keys; door is far away -> controller navigates (move), does NOT press
@@ -114,5 +116,39 @@ class TestKeyDoorController:
             3: np.array([0, 1]),
             4: np.array([0, -1]),
         }
-        aid = c.step(g, sem, [1, 2, 3, 4, 5])
-        assert aid in (1, 2, 3, 4)  # moves toward target; does NOT press yet
+        act = c.step(g, sem, [1, 2, 3, 4, 5])
+        assert act.id in (1, 2, 3, 4)  # moves toward target; does NOT press yet
+
+
+class TestClickVerb:
+    def _sem(self):
+        return Semantics(avatar=12, keys=(0,), door=9, walls=(4,), verb="click")
+
+    def test_click_default_is_click_verb(self):
+        assert CLICK_DEFAULT.verb == "click"
+        assert isinstance(CLICK_DEFAULT, Semantics)
+
+    def test_clicks_key_at_col_row_convention(self):
+        # key at array cell [3][5] -> ArcAction(id=6, x=col=5, y=row=3)
+        g = np.full((8, 8), 3, dtype=int)
+        g[3, 5] = 0  # key
+        g[6, 6] = 9  # door
+        act = KeyDoorController().step(g, self._sem(), [6])
+        assert act.id == 6 and act.x == 5 and act.y == 3
+
+    def test_clicks_door_once_keys_gone(self):
+        g = np.full((8, 8), 3, dtype=int)
+        g[6, 2] = 9  # door only, no keys
+        act = KeyDoorController().step(g, self._sem(), [6])
+        assert act.id == 6 and act.x == 2 and act.y == 6
+
+    def test_falls_back_when_action6_absent(self):
+        g = np.full((8, 8), 3, dtype=int)
+        g[3, 5] = 0
+        act = KeyDoorController().step(g, self._sem(), [1, 2, 3, 4])
+        assert act.id in (1, 2, 3, 4)  # no ACTION6 -> keyboard fallback, no crash
+
+    def test_falls_back_when_no_target(self):
+        g = np.full((8, 8), 3, dtype=int)  # no key, no door
+        act = KeyDoorController().step(g, self._sem(), [6])
+        assert isinstance(act, ArcAction)  # never crashes; centre/keyboard fallback
