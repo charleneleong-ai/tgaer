@@ -45,6 +45,19 @@ class EmpiricalSemantics:
     def door(self) -> int | None:
         return self._door
 
+    def move_lattice(self) -> dict[int, np.ndarray]:
+        """The avatar's learned move map — per-action majority Δ, in the form the
+        ``Planner`` consumes. Empty until the avatar is pinned; an action whose
+        majority outcome is a refused (0,0) move drops out."""
+        if self._avatar is None:
+            return {}
+        lattice: dict[int, np.ndarray] = {}
+        for action, counter in self._deltas.get(self._avatar, {}).items():
+            dr, dc = counter.most_common(1)[0][0]
+            if dr or dc:
+                lattice[action] = np.array([dr, dc])
+        return lattice
+
     def observe(
         self, prev: np.ndarray | None, action: int | None, cur: np.ndarray, levels: int
     ) -> None:

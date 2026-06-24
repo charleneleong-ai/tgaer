@@ -1,6 +1,8 @@
 # tests/test_arc_agi3_explorer.py
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 
 from tgaer.agents.arc_agi3_explorer import (
@@ -167,6 +169,75 @@ class TestTerminalAvoidance:
         assert act.id == 2  # routes along the surviving start--act2-->T edge
 
 
+class TestNavInduction:
+    def test_act_feeds_chosen_action_effect_to_detector(self):
+        # The explorer must learn its own action→motion stream: after a step where
+        # the avatar moved down (1,0), the detector records chosen-action → that Δ.
+        agent = ExplorerArcAgi3Agent()
+        a = agent.act(_obs(_board(avatar=(2, 2)), actions=(1, 2, 3, 4)))
+        agent.act(_obs(_board(avatar=(3, 2)), actions=(1, 2, 3, 4)))  # avatar +1 row
+        assert agent._det._deltas.get(12, {}).get(a.id, Counter())[(1, 0)] == 1
+
+    def test_act_induces_door_on_directional_levelup(self):
+        # Avatar already pinned; a directional level-up with a value vanishing under
+        # the avatar pins that value as the navigate goal (door).
+        agent = ExplorerArcAgi3Agent()
+        agent._det._avatar = 12
+        agent.act(_obs(_board(avatar=(3, 3), extra={9: [(3, 4)]}), actions=(1, 2)))
+        agent.act(_obs(_board(avatar=(3, 4)), levels=1, actions=(1, 2)))  # door gone
+        assert agent._det.door == 9
+
+    def test_no_motion_learned_across_death_respawn(self):
+        # A respawn frame is not a real successor — motion across the death jump
+        # must not pollute the detector's move map.
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(_board(avatar=(2, 2)), actions=(1, 2)))
+        agent.act(_obs(_board(avatar=(8, 8)), actions=(1, 2), terminal=True))
+        assert agent._det._deltas == {}
+
+
+def _seed_nav(agent, door=9):
+    """Pre-induce avatar(12), a full 4-direction move lattice, and a door value."""
+    agent._det._avatar = 12
+    agent._det._door = door
+    agent._det._deltas = {
+        12: {
+            1: Counter({(1, 0): 2}),  # down
+            2: Counter({(-1, 0): 2}),  # up
+            3: Counter({(0, 1): 2}),  # right
+            4: Counter({(0, -1): 2}),  # left
+        }
+    }
+
+
+class TestNavExploit:
+    def test_navigates_toward_induced_door(self):
+        # Door(9) sits 4 cells to the right; the Planner's first move is right (3),
+        # not blind exploration.
+        agent = ExplorerArcAgi3Agent()
+        _seed_nav(agent)
+        board = _board(avatar=(2, 2), extra={9: [(2, 6)]})
+        assert agent.act(_obs(board, actions=(1, 2, 3, 4))).id == 3
+
+    def test_routes_around_blocked_cell(self):
+        # A wall on the cell directly right forces a detour — never step 3 into it.
+        agent = ExplorerArcAgi3Agent()
+        _seed_nav(agent)
+        agent._blocked.add((2, 3))
+        board = _board(avatar=(2, 2), extra={9: [(2, 6)]})
+        assert agent.act(_obs(board, actions=(1, 2, 3, 4))).id != 3
+
+    def test_refused_move_records_blocked_cell(self):
+        # The nav move steps right but the avatar does not budge → that destination
+        # cell is an (empirically learned) wall.
+        agent = ExplorerArcAgi3Agent()
+        _seed_nav(agent)
+        board = _board(avatar=(2, 2), extra={9: [(2, 6)]})
+        agent.act(_obs(board, actions=(1, 2, 3, 4)))  # emits right (3)
+        agent.act(_obs(board, actions=(1, 2, 3, 4)))  # avatar stayed → refused
+        assert (2, 3) in agent._blocked
+
+
 class TestWinInduction:
     def test_advancing_click_value_is_learned_and_re_clicked(self):
         # Click value 5; that advances the level. On the new level a bigger value-7
@@ -185,3 +256,72 @@ class TestWinInduction:
         agent.act(_obs(board, levels=0, actions=(1, 2)))  # took an ("act", _)
         agent.act(_obs(board, levels=1, actions=(1, 2)))  # level++ after a non-click
         assert agent._goal_values == set()
+
+
+class _Ls20Sim:
+    """Minimal ls20-like navigate game: the avatar (12) walks to a door (9);
+    reaching it clears the door for one frame (value vanishes → induction fires),
+    then loads the next level. Exposes only pixels — no semantics."""
+
+    MOVES = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
+
+    def __init__(self, doors: list[tuple[int, int]], size: int = 8) -> None:
+        self.doors = doors
+        self.size = size
+        self.levels = 0
+        self.avatar = (1, 1)
+        self.door: tuple[int, int] | None = doors[0]
+
+    def obs(self) -> dict:
+        g = np.full((self.size, self.size), 3, dtype=int)
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+        if self.door is not None:
+            g[self.door] = 9
+        g[self.avatar] = 12
+        return {
+            "frame": [g.tolist()],
+            "available_actions": [1, 2, 3, 4],
+            "levels_completed": self.levels,
+            "state": "NOT_FINISHED",
+        }
+
+    def step(self, action: int) -> None:
+        if self.door is None:  # the cleared frame was seen → spawn the next level
+            self.avatar = (1, 1)
+            self.door = (
+                self.doors[self.levels] if self.levels < len(self.doors) else None
+            )
+            return
+        d = self.MOVES.get(action)
+        if d is None:
+            return
+        nr, nc = self.avatar[0] + d[0], self.avatar[1] + d[1]
+        if not (0 < nr < self.size - 1 and 0 < nc < self.size - 1):
+            return  # wall — move refused
+        self.avatar = (nr, nc)
+        if (nr, nc) == self.door:
+            self.door = None  # door consumed; value 9 momentarily vanishes
+            self.levels += 1
+
+
+class TestLs20WithoutHardcodedSemantics:
+    """The Phase-3 generalization proof: a fresh explorer carrying NO LS20 colour
+    prior solves a multi-level navigate game purely from induced avatar + door."""
+
+    def test_explore_then_exploit_solves_every_level(self):
+        sim = _Ls20Sim([(6, 6), (1, 6), (6, 1)])
+        agent = ExplorerArcAgi3Agent()
+        cleared: dict[int, int] = {}
+        for s in range(400):
+            prev = sim.levels
+            sim.step(agent.act(sim.obs()).id)
+            if sim.levels > prev:
+                cleared[sim.levels] = s
+            if sim.levels == len(sim.doors):
+                break
+
+        assert sim.levels == 3  # all levels solved, no hardcoded semantics
+        assert agent._det.avatar == 12 and agent._det.door == 9  # induced from pixels
+        # Level 1 is explored blind; later levels exploit the induced goal, so each
+        # costs far fewer steps than the first.
+        assert cleared[2] - cleared[1] < cleared[1]

@@ -65,6 +65,31 @@ class TestAvatarDetection:
         assert det.avatar is None
 
 
+class TestMoveLattice:
+    """The avatar's learned move map — per-action majority Δ for the Planner."""
+
+    def test_maps_each_action_to_its_majority_delta(self):
+        det = EmpiricalSemantics()
+        det.observe(_grid((2, 2)), 1, _grid((3, 2)), 0)  # a1 -> down (1,0)
+        det.observe(_grid((3, 2)), 2, _grid((3, 3)), 0)  # a2 -> right (0,1)
+        det.observe(_grid((3, 3)), 1, _grid((4, 3)), 0)  # a1 -> down again (pins 12)
+        lattice = det.move_lattice()
+        assert {a: tuple(d) for a, d in lattice.items()} == {1: (1, 0), 2: (0, 1)}
+
+    def test_empty_until_avatar_pinned(self):
+        det = EmpiricalSemantics()
+        det.observe(_grid((2, 2)), 1, _grid((3, 2)), 0)  # one step, not yet pinned
+        assert det.move_lattice() == {}
+
+    def test_excludes_refused_zero_delta_action(self):
+        det = EmpiricalSemantics()
+        det.observe(_grid((2, 2)), 1, _grid((3, 2)), 0)
+        det.observe(_grid((3, 2)), 2, _grid((3, 3)), 0)
+        det.observe(_grid((3, 3)), 1, _grid((4, 3)), 0)  # 12 pinned; a3 stays put
+        det.observe(_grid((4, 3)), 3, _grid((4, 3)), 0)  # a3 refused -> Δ (0,0)
+        assert 3 not in det.move_lattice()
+
+
 class TestKeyDetection:
     def test_value_vanishing_under_avatar_pins_key(self):
         det = EmpiricalSemantics()

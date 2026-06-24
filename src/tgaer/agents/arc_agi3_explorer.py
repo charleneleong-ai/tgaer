@@ -7,14 +7,17 @@ action from the current state, or routes along known edges to the nearest state
 that still has one. This is the training-free, no-LLM spine that topped the
 ARC-AGI-3 2025 preview (algorithmic exploration ≫ frontier LLM ≫ random).
 
-Win-induction has begun (Phase 3a): when a click advances a level, the clicked
-cell's value is learned as a goal and re-clicked first on later levels, so
-multi-level click games climb instead of re-stumbling. The navigate-goal case
-(induce a target cell, exploit via the BFS ``Planner`` to re-solve ``ls20``
-without hardcoded semantics) is Phase 3b. Action primitives generalise across
-verbs: simple actions are ``("act", id)``; ACTION6 becomes salience-ranked
-``("click", row, col)`` targets at component centroids, so the click-only games
-the navigate planner cannot touch still get explored.
+Win-induction is wired for both verbs. Phase 3a (click): when a click advances a
+level, the clicked cell's value is learned and re-clicked first on later levels.
+Phase 3b (navigate): an ``EmpiricalSemantics`` detector induces the avatar (by
+controllability), its move lattice, and the goal value that vanishes under the
+avatar on a level-up; once known, ``_nav_move`` BFS-plans to the nearest goal
+cell via the ``Planner``, with refused moves recorded as walls (no hardcoded
+colours). This re-solves multi-level ``ls20`` without the LS20 semantics prior.
+Action primitives generalise across verbs: simple actions are ``("act", id)``;
+ACTION6 becomes salience-ranked ``("click", row, col)`` targets at component
+centroids, so the click-only games the navigate planner cannot touch still get
+explored.
 """
 
 from __future__ import annotations
@@ -24,7 +27,8 @@ from typing import Any
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import components, field_box, in_field
+from tgaer.agents.arc_agi3_grid import Planner, cells, components, field_box, in_field
+from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
 
@@ -86,8 +90,7 @@ def goal_targets(arr: np.ndarray, goal_values) -> list[tuple[int, int]]:
     previously advanced a level, so it is worth trying before blind salience."""
     out: list[tuple[int, int]] = []
     for v in goal_values:
-        for comp in components(arr, (v,)):
-            out.append((int(round(comp[:, 0].mean())), int(round(comp[:, 1].mean()))))
+        out.extend(_centroid(comp) for comp in components(arr, (v,)))
     return out
 
 
@@ -184,6 +187,12 @@ class ExplorerArcAgi3Agent(Agent):
         # Cell values whose click advanced a level — persistent goal prior.
         self._goal_values: set[int] = set()
         self._prev_arr: np.ndarray | None = None
+        # Induces the avatar (controllability), its move lattice, and the navigate
+        # goal (value that vanishes under the avatar on a level-up). Persists across
+        # level resets — induced roles are the cross-level transfer.
+        self._det = EmpiricalSemantics()
+        # Cells where a lattice move was refused — emergent walls, no colour prior.
+        self._blocked: set[tuple[int, int]] = set()
         self.last_reply: str | None = None
 
     def _on_new_level(self) -> None:
@@ -199,6 +208,20 @@ class ExplorerArcAgi3Agent(Agent):
         if not frame:
             return to_arc(("act", available[0]))
         arr = np.asarray(frame[-1])
+        levels = obs.get("levels_completed", self._levels)
+
+        # Learn avatar / move-lattice / navigate-goal from the prior in-level
+        # transition; a death respawn is not a real successor, so skip it.
+        learning = (
+            not obs.get("terminal")
+            and self._prev_arr is not None
+            and self._prev_prim is not None
+        )
+        if learning:
+            self._det.observe(self._prev_arr, to_arc(self._prev_prim).id, arr, levels)
+        lattice = self._det.move_lattice()  # once per step, after the observe update
+        if learning:
+            self._learn_blocked(arr, lattice)
 
         # A respawn after death: the action that led here was fatal. Record the
         # edge so it is never repeated, and drop the cross-death link — the frame
@@ -207,8 +230,6 @@ class ExplorerArcAgi3Agent(Agent):
             self._fatal.add((self._prev_sig, self._prev_prim))
             self._graph.take(self._prev_sig, self._prev_prim)
             self._prev_sig = self._prev_prim = None
-
-        levels = obs.get("levels_completed", self._levels)
         if levels > self._levels:  # genuine progress wipes the per-level map; a
             self._induce_goal()  # but first learn what the winning click targeted
             self._on_new_level()  # death respawn (levels drop) must keep the map
@@ -220,7 +241,7 @@ class ExplorerArcAgi3Agent(Agent):
         if self._prev_sig is not None and self._prev_prim is not None:
             self._graph.connect(self._prev_sig, self._prev_prim, sig)
 
-        prim = self._choose(sig, prims)
+        prim = self._nav_move(arr, available, lattice) or self._choose(sig, prims)
         self._graph.take(sig, prim)
         self._prev_sig, self._prev_prim = sig, prim
         self._prev_arr = arr
@@ -237,6 +258,43 @@ class ExplorerArcAgi3Agent(Agent):
         ):
             _, r, c = self._prev_prim
             self._goal_values.add(int(self._prev_arr[r, c]))
+
+    def _learn_blocked(self, arr: np.ndarray, lattice: dict[int, np.ndarray]) -> None:
+        """A directional move the lattice expected to shift the avatar, but which
+        left it put, means the destination cell is a wall — record it so the
+        Planner routes around it without any hardcoded wall colours."""
+        avatar = self._det.avatar
+        if avatar is None or self._prev_arr is None or self._prev_prim[0] != "act":
+            return
+        d = lattice.get(self._prev_prim[1])
+        prev_av, cur_av = cells(self._prev_arr, avatar), cells(arr, avatar)
+        if d is None or not len(prev_av) or not len(cur_av):
+            return
+        if (cur_av.min(0) == prev_av.min(0)).all():  # refused: avatar did not move
+            cell = prev_av.min(0) + d
+            self._blocked.add((int(cell[0]), int(cell[1])))
+
+    def _nav_move(
+        self, arr: np.ndarray, available: list[int], lattice: dict[int, np.ndarray]
+    ) -> Primitive | None:
+        """Exploit: once the avatar, its move lattice, and the navigate goal (door)
+        are induced, BFS-plan to the nearest goal cell and take the first move.
+        ``None`` whenever the goal isn't yet known or no path exists — the caller
+        falls back to frontier exploration."""
+        avatar, door = self._det.avatar, self._det.door
+        if avatar is None or door is None:
+            return None
+        av, goals = cells(arr, avatar), cells(arr, door)
+        if not lattice or not len(av) or not len(goals):
+            return None
+        tl = av.min(0)
+        goal = min(goals, key=lambda g: int(abs(g - tl).sum()))
+        planner = Planner(arr, (av - tl).astype(int), lattice, walls=())
+        planner.blocked = self._blocked
+        path = planner.path(tl, goal)
+        if path and path[0] in available:
+            return ("act", path[0])
+        return None
 
     def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
         # Drop a stale route the current frame can no longer execute.
