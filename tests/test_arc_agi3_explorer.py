@@ -196,18 +196,27 @@ class TestNavInduction:
         assert agent._det._deltas == {}
 
 
+_LATTICE = {
+    1: Counter({(1, 0): 2}),  # down
+    2: Counter({(-1, 0): 2}),  # up
+    3: Counter({(0, 1): 2}),  # right
+    4: Counter({(0, -1): 2}),  # left
+}
+
+
+def _seed_lattice(agent):
+    """Pre-induce avatar(12) + a full 4-direction move lattice, but NO goal yet —
+    the state a directed bootstrap starts from (it can move, but hasn't won)."""
+    agent._det._avatar = 12
+    # Deep-copy the Counters: act() mutates them in place, so a shared seed would
+    # leak counts across tests.
+    agent._det._deltas = {12: {a: Counter(c) for a, c in _LATTICE.items()}}
+
+
 def _seed_nav(agent, door=9):
     """Pre-induce avatar(12), a full 4-direction move lattice, and a door value."""
-    agent._det._avatar = 12
+    _seed_lattice(agent)
     agent._det._door = door
-    agent._det._deltas = {
-        12: {
-            1: Counter({(1, 0): 2}),  # down
-            2: Counter({(-1, 0): 2}),  # up
-            3: Counter({(0, 1): 2}),  # right
-            4: Counter({(0, -1): 2}),  # left
-        }
-    }
 
 
 class TestNavExploit:
@@ -236,6 +245,50 @@ class TestNavExploit:
         agent.act(_obs(board, actions=(1, 2, 3, 4)))  # emits right (3)
         agent.act(_obs(board, actions=(1, 2, 3, 4)))  # avatar stayed → refused
         assert (2, 3) in agent._blocked
+
+
+class TestDirectedBootstrap:
+    """Before any win, steer toward salient objects so the FIRST level-up is
+    sought, not stumbled into — the fix for the cold-start bootstrap gap."""
+
+    def test_seeks_nearest_affordance_before_any_win(self):
+        # No goal induced yet, but avatar+lattice are known: head toward the only
+        # salient object (4 cells right), not blind exploration (which picks down).
+        agent = ExplorerArcAgi3Agent()
+        _seed_lattice(agent)
+        board = _board(avatar=(2, 2), extra={5: [(2, 6)]})
+        assert agent.act(_obs(board, actions=(1, 2, 3, 4))).id == 3
+
+    def test_steps_directly_onto_adjacent_affordance(self):
+        # The Planner stops one cell short; an adjacent object must still be entered
+        # (the pickup), so the move that lands exactly on it is emitted.
+        agent = ExplorerArcAgi3Agent()
+        _seed_lattice(agent)
+        board = _board(avatar=(2, 2), extra={5: [(2, 3)]})
+        assert agent.act(_obs(board, actions=(1, 2, 3, 4))).id == 3
+
+    def test_skips_the_already_induced_door(self):
+        # Once the door is induced it is _nav_move's job; affordance-seeking must
+        # skip it (else the two fight). With the door the only object, affordance
+        # has nothing to seek and _nav_move drives the step instead.
+        agent = ExplorerArcAgi3Agent()
+        _seed_nav(agent)  # door=9 induced
+        board = _board(avatar=(2, 2), extra={9: [(2, 6)]})
+        lattice = agent._det.move_lattice()
+        assert agent._nav_affordance(board, [1, 2, 3, 4], lattice) is None  # skipped
+        assert agent.act(_obs(board, actions=(1, 2, 3, 4))).id == 3  # _nav_move drives
+
+    def test_key_pickup_clears_blocked_walls(self):
+        # A pickup may unlock a previously-refused door, so stale wall memory is
+        # dropped when a new key is learned.
+        agent = ExplorerArcAgi3Agent()
+        _seed_lattice(agent)
+        agent._blocked.add((7, 7))
+        agent.act(
+            _obs(_board(avatar=(2, 2), extra={5: [(2, 3)]}), actions=(1, 2, 3, 4))
+        )
+        agent.act(_obs(_board(avatar=(2, 3)), actions=(1, 2, 3, 4)))  # key 5 collected
+        assert 5 in agent._det.keys and agent._blocked == set()
 
 
 class TestWinInduction:
@@ -322,6 +375,87 @@ class TestLs20WithoutHardcodedSemantics:
 
         assert sim.levels == 3  # all levels solved, no hardcoded semantics
         assert agent._det.avatar == 12 and agent._det.door == 9  # induced from pixels
-        # Level 1 is explored blind; later levels exploit the induced goal, so each
-        # costs far fewer steps than the first.
+        # Level 1 bootstraps from a cold start (pin avatar, then seek the goal);
+        # later levels exploit the induced goal directly, so each costs fewer steps.
         assert cleared[2] - cleared[1] < cleared[1]
+
+
+class _Ls20LockSim:
+    """Minimal LockSmith-like game: the avatar (12) must collect a key (5) before
+    the door (9) will open. Stepping onto a locked door is refused; once the key is
+    held, reaching the door clears the level (both values vanish for one frame, so
+    key- and door-induction fire). Exposes only pixels — no semantics."""
+
+    MOVES = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
+
+    def __init__(self, levels: list[tuple], size: int = 8) -> None:
+        self._spec = levels  # [(key_cell, door_cell), ...]
+        self.size = size
+        self.levels = 0
+        self._load(0)
+
+    def _load(self, i: int) -> None:
+        self.avatar = (1, 1)
+        self.key, self.door = self._spec[i] if i < len(self._spec) else (None, None)
+
+    def obs(self) -> dict:
+        g = np.full((self.size, self.size), 3, dtype=int)
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+        if self.key is not None:
+            g[self.key] = 5
+        if self.door is not None:
+            g[self.door] = 9
+        g[self.avatar] = 12
+        return {
+            "frame": [g.tolist()],
+            "available_actions": [1, 2, 3, 4],
+            "levels_completed": self.levels,
+            "state": "NOT_FINISHED",
+        }
+
+    def step(self, action: int) -> None:
+        if self.door is None and self.key is None:  # cleared frame seen → next level
+            self._load(self.levels)
+            return
+        d = self.MOVES.get(action)
+        if d is None:
+            return
+        nr, nc = self.avatar[0] + d[0], self.avatar[1] + d[1]
+        if not (0 < nr < self.size - 1 and 0 < nc < self.size - 1):
+            return  # border wall — refused
+        if (nr, nc) == self.door and self.key is not None:
+            return  # door locked until the key is collected — refused
+        self.avatar = (nr, nc)
+        if (nr, nc) == self.key:
+            self.key = None  # key collected; value 5 momentarily vanishes
+        elif (nr, nc) == self.door:
+            self.door = None  # door consumed; value 9 vanishes
+            self.levels += 1
+
+
+class TestDirectedLockBootstrap:
+    """The cold-start fix: a fresh explorer with NO hardcoded semantics manufactures
+    its first win by seeking the key→door affordance, then exploits on later levels.
+    Sized so blind exploration (cost ∝ area) cannot finish in budget but directed
+    seeking (cost ∝ path length) can — the fix is load-bearing, not incidental."""
+
+    def _solve(self, blind: bool, budget: int):
+        size, m = 20, 18
+        sim = _Ls20LockSim([((1, 2), (1, m)), ((m, 2), (m, m))], size=size)
+        agent = ExplorerArcAgi3Agent()
+        if blind:
+            agent._nav_affordance = lambda *a, **k: None  # disable the bootstrap
+        for s in range(budget):
+            sim.step(agent.act(sim.obs()).id)
+            if sim.levels == 2:
+                return s + 1, agent
+        return None, agent
+
+    def test_directed_bootstrap_solves_a_large_locked_game_blind_cannot(self):
+        budget = 250  # directed solves in ~58 steps; blind needs ~668
+        steps, agent = self._solve(blind=False, budget=budget)
+        blind_steps, _ = self._solve(blind=True, budget=budget)
+        assert steps is not None  # both locked levels solved by directed bootstrap
+        assert blind_steps is None  # blind exploration cannot, in the same budget
+        assert agent._det.door == 9  # door induced from the first directed win
+        assert 5 in agent._det.keys  # key affordance learned while seeking

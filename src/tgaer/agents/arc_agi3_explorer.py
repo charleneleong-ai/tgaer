@@ -14,6 +14,15 @@ controllability), its move lattice, and the goal value that vanishes under the
 avatar on a level-up; once known, ``_nav_move`` BFS-plans to the nearest goal
 cell via the ``Planner``, with refused moves recorded as walls (no hardcoded
 colours). This re-solves multi-level ``ls20`` without the LS20 semantics prior.
+
+Phase 4 (directed bootstrap) closes the cold-start gap: induction can only fire
+*after* a first win, so blind exploration must manufacture one — infeasible on a
+real 64×64 grid. Once the avatar and its lattice are induced (which needs only
+controllability, not a win), ``_nav_affordance`` steers toward the nearest salient
+object — a candidate key/door — so the first win is *sought*, not stumbled into;
+its cost is then path-length (linear), not area (quadratic). ``_probe_moves`` seeds
+the full lattice first so directed routing never oscillates on a partial one.
+
 Action primitives generalise across verbs: simple actions are ``("act", id)``;
 ACTION6 becomes salience-ranked ``("click", row, col)`` targets at component
 centroids, so the click-only games the navigate planner cannot touch still get
@@ -34,6 +43,8 @@ from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
 
 # A primitive is the atomic unit of exploration: ("act", id) or ("click", r, c).
 Primitive = tuple
+
+_MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built from
 
 
 def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
@@ -80,7 +91,10 @@ def click_targets(
         for c in components(arr, (v,)):  # one colour at a time — never merge objects
             if not in_field(c.mean(0), box) or len(c) > max_field_frac * field_area:
                 continue
-            scored.append((len(c), *_centroid(c)))
+            cr, cc = _centroid(c)
+            if arr[cr, cc] != v:  # centroid off the component → a hollow frame/ring
+                continue  # (e.g. the wall border), not a clickable object
+            scored.append((len(c), cr, cc))
     scored.sort(key=lambda t: t[0], reverse=True)
     return [(r, c) for _, r, c in scored[:k]]
 
@@ -193,6 +207,10 @@ class ExplorerArcAgi3Agent(Agent):
         self._det = EmpiricalSemantics()
         # Cells where a lattice move was refused — emergent walls, no colour prior.
         self._blocked: set[tuple[int, int]] = set()
+        # Key count last seen — a fresh pickup may unlock a previously-refused door.
+        self._prev_key_n = 0
+        # Directional actions already probed once to seed the avatar's move lattice.
+        self._probed: set[int] = set()
         self.last_reply: str | None = None
 
     def _on_new_level(self) -> None:
@@ -219,6 +237,9 @@ class ExplorerArcAgi3Agent(Agent):
         )
         if learning:
             self._det.observe(self._prev_arr, to_arc(self._prev_prim).id, arr, levels)
+            if len(self._det.keys) > self._prev_key_n:  # a pickup may unlock a door
+                self._blocked.clear()
+        self._prev_key_n = len(self._det.keys)
         lattice = self._det.move_lattice()  # once per step, after the observe update
         if learning:
             self._learn_blocked(arr, lattice)
@@ -241,7 +262,12 @@ class ExplorerArcAgi3Agent(Agent):
         if self._prev_sig is not None and self._prev_prim is not None:
             self._graph.connect(self._prev_sig, self._prev_prim, sig)
 
-        prim = self._nav_move(arr, available, lattice) or self._choose(sig, prims)
+        prim = (
+            self._probe_moves(available, lattice)  # learn each move's effect first
+            or self._nav_affordance(arr, available, lattice)  # directed bootstrap: seek
+            or self._nav_move(arr, available, lattice)  # exploit the induced goal
+            or self._choose(sig, prims)  # blind frontier exploration
+        )
         self._graph.take(sig, prim)
         self._prev_sig, self._prev_prim = sig, prim
         self._prev_arr = arr
@@ -274,13 +300,47 @@ class ExplorerArcAgi3Agent(Agent):
             cell = prev_av.min(0) + d
             self._blocked.add((int(cell[0]), int(cell[1])))
 
+    def _probe_moves(
+        self, available: list[int], lattice: dict[int, np.ndarray]
+    ) -> Primitive | None:
+        """Bootstrap: take each directional action once so the avatar's move lattice
+        is complete before directed routing relies on it (a partial lattice makes the
+        router oscillate). Skip a move whose effect is already known or once tried."""
+        for a in available:
+            if a in _MOVES and a not in lattice and a not in self._probed:
+                self._probed.add(a)
+                return ("act", a)
+        return None
+
+    def _route(
+        self,
+        arr: np.ndarray,
+        available: list[int],
+        lattice: dict[int, np.ndarray],
+        av: np.ndarray,
+        goal: np.ndarray,
+    ) -> Primitive | None:
+        """First move that carries the avatar toward ``goal``: step straight onto an
+        adjacent goal (the Planner stops a cell short, but a pickup / door-entry must
+        actually land), else BFS-plan around known walls. ``None`` if no usable move."""
+        tl = av.min(0)
+        if int(abs(goal - tl).sum()) == 1:  # adjacent → step straight on
+            for a, d in lattice.items():
+                if a in available and (tl + d == goal).all():
+                    return ("act", a)
+        planner = Planner(arr, (av - tl).astype(int), lattice, walls=())
+        planner.blocked = self._blocked
+        path = planner.path(tl, goal)
+        if path and path[0] in available:
+            return ("act", path[0])
+        return None
+
     def _nav_move(
         self, arr: np.ndarray, available: list[int], lattice: dict[int, np.ndarray]
     ) -> Primitive | None:
         """Exploit: once the avatar, its move lattice, and the navigate goal (door)
-        are induced, BFS-plan to the nearest goal cell and take the first move.
-        ``None`` whenever the goal isn't yet known or no path exists — the caller
-        falls back to frontier exploration."""
+        are induced, route to the nearest goal cell. ``None`` whenever the goal isn't
+        known or no path exists — the caller falls back to frontier exploration."""
         avatar, door = self._det.avatar, self._det.door
         if avatar is None or door is None:
             return None
@@ -289,11 +349,34 @@ class ExplorerArcAgi3Agent(Agent):
             return None
         tl = av.min(0)
         goal = min(goals, key=lambda g: int(abs(g - tl).sum()))
-        planner = Planner(arr, (av - tl).astype(int), lattice, walls=())
-        planner.blocked = self._blocked
-        path = planner.path(tl, goal)
-        if path and path[0] in available:
-            return ("act", path[0])
+        return self._route(arr, available, lattice, av, goal)
+
+    def _nav_affordance(
+        self, arr: np.ndarray, available: list[int], lattice: dict[int, np.ndarray]
+    ) -> Primitive | None:
+        """Directed bootstrap: before the goal is induced, steer toward the nearest
+        salient object — a candidate key/door — so the *first* win is sought rather
+        than stumbled into. Targets exclude the avatar, the already-induced door
+        (the real exploit drives that), and known walls. ``None`` when the avatar or
+        its lattice isn't known yet, or nothing reachable remains."""
+        avatar = self._det.avatar
+        if avatar is None or not lattice:
+            return None
+        av = cells(arr, avatar)
+        if not len(av):
+            return None
+        door = self._det.door
+        skip = {tuple(c) for c in cells(arr, door)} if door is not None else set()
+        skip |= self._blocked
+        tl = av.min(0)
+        targets = [
+            np.array(t)
+            for t in click_targets(arr)
+            if arr[t] != avatar and t not in skip
+        ]
+        for goal in sorted(targets, key=lambda g: int(abs(g - tl).sum())):
+            if move := self._route(arr, available, lattice, av, goal):
+                return move
         return None
 
     def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
