@@ -14,7 +14,7 @@ Game-agnostic [`ExplorerArcAgi3Agent`](../../src/tgaer/agents/arc_agi3_explorer.
 AGENT=explorer MAX_ACTIONS=1000 python experiments/sweep_roster.py
 ```
 
-Scorecard `0da01377-b629-4506-bb24-7b402b029d01` · raw rows: [`roster_results_explorer.jsonl`](../../experiments/roster_results_explorer.jsonl). Baselines: planner scores 1 level (`ls20` only, hardcoded); random ≈ 6 levels (field data).
+Scorecard `0da01377-b629-4506-bb24-7b402b029d01` · raw rows: [`roster_results_explorer_phase3b.jsonl`](../../experiments/roster_results_explorer_phase3b.jsonl). Baselines: planner scores 1 level (`ls20` only, hardcoded); random ≈ 6 levels (field data).
 
 ## Result
 
