@@ -212,6 +212,8 @@ class ExplorerArcAgi3Agent(Agent):
         # Directional actions already probed once to seed the avatar's move lattice.
         self._probed: set[int] = set()
         self.last_reply: str | None = None
+        self.trace: dict | None = None
+        self._step = 0
 
     def _on_new_level(self) -> None:
         self._graph = StateGraph()
@@ -262,12 +264,24 @@ class ExplorerArcAgi3Agent(Agent):
         if self._prev_sig is not None and self._prev_prim is not None:
             self._graph.connect(self._prev_sig, self._prev_prim, sig)
 
-        prim = (
-            self._probe_moves(available, lattice)  # learn each move's effect first
-            or self._nav_affordance(arr, available, lattice)  # directed bootstrap: seek
-            or self._nav_move(arr, available, lattice)  # exploit the induced goal
-            or self._choose(sig, prims)  # blind frontier exploration
-        )
+        branch = "choose"
+        if prim := self._probe_moves(available, lattice):
+            branch = "probe"
+        elif prim := self._nav_affordance(arr, available, lattice):
+            branch = "affordance"
+        elif prim := self._nav_move(arr, available, lattice):
+            branch = "nav"
+        else:
+            prim = self._choose(sig, prims)
+        self._step += 1
+        self.trace = {
+            "step": self._step,
+            "avatar": self._det.avatar,
+            "lattice_size": len(lattice),
+            "branch": branch,
+            "prim": prim,
+            "levels": int(levels),
+        }
         self._graph.take(sig, prim)
         self._prev_sig, self._prev_prim = sig, prim
         self._prev_arr = arr

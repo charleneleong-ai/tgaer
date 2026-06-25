@@ -459,3 +459,21 @@ class TestDirectedLockBootstrap:
         assert blind_steps is None  # blind exploration cannot, in the same budget
         assert agent._det.door == 9  # door induced from the first directed win
         assert 5 in agent._det.keys  # key affordance learned while seeking
+
+
+class TestTrace:
+    def test_probe_branch_tagged_first(self):
+        # First directional step seeds the lattice → the probe branch fires.
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(_board(avatar=(2, 2)), actions=(1, 2, 3, 4)))
+        assert agent.trace["branch"] == "probe"
+        assert agent.trace["step"] == 1
+        assert agent.trace["avatar"] is None  # not yet pinned on first frame
+
+    def test_choose_branch_when_no_induction(self):
+        # Click-only game: no avatar/lattice ever, so selection falls to frontier.
+        agent = ExplorerArcAgi3Agent()
+        board = _board(extra={5: [(4, 4)]})
+        agent.act(_obs(board, actions=(6,)))
+        assert agent.trace["branch"] == "choose"
+        assert agent.trace["lattice_size"] == 0
