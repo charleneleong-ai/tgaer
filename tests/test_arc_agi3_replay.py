@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import json
 
-from tgaer.agents.arc_agi3_recorder import RecordingAgent
+import pytest
+
+from experiments.replay_telemetry import replay_traces, summarise
+from tests.test_arc_agi3_explorer import _Ls20Sim
+from tgaer.agents.arc_agi3_explorer import ExplorerArcAgi3Agent
+from tgaer.agents.arc_agi3_recorder import RecordingAgent, _action_dict
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
@@ -59,3 +64,44 @@ class TestRecordingAgent:
         agent = RecordingAgent(_Resettable(ArcAction(id=1)), tmp_path / "c.jsonl")
         agent.reset()
         assert calls == [1]
+
+
+def _sim_records(budget: int = 120) -> list[dict]:
+    """Capture the (obs, action) stream of a fresh explorer solving the closed-loop
+    ls20 sim. The avatar responds to the explorer's *own* actions, so the induction
+    is faithful — exactly the shape of a live ls20 recording, not a hand-scripted
+    trajectory whose action→Δ mapping is incoherent."""
+    sim = _Ls20Sim([(6, 6), (1, 6), (6, 1)])
+    agent = ExplorerArcAgi3Agent()
+    out = []
+    for _ in range(budget):
+        obs = sim.obs()
+        action = agent.act(obs)
+        out.append({"obs": obs, "action": _action_dict(action)})
+        sim.step(action.id)
+        if sim.levels == len(sim.doors):
+            break
+    return out
+
+
+class TestReplay:
+    def test_faithful_replay_reproduces_actions(self):
+        records = _sim_records()
+        traces = replay_traces(records)  # no AssertionError == faithful
+        assert len(traces) == len(records)  # the full stream replayed
+
+    def test_summary_reports_working_induction(self):
+        # The harness must surface a *working* induction, so a flat avatar on real
+        # ls20 reads as signal, not a harness artifact: the avatar pins, the lattice
+        # grows past the first direction, and a directed branch fires.
+        summary = summarise(replay_traces(records := _sim_records()))
+        assert summary["avatar_pins_at"] is not None
+        assert summary["max_lattice"] >= 2
+        assert {"nav", "affordance"} & summary["branches"].keys()
+        assert sum(summary["branches"].values()) == len(records)
+
+    def test_divergence_raises(self):
+        records = _sim_records()
+        records[0]["action"]["id"] = 99  # corrupt → replayed action won't match
+        with pytest.raises(AssertionError):
+            replay_traces(records)
