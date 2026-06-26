@@ -103,3 +103,7 @@ results/
 
 # autoresearch sweep artifacts (per-tag subdirs under experiments/)
 experiments/*/
+
+# ls20 induction-telemetry replay captures (regenerable; top-level so not covered above)
+experiments/ls20_capture.jsonl
+experiments/ls20_telemetry.jsonl
