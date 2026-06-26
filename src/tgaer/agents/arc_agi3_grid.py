@@ -328,7 +328,6 @@ class Planner:
             if int(round(d[0])) or int(round(d[1]))
         }
         prev, seen, q = {}, {s}, deque([s])
-        best, bestd = s, self._cover(s, g)
         while q:
             node = q.popleft()
             if self._cover(node, g) <= 1:
@@ -339,9 +338,10 @@ class Planner:
                     seen.add(nxt)
                     prev[nxt] = (node, aid)
                     q.append(nxt)
-                    if (d := self._cover(nxt, g)) < bestd:
-                        best, bestd = nxt, d
-        return self._trace(prev, s, best) if best != s else None
+        # Goal unreachable on this lattice: return no route rather than a best-effort
+        # approach — chasing the closest reachable cell makes the affordance bootstrap
+        # oscillate between off-stride targets it can never cover (the ls20 limit cycle).
+        return None
 
     @staticmethod
     def _trace(prev, start, node) -> list[int]:

@@ -461,6 +461,80 @@ class TestDirectedLockBootstrap:
         assert 5 in agent._det.keys  # key affordance learned while seeking
 
 
+class _StridePhantomSim:
+    """A stride-5 navigate game seeded with off-stride 'phantom' decoys (value 7)
+    that affordance-seeking can *approach* but never *reach*: the move lattice steps
+    5 cells, the decoys sit 2 off it. Two decoys straddle the avatar so the nearest
+    flips every step — a steering limit cycle. The real key(5)→door(9) is reachable
+    on-stride to the side, so escaping requires ignoring the unreachable decoys.
+    Reproduces the live ls20 failure the Phase 5 telemetry diagnostic localised."""
+
+    MOVES = {1: (-5, 0), 2: (5, 0), 3: (0, -5), 4: (0, 5)}
+
+    def __init__(self, size: int = 39) -> None:
+        self.size = size
+        self.levels = 0
+        self._load()
+
+    def _load(self) -> None:
+        self.avatar = (15, 15)  # ≡0 mod 5 → reachable lattice
+        self.phantoms = [(13, 15), (18, 15)]  # ≡3 mod 5 → off-stride, straddle avatar
+        self.key: tuple[int, int] | None = (15, 25)
+        self.door: tuple[int, int] | None = (15, 30)
+        self._havekey = False
+
+    def obs(self) -> dict:
+        g = np.full((self.size, self.size), 3, dtype=int)
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+        for p in self.phantoms:
+            g[p] = 7
+        if not self._havekey and self.key is not None:
+            g[self.key] = 5
+        if self.door is not None:
+            g[self.door] = 9
+        g[self.avatar] = 12
+        return {
+            "frame": [g.tolist()],
+            "available_actions": [1, 2, 3, 4],
+            "levels_completed": self.levels,
+            "state": "NOT_FINISHED",
+        }
+
+    def step(self, action: int) -> None:
+        if self.door is None and self._havekey:  # cleared frame seen → next level
+            self.levels += 1
+            self._load()
+            return
+        d = self.MOVES.get(action)
+        if d is None:
+            return
+        nr, nc = self.avatar[0] + d[0], self.avatar[1] + d[1]
+        if not (0 < nr < self.size - 1 and 0 < nc < self.size - 1):
+            return  # border wall — refused
+        if (nr, nc) == self.door and not self._havekey:
+            return  # door locked until the key is collected
+        self.avatar = (nr, nc)
+        if (nr, nc) == self.key:
+            self._havekey = True
+            self.key = None
+        elif (nr, nc) == self.door:
+            self.door = None
+
+
+class TestAffordancePhantomEscape:
+    """Phase 6: affordance-seeking must skip unreachable off-stride targets rather
+    than oscillate between them — the live ls20 limit cycle (Phase 5 diagnostic)."""
+
+    def test_explorer_escapes_phantom_cycle_and_solves(self):
+        sim = _StridePhantomSim()
+        agent = ExplorerArcAgi3Agent()
+        for _ in range(120):
+            sim.step(agent.act(sim.obs()).id)
+            if sim.levels == 2:
+                break
+        assert sim.levels == 2  # escaped the decoy cycle, solved key→door both levels
+
+
 class TestTrace:
     def test_probe_branch_tagged_first(self):
         # First directional step seeds the lattice → the probe branch fires.
