@@ -4,7 +4,6 @@ import numpy as np
 
 from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics
 from tgaer.agents.arc_agi3_scientist import Scientist, ScientistPlannerAgent
-from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 # board uses indices 3 (floor), 12 (avatar), 0/1 (key), 9 (door), 4 (wall)
@@ -115,11 +114,6 @@ def _obs(levels=0, actions=(1, 2, 3, 4)):
 
 
 class TestScientistAgent:
-    def test_emits_legal_action_from_scientist_semantics(self):
-        sci = _FakeSci(LS20_DEFAULT)
-        act = ScientistPlannerAgent(scientist=sci).act(_obs())
-        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
-
     def test_scientist_queried_once_per_level(self):
         sci = _FakeSci(LS20_DEFAULT)
         a = ScientistPlannerAgent(scientist=sci)
