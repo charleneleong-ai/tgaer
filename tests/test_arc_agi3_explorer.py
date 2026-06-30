@@ -535,6 +535,79 @@ class TestAffordancePhantomEscape:
         assert sim.levels == 2  # escaped the decoy cycle, solved key→door both levels
 
 
+class _StraddleDecoySim:
+    """Two reachable decoys (7) straddle the avatar, and a far per-frame blinker cell
+    (3↔6) makes every frame a new signature at a repeated position — defeating
+    signature-keyed memory exactly as real ls20 does (live: 741 signatures, 30 avatar
+    cells). Greedy nearest-target affordance ping-pongs between the decoys (stepping
+    onto one occludes it, promoting the other) — an up↔down cycle in avatar-POSITION
+    space that only position-keyed memory can break. The door (9) sits straight up past
+    the cycle, so only an avatar that breaks out reaches it."""
+
+    MOVES = {1: (1, 0), 2: (-1, 0), 3: (0, 1), 4: (0, -1)}
+
+    def __init__(self, size: int = 12) -> None:
+        self.size = size
+        self.levels = 0
+        self._blink = False
+        self._load()
+
+    def _load(self) -> None:
+        self.avatar = (5, 2)
+        self.decoys = [(4, 2), (6, 2)]  # straddle the avatar vertically, adjacent
+        # The door sits up the straddle axis, past the upper decoy: a trapped avatar
+        # ping-ponging in place never advances toward it; one that refuses to step
+        # back walks straight up to it (as on real ls20, where breaking the cycle let
+        # the frontier explorer traverse and clear a level).
+        self.door = (2, 2) if self.levels < 2 else None
+
+    def obs(self) -> dict:
+        g = np.full((self.size, self.size), 3, dtype=int)
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+        g[1, 9] = 6 if self._blink else 3  # far per-frame blinker → signature churn
+        for d in self.decoys:
+            g[d] = 7
+        if self.door is not None:
+            g[self.door] = 9
+        g[self.avatar] = 12
+        return {
+            "frame": [g.tolist()],
+            "available_actions": [1, 2, 3, 4],
+            "levels_completed": self.levels,
+            "state": "NOT_FINISHED",
+        }
+
+    def step(self, action: int) -> None:
+        self._blink = not self._blink  # churn the signature every step
+        if self.door is None:  # cleared frame seen → next level
+            self._load()
+            return
+        d = self.MOVES.get(action)
+        if d is None:
+            return
+        nr, nc = self.avatar[0] + d[0], self.avatar[1] + d[1]
+        if not (0 < nr < self.size - 1 and 0 < nc < self.size - 1):
+            return  # border wall — refused
+        self.avatar = (nr, nc)
+        if (nr, nc) == self.door:
+            self.door = None  # reached → level clears, value 9 vanishes for a frame
+            self.levels += 1
+
+
+class TestAffordanceEscapesPositionCycle:
+    """Affordance won't step the avatar onto a recently-occupied cell, so it escapes a
+    position-space cycle even when per-frame churn keeps every signature distinct."""
+
+    def test_explorer_escapes_position_cycle_and_solves(self):
+        sim = _StraddleDecoySim()
+        agent = ExplorerArcAgi3Agent()
+        for _ in range(150):
+            sim.step(agent.act(sim.obs()).id)
+            if sim.levels == 2:
+                break
+        assert sim.levels == 2  # broke the position cycle and reached the door twice
+
+
 class TestTrace:
     def test_probe_branch_tagged_first(self):
         # First directional step seeds the lattice → the probe branch fires.
