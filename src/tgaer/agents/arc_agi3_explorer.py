@@ -45,6 +45,9 @@ from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
 Primitive = tuple
 
 _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built from
+# Recent avatar cells affordance won't step back onto: a 2-cycle plus margin for short
+# box-loops, small enough not to over-forbid revisits on a tight board.
+_RECENT_CELLS = 8
 
 
 def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
@@ -52,7 +55,14 @@ def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
     so HUD / status-bar churn outside it doesn't fragment the state graph.
 
     Field detection (``field_box``) keys on the green floor; a later phase should
-    replace it with a colour-free field detector for games without one."""
+    replace it with a colour-free field detector for games without one.
+
+    TODO (deferred, post-Phase-7): this keys on every in-field pixel, so a board with
+    incidental per-frame churn fragments one avatar position into many signatures
+    (live ls20: 741 signatures for 30 avatar cells), blinding the ``StateGraph``
+    frontier to revisits. ``_nav_affordance`` works around it in position space, but
+    the real fix is a position-keyed or denoised signature so ``_choose`` survives
+    churn too."""
     lo, hi = field_box(arr)
     r0, c0, r1, c1 = int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
     sub = arr[r0 : r1 + 1, c0 : c1 + 1]
@@ -211,6 +221,10 @@ class ExplorerArcAgi3Agent(Agent):
         self._prev_key_n = 0
         # Directional actions already probed once to seed the avatar's move lattice.
         self._probed: set[int] = set()
+        # Recent avatar cells. Affordance won't step back onto one, breaking the
+        # position-space limit cycle that frame-signature memory can't see (on a real
+        # board incidental per-frame churn fragments one cell into many signatures).
+        self._recent: deque[tuple[int, int]] = deque(maxlen=_RECENT_CELLS)
         self.last_reply: str | None = None
         self.trace: dict | None = None
         self._step = 0
@@ -220,6 +234,7 @@ class ExplorerArcAgi3Agent(Agent):
         self._plan.clear()
         self._prev_sig = None
         self._prev_prim = None
+        self._recent.clear()  # a fresh board: stale positions must not block
 
     def act(self, observation: Any) -> ArcAction:
         obs = observation or {}
@@ -245,6 +260,10 @@ class ExplorerArcAgi3Agent(Agent):
         lattice = self._det.move_lattice()  # once per step, after the observe update
         if learning:
             self._learn_blocked(arr, lattice)
+        # Track the avatar cell every step (history must be gap-free); only affordance
+        # consults it, so the exploit may still revisit a cell to reach a known goal.
+        if self._det.avatar is not None and len(here := cells(arr, self._det.avatar)):
+            self._recent.append(tuple(map(int, here.min(0))))
 
         # A respawn after death: the action that led here was fatal. Record the
         # edge so it is never repeated, and drop the cross-death link — the frame
@@ -389,9 +408,19 @@ class ExplorerArcAgi3Agent(Agent):
             if arr[t] != avatar and t not in skip
         ]
         for goal in sorted(targets, key=lambda g: int(abs(g - tl).sum())):
-            if move := self._route(arr, available, lattice, av, goal):
+            move = self._route(arr, available, lattice, av, goal)
+            if move is not None and not self._steps_back(move, tl, lattice):
                 return move
         return None
+
+    def _steps_back(self, move: Primitive, tl: np.ndarray, lattice) -> bool:
+        """Would ``move`` land the avatar on a recently-occupied cell? Greedy nearest-
+        target seeking otherwise ping-pongs between two salient cells straddling the
+        avatar; refusing the step back breaks that cycle in position space."""
+        d = lattice.get(move[1])
+        if d is None:
+            return False
+        return (int(tl[0] + d[0]), int(tl[1] + d[1])) in self._recent
 
     def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
         # Drop a stale route the current frame can no longer execute.
