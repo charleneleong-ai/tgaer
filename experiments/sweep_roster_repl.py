@@ -4,7 +4,8 @@ The REPL agent uses an LLM in a Python REPL to explore and solve games.
 This sweep tests it against all25 games to compare with other agents.
 
 Usage:
-    PYTHONPATH=src ARC_API_KEY=... uv run python experiments/sweep_roster_repl.py
+    PYTHONPATH=src ARC_API_KEY=... OPENAI_API_KEY=... uv run python experiments/sweep_roster_repl.py
+    WANDB_ENABLED=1 PYTHONPATH=src ARC_API_KEY=... OPENAI_API_KEY=... uv run python experiments/sweep_roster_repl.py
 """
 
 from __future__ import annotations
@@ -36,6 +37,23 @@ def main() -> None:
         ).json()
     ]
     print(f"[sweep] {len(games)} games", flush=True)
+
+    # Wandb setup
+    wandb_run = None
+    if os.environ.get("WANDB_ENABLED"):
+        import wandb
+
+        wandb_run = wandb.init(
+            project="tgaer-arc-agi3",
+            name=f"repl-sweep-{time.strftime('%Y%m%d-%H%M%S')}",
+            config={
+                "agent": "repl",
+                "model": "openai/gpt-4o-mini",
+                "vision": True,
+                "max_steps": 80,
+            },
+        )
+        print(f"[sweep] wandb: {wandb_run.url}", flush=True)
 
     client = ArcAgi3Client(api_key=key)
     card = client.open_scorecard()
@@ -81,6 +99,18 @@ def main() -> None:
                     f"time={game_time:.1f}s ETA={eta:.0f}s",
                     flush=True,
                 )
+
+                if wandb_run:
+                    wandb_run.log(
+                        {
+                            "game_idx": i,
+                            "game": gid,
+                            "score": row.get("score", 0.0),
+                            "levels_completed": row.get("levels_completed", 0),
+                            "total_levels": total_levels,
+                            "game_time_s": game_time,
+                        }
+                    )
         finally:
             summary = client.close_scorecard()
             elapsed = time.time() - start_time
@@ -89,6 +119,16 @@ def main() -> None:
                 f"scorecard={summary}",
                 flush=True,
             )
+            if wandb_run:
+                wandb_run.summary.update(
+                    {
+                        "total_levels": total_levels,
+                        "total_games": len(games),
+                        "elapsed_s": elapsed,
+                        "scorecard": summary,
+                    }
+                )
+                wandb_run.finish()
 
 
 if __name__ == "__main__":
