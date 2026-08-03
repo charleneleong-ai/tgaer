@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
 from tgaer.agents.arc_agi3_empirical import EmpiricalPlannerAgent
+from tgaer.agents.arc_agi3_grid import CLICK_DEFAULT
 from tgaer.agents.arc_agi3_llm import ArcAgi3LLMAgent
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
 from tgaer.agents.arc_agi3_random import RandomArcAgi3Agent
@@ -23,6 +24,7 @@ _ARC_AGI3_AGENTS = {
     "random": RandomArcAgi3Agent,
     "llm": ArcAgi3LLMAgent,
     "planner": PlannerArcAgi3Agent,
+    "click": lambda **kw: PlannerArcAgi3Agent(semantics=CLICK_DEFAULT, **kw),
     "scientist": ScientistPlannerAgent,
     "empirical": EmpiricalPlannerAgent,
 }

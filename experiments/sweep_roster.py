@@ -20,7 +20,7 @@ from tgaer.envs.arc_agi3.arc_agi3_client import BASE_URL, ArcAgi3Client
 from tgaer.envs.arc_agi3.arc_agi3_env import ArcAgi3Environment
 from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
 
-OUT = "/workspace/tgaer/experiments/roster_results.jsonl"
+OUT = "experiments/roster_results.jsonl"
 
 
 def main() -> None:

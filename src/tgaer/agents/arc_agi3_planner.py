@@ -29,13 +29,24 @@ from typing import Any
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, KeyDoorController, to_action
+from tgaer.agents.arc_agi3_grid import (
+    LS20_DEFAULT,
+    KeyDoorController,
+    Semantics,
+    to_action,
+)
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 class PlannerArcAgi3Agent(Agent):
-    def __init__(self, seed: int = 0, **_: Any) -> None:
+    def __init__(
+        self,
+        seed: int = 0,
+        semantics: Semantics | None = None,
+        **_: Any,
+    ) -> None:
+        self._sem = semantics or LS20_DEFAULT
         self._ctl = KeyDoorController()
         self._levels = 0
         self.last_reply: str | None = None
@@ -50,8 +61,8 @@ class PlannerArcAgi3Agent(Agent):
         if levels != self._levels:
             self._levels = levels
             self._ctl.on_new_level()
-        self._ctl.learn(arr, LS20_DEFAULT)
-        action = self._ctl.step(arr, LS20_DEFAULT, obs.get("available_actions") or [1])
+        self._ctl.learn(arr, self._sem)
+        action = self._ctl.step(arr, self._sem, obs.get("available_actions") or [1])
         self.last_reply = f"[planner] act={action.id}"
         return action
 

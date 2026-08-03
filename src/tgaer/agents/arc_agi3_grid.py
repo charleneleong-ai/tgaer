@@ -235,7 +235,7 @@ class KeyDoorController:
             if (clk := self._click_target(arr, sem, avail)) is not None:
                 self._progressed = True
                 return clk
-            return ArcAction(id=self._fallback(avail, move_avail))
+            return to_action(self._fallback(avail, move_avail))
 
         # Bootstrap: probe each directional action once to learn its move vector.
         unprobed = [a for a in move_avail if a not in self.probed]
@@ -248,7 +248,7 @@ class KeyDoorController:
         if not len(av) or not self.delta:
             action = self._fallback(avail, move_avail)
             self._remember(arr, action, sem)
-            return ArcAction(id=action)
+            return to_action(action)
 
         ks = self._keys(arr, sem)
         d = self._door(arr, sem)
@@ -284,7 +284,7 @@ class KeyDoorController:
 
         action = self._fallback(avail, move_avail)
         self._remember(arr, action, sem)
-        return ArcAction(id=action)
+        return to_action(action)
 
 
 class Planner:
