@@ -79,6 +79,8 @@ def main() -> None:
                     agent = ArcAgi3ReplAgent(
                         model="openai/gpt-4o-mini",
                         vision=True,
+                        max_tool_steps=12,
+                        temperature=0.6,
                     )
                     result = evaluate_arc_agi3_agent(
                         agent, env, {"guards": [], "max_steps": 80}, logger=logger

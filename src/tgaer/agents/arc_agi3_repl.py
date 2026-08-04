@@ -1,20 +1,21 @@
 """LLM REPL agent for ARC-AGI-3 — Duck-harness-style.
 
-The agent works in a Python REPL where game observations are encoded as
-variables. It can inspect variables, evaluate helper functions, and take
-actions. The model drives; the harness is minimal.
+Aligned with Tufa Labs' Duck harness approach:
+- OpenAI function calling with a `python` tool (not JSON parsing)
+- Segmentation view (connected components) as primary board representation
+- Structured world model carried across turns
+- Context eviction for infinite play
+- Multiple tool calls per turn
+- Raw numeric grid intentionally hidden
 
-Key variables available to the model:
-- current_frame: latest board state (64x64 grid)
-- previous_frame: previous board state
-- history: list of (action, frame) pairs
-- transitions: list of (state, action, next_state) tuples
-- levels_completed: current level count
-- available_actions: list of valid action IDs
-- game_state: current game state (NOT_FINISHED, WIN, GAME_OVER)
+Key variables available to the model via the python tool:
+- current_frame: frame view with .ascii, .segmentation, .step, .level
+- history: list of (action, frame) snapshots
+- valid_actions: list of valid action names
+- action(actions): execute real game actions
 
 Usage:
-    agent = ArcAgi3ReplAgent(model="gemini/gemini-3.1-flash-lite")
+    agent = ArcAgi3ReplAgent(model="openai/gpt-4o-mini")
     action = agent.act(observation)
 """
 
@@ -22,7 +23,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import traceback
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -36,88 +40,206 @@ from tgaer.envs.arc_agi3.arc_agi3_api import (
 )
 from tgaer.envs.arc_agi3.rendering import grid_to_png_data_url
 
-_JSON_RE = re.compile(r"\{[^{}]*\}")
+# ARC color legend (matches Duck harness)
+ARC_COLORS = {
+    0: ".", 1: "A", 2: "B", 3: "C", 4: "D",
+    5: "E", 6: "F", 7: "G", 8: "H", 9: "I",
+    10: "J", 11: "K", 12: "L", 13: "M", 14: "N", 15: "O",
+}
+ARC_COLOR_LEGEND = ", ".join(f"{v}={k}" for k, v in ARC_COLORS.items() if v != ".")
 
-_SYSTEM = """You are playing ARC-AGI-3, an interactive grid puzzle. You have access to a Python REPL with game state as variables.
 
-Available variables:
-- current_frame: numpy array (64x64) of the current board state (values 0-15)
-- previous_frame: numpy array of the previous board state (or None on first move)
-- history: list of (action_id, frame_before, frame_after) tuples
-- transitions: list of (state_before, action, state_after) summaries
-- levels_completed: int, number of levels completed
-- available_actions: list of valid action IDs for this turn
-- game_state: str, "NOT_FINISHED", "WIN", or "GAME_OVER"
-- grid_to_ascii(arr): helper to render grid as readable ASCII
-- count_changes(arr1, arr2): helper to count changed cells between frames
+@dataclass
+class SegmentationNode:
+    """A connected component in the grid."""
+    id: int
+    color: str
+    hash: str
+    pixels: int
+    boundary: list[list[int]]
+    children: list[int] = field(default_factory=list)
 
-Available actions:
-- 1-5, 7: Simple actions (meaning varies by game)
-- 6: Complex action (requires x, y coordinates in [0, 63])
 
-Your goal: Complete levels as efficiently as possible. Each level ends when you reach a WIN state. Explore the game mechanics, build a mental model, then execute your strategy.
+@dataclass
+class FrameView:
+    """Lightweight frame view exposed to the model."""
+    ascii: str
+    step: int
+    level: int
+    shape: tuple[int, int]
+    segmentation: dict[str, Any] = field(default_factory=dict)
 
-Reply format:
-1. Brief analysis (1-3 sentences)
-2. Python code to inspect state or plan (optional)
-3. Final line: action JSON {"id": <action_id>, "x": <int|null>, "y": <int|null>}"""
 
-_HELPERS = '''
-def grid_to_ascii(arr):
-    """Render grid as readable ASCII with row numbers."""
+@dataclass
+class HistoryEntry:
+    """A single history entry."""
+    action: str
+    frame: FrameView
+
+
+def _segment_grid(grid: list[list[int]]) -> dict[str, Any]:
+    """Compute connected components (4-connected) and adjacency."""
+    arr = np.array(grid, dtype=np.int32)
+    rows, cols = arr.shape
+    visited = np.zeros((rows, cols), dtype=bool)
+    nodes: list[dict[str, Any]] = []
+    node_map = np.full((rows, cols), -1, dtype=np.int32)
+
+    node_id = 0
+    for r0 in range(rows):
+        for c0 in range(cols):
+            if visited[r0, c0] or arr[r0, c0] == 0:
+                continue
+            color_val = int(arr[r0, c0])
+            q: deque[tuple[int, int]] = deque([(r0, c0)])
+            visited[r0, c0] = True
+            pixels: list[tuple[int, int]] = []
+            boundary_set: set[tuple[int, int]] = set()
+
+            while q:
+                r, c = q.popleft()
+                pixels.append((r, c))
+                node_map[r, c] = node_id
+                is_boundary = False
+                for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                    r2, c2 = r + dr, c + dc
+                    if 0 <= r2 < rows and 0 <= c2 < cols:
+                        if arr[r2, c2] == color_val and not visited[r2, c2]:
+                            visited[r2, c2] = True
+                            q.append((r2, c2))
+                        elif arr[r2, c2] != color_val:
+                            is_boundary = True
+                    else:
+                        is_boundary = True
+                if is_boundary:
+                    boundary_set.add((r, c))
+
+            centroid_r = sum(r for r, _ in pixels) / len(pixels)
+            centroid_c = sum(c for _, c in pixels) / len(pixels)
+            obj_hash = f"{color_val}_{len(pixels)}_{centroid_r:.1f}_{centroid_c:.1f}"
+
+            # Simple boundary as corner points
+            boundary = sorted([[r, c] for r, c in boundary_set])[:20]
+
+            nodes.append({
+                "id": node_id,
+                "color": ARC_COLORS.get(color_val, f"{color_val}"),
+                "hash": obj_hash,
+                "pixels": len(pixels),
+                "boundary": boundary,
+                "children": [],
+                "centroid": [centroid_r, centroid_c],
+            })
+            node_id += 1
+
+    # Build adjacency list (share an edge)
+    adjacency: list[list[int]] = []
+    for i, n1 in enumerate(nodes):
+        for j, n2 in enumerate(nodes):
+            if i >= j:
+                continue
+            # Simple bounding box proximity check
+            c1 = n1["centroid"]
+            c2 = n2["centroid"]
+            dist = abs(c1[0] - c2[0]) + abs(c1[1] - c2[1])
+            if dist < 8:  # rough adjacency threshold
+                adjacency.append([i, j])
+
+    return {"nodes": nodes, "adjacency_list": adjacency}
+
+
+def _grid_to_ascii(grid: list[list[int]]) -> str:
+    """Render grid as letter-coded ASCII."""
     lines = []
-    for r, row in enumerate(arr):
-        lines.append(f"{r:2d}|" + "".join(f"{c:x}" for c in row))
-    return "\\n".join(lines)
+    for row in grid:
+        lines.append("".join(ARC_COLORS.get(v, f"{v:x}") for v in row))
+    return "\n".join(lines)
 
-def count_changes(arr1, arr2):
-    """Count cells that changed between two frames."""
-    if arr1 is None or arr2 is None:
-        return 0
-    return int(np.sum(arr1 != arr2))
 
-def find_objects(arr):
-    """Find connected components and their centroids."""
-    from collections import deque
-    mask = arr > 0
-    seen = np.zeros_like(mask, bool)
-    objects = []
-    for r0, c0 in np.argwhere(mask):
-        if seen[r0, c0]:
-            continue
-        val = int(arr[r0, c0])
-        q, comp = deque([(r0, c0)]), []
-        seen[r0, c0] = True
-        while q:
-            r, c = q.popleft()
-            comp.append((r, c))
-            for dr, dc in [(1,0),(-1,0),(0,1),(0,-1)]:
-                r2, c2 = r+dr, c+dc
-                if (0 <= r2 < arr.shape[0] and 0 <= c2 < arr.shape[1] 
-                    and mask[r2, c2] and not seen[r2, c2]):
-                    seen[r2, c2] = True
-                    q.append((r2, c2))
-        centroid = np.mean(comp, axis=0)
-        objects.append({"value": val, "size": len(comp), "centroid": centroid.tolist()})
-    return sorted(objects, key=lambda o: o["size"])
-'''
+def _build_frame_view(grid: list[list[int]], step: int, level: int) -> FrameView:
+    """Build a FrameView from a raw grid."""
+    return FrameView(
+        ascii=_grid_to_ascii(grid),
+        step=step,
+        level=level,
+        shape=(len(grid), len(grid[0]) if grid else 0),
+        segmentation=_segment_grid(grid),
+    )
+
+
+# System prompt aligned with Duck harness
+_SYSTEM = """You are a coding agent solving a grid-based puzzle game.
+
+Game overview:
+- You are solving a multi-level grid puzzle game.
+- You are called repeatedly over the course of a run. Treat each turn as one observe-plan-act cycle.
+- Your job is to solve the entire game by clearing every level, not just the current screen.
+- Levels often build on earlier mechanics, but layouts and interactions can still change between levels.
+- Optimize for as few in-game actions as possible while still being reliable.
+- Boards are 64x64 color grids rendered with ARC color symbols.
+- Color legend: {color_legend}.
+
+Visual-game guidance:
+- Treat each board as a scene with objects, blockers, targets, adjacency, containment, motion, and symmetry.
+- Game entities are usually rendered as connected multi-tile shapes. Sometimes they might also be 1x1 tokens.
+- Some games are logic or layout puzzles with no explicit player avatar. Do not assume a player exists.
+- Background colors are often white or gray/black-ish large regions, but not always.
+- In many games, a long horizontal or vertical line near an edge is a timer or remaining-steps bar.
+- Re-ground on the newest frame after any score increase or abrupt scene change.
+- `WIN` means the whole game is solved. Mid-run level completion is more likely to appear as a score increase.
+
+Runtime variables inside every `python` tool call:
+- `current_frame` exposes `.ascii`, `.step`, `.level`, `.shape`, `.segmentation`.
+- `current_frame.segmentation` parses the board into objects: `{{'nodes': [...], 'adjacency_list': [...]}}`.
+- Each node: `id`, `color`, `hash`, `pixels`, `boundary`, `children`.
+- `history` is a list of objects with `.action` and `.frame`.
+- `valid_actions` is the current list of valid action names.
+- `action(actions)` executes real environment actions. Pass a list like `['LEFT']` or `[{{'action': 'MOUSE', 'row': 4, 'col': 7}}]`.
+- After `action()` returns, all variables are refreshed.
+
+Python tool guidance:
+- Use `current_frame.segmentation` as your primary view.
+- Use `current_frame.ascii` only for small specific regions.
+- Every `python` tool call starts fresh. Re-import modules as needed.
+- Allowed imports: bisect, collections, copy, fractions, functools, heapq, itertools, json, math, operator, random, re, statistics, string, numpy.
+- Maintain a compact working world model: what entities exist, what actions do, what the goal is, what plan fits best.
+- When the objective is understood, write BFS/DFS/search algorithms rather than guessing.
+- Call `action(...)` inside Python rather than returning action text.
+- `action(...)` accepts an ordered list. Batch reliable sequences.
+- If an action result reports `game_over`, `run_complete`, `level_completed`, or `done`, stop immediately.
+- Keep tool output compact: object lists, diffs, coordinates, counts. Never print full boards.
+
+Tool session rules:
+- You have exactly one tool: `python`.
+- Call it with ephemeral code. Code is not saved between calls.
+- You can call `python` multiple times per step. Investigate until you have a clear plan.
+- Each call has a 30-second time limit.
+- After `action()` returns, variables refresh before the next statement."""
 
 
 class ArcAgi3ReplAgent(Agent):
     """LLM REPL agent for ARC-AGI-3 — Duck-harness-style.
-    
-    The model interacts with the game through a Python REPL, inspecting
-    state, running analysis, and choosing actions. The harness provides
-    helper functions and game state as pre-loaded variables.
+
+    Uses OpenAI function calling with a python tool, segmentation view,
+    structured world model, and context eviction for infinite play.
     """
+
+    # Action name mapping
+    ACTION_NAMES = {
+        1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT",
+        5: "SPACE", 6: "MOUSE", 7: "ACTION7",
+    }
+    NAME_TO_ID = {v: k for k, v in ACTION_NAMES.items()}
 
     def __init__(
         self,
         seed: int = 0,
-        model: str = "gemini/gemini-3.1-flash-lite",
-        temperature: float = 0.3,
-        max_tokens: int = 1024,
-        max_history: int = 12,
+        model: str = "openai/gpt-4o-mini",
+        temperature: float = 0.6,
+        max_tokens: int = 2048,
+        max_tool_steps: int = 12,
+        max_history: int = 30,
+        context_window: int = 32768,
         api_base: str | None = None,
         api_key: str | None = None,
         vision: bool = True,
@@ -126,21 +248,30 @@ class ArcAgi3ReplAgent(Agent):
         self._model = model
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._max_tool_steps = max_tool_steps
         self._max_history = max_history
+        self._context_window = context_window
         self._vision = vision
         self._api_base = api_base
         self._api_key = api_key or ("local" if api_base else None)
-        
-        # Game state
-        self._history: list[tuple[int, list[list[int]], list[list[int]]]] = []
-        self._transitions: list[str] = []
+
+        # Session state
+        self._messages: list[dict[str, Any]] = []
+        self._history: list[HistoryEntry] = []
         self._levels = -1
-        self._prev_frame: list[list[int]] | None = None
-        
+        self._step = 0
+        self._world_model: dict[str, str] = {
+            "world_model": "",
+            "goal_model": "",
+            "action_model": "",
+            "recent_findings": "",
+            "open_questions": "",
+            "current_plan": "",
+        }
+
         # Logging
         self.last_reasoning: str = ""
-        self.last_reply: str = ""
-        self.last_code: str = ""
+        self.last_tool_calls: list[str] = []
 
     def act(self, observation: Any) -> ArcAction:
         obs = observation or {}
@@ -148,106 +279,402 @@ class ArcAgi3ReplAgent(Agent):
         frame = obs.get("frame") or []
         levels = obs.get("levels_completed", self._levels)
         state = obs.get("state", "NOT_FINISHED")
-        
+
         # Reset on new level
         if levels != self._levels:
             self._levels = levels
             self._history.clear()
-            self._transitions.clear()
-        
+            self._messages.clear()
+            self._world_model = {k: "" for k in self._world_model}
+            self._step = 0
+
         if not frame:
             return self._fallback(available)
-        
+
         current_grid = frame[-1]
-        
-        # Build prompt with game state
-        prompt = self._build_prompt(obs, current_grid, available, state)
-        image_url = grid_to_png_data_url(frame) if self._vision else None
-        
+        self._step += 1
+        frame_view = _build_frame_view(current_grid, self._step, self._levels)
+
+        # Update history
+        if self._history:
+            last = self._history[-1]
+            self._history[-1] = HistoryEntry(
+                action=last.action,
+                frame=frame_view,
+            )
+        self._history.append(HistoryEntry(action="", frame=frame_view))
+        if len(self._history) > self._max_history:
+            self._history = self._history[-self._max_history:]
+
+        # Build user message
+        valid_names = [self.ACTION_NAMES.get(a, f"ACTION{a}") for a in available]
+        user_prompt = self._build_user_prompt(
+            frame_view, valid_names, state, available
+        )
+
+        # Add user message (with optional image)
+        if self._vision:
+            image_url = grid_to_png_data_url(frame)
+            self._messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            })
+        else:
+            self._messages.append({"role": "user", "content": user_prompt})
+
+        # Tool-calling loop
         try:
-            reply = self._complete(prompt, image_url)
-            self.last_reply = reply
-            action = self._parse_action(reply, available)
-            
-            # Record history
-            if self._prev_frame is not None:
-                self._history.append((action.id, self._prev_frame, current_grid))
-                if len(self._history) > self._max_history:
-                    self._history = self._history[-self._max_history:]
-                
-                # Record transition summary
-                changes = int(np.sum(np.array(self._prev_frame) != np.array(current_grid)))
-                self._transitions.append(
-                    f"Action {action.id} changed {changes} cells"
-                )
-                if len(self._transitions) > self._max_history:
-                    self._transitions = self._transitions[-self._max_history:]
-            
-            self._prev_frame = current_grid
+            action = self._tool_loop(available)
             return action
-            
         except Exception as e:
             self.last_reasoning = f"Error: {e}"
             return self._fallback(available)
 
-    def _build_prompt(
-        self, obs: dict, grid: list[list[int]], available: list[int], state: str
+    def _tool_loop(self, available: list[int]) -> ArcAction:
+        """Run the tool-calling loop until we get an action."""
+        system_msg = _SYSTEM.format(color_legend=ARC_COLOR_LEGEND)
+
+        for tool_step in range(self._max_tool_steps):
+            # Build tools
+            tools = [self._python_tool_schema()]
+
+            # Call LLM
+            from litellm import completion
+
+            extra = {}
+            if self._api_base:
+                extra = {"api_base": self._api_base, "api_key": self._api_key}
+
+            resp = completion(
+                model=self._model,
+                messages=[{"role": "system", "content": system_msg}] + self._messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=self._temperature,
+                max_tokens=self._max_tokens,
+                **extra,
+            )
+
+            msg = resp.choices[0].message
+            self.last_reasoning = getattr(msg, "reasoning_content", "") or ""
+
+            # No tool call — model returned text only
+            if not msg.tool_calls:
+                # Try to parse action from text as fallback
+                content = msg.content or ""
+                self._messages.append({"role": "assistant", "content": content})
+                action = self._parse_action_from_text(content, available)
+                if action:
+                    return action
+                # Ask model to use the tool
+                self._messages.append({
+                    "role": "user",
+                    "content": "Please use the python tool to execute an action. Call action() with a valid action list.",
+                })
+                continue
+
+            # Process tool calls
+            for tc in msg.tool_calls:
+                func_name = tc.function.name
+                try:
+                    args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+
+                code = args.get("code", "")
+
+                # Add assistant message with tool call
+                self._messages.append({
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [{
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": func_name,
+                            "arguments": json.dumps(args),
+                        },
+                    }],
+                })
+
+                # Execute code
+                result = self._execute_python(code, available)
+
+                # Add tool response
+                self._messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps(result, default=str),
+                })
+
+                # Check if an action was executed
+                if result.get("action_executed"):
+                    action_data = result.get("action_data", {})
+                    return self._data_to_action(action_data, available)
+
+            # Evict old messages if context is getting large
+            self._evict_if_needed()
+
+        # Fallback after max tool steps
+        return self._fallback(available)
+
+    def _python_tool_schema(self) -> dict[str, Any]:
+        """Define the python tool schema."""
+        return {
+            "type": "function",
+            "function": {
+                "name": "python",
+                "description": (
+                    "Run Python code against preloaded game state. Available globals: "
+                    "current_frame (with .ascii, .segmentation, .step, .level, .shape), "
+                    "history (list of action/frame snapshots), "
+                    "valid_actions (current valid action names), "
+                    "action(actions) for executing real game actions. "
+                    "Use current_frame.segmentation as primary view. "
+                    "For MOUSE, pass row and col integer fields."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Python code to run. Ephemeral, not saved between calls.",
+                        },
+                    },
+                    "required": ["code"],
+                },
+            },
+        }
+
+    def _execute_python(self, code: str, available: list[int]) -> dict[str, Any]:
+        """Execute Python code in a sandboxed environment."""
+        # Build the execution environment
+        last_frame = self._history[-1].frame if self._history else None
+        prev_frame = self._history[-2].frame if len(self._history) > 1 else None
+
+        # Build history view
+        history_view = []
+        for entry in self._history[:-1]:  # exclude current
+            if entry.action:
+                history_view.append(type("H", (), {
+                    "action": entry.action,
+                    "frame": entry.frame,
+                })())
+
+        # Build action result
+        last_result = {
+            "board_changed": True,
+            "level_completed": False,
+            "game_over": False,
+            "run_complete": False,
+            "done": False,
+            "valid_actions": [self.ACTION_NAMES.get(a, f"ACTION{a}") for a in available],
+        }
+
+        # Action function that captures the call
+        action_result = {"executed": False, "action_data": {}}
+
+        def action_fn(actions: list) -> dict:
+            """Execute actions and return result."""
+            if not actions:
+                return {"error": "no actions provided"}
+
+            act = actions[0] if isinstance(actions, list) else actions
+            if isinstance(act, str):
+                # Simple action name
+                act_id = self.NAME_TO_ID.get(act)
+                if act_id is None:
+                    return {"error": f"unknown action: {act}"}
+                action_result["executed"] = True
+                action_result["action_data"] = {"id": act_id}
+            elif isinstance(act, dict):
+                act_name = act.get("action", act.get("id"))
+                if act_name == "MOUSE":
+                    row = act.get("row", 32)
+                    col = act.get("col", 32)
+                    action_result["executed"] = True
+                    action_result["action_data"] = {
+                        "id": COMPLEX_ACTION_ID,
+                        "x": col,
+                        "y": row,
+                    }
+                else:
+                    act_id = self.NAME_TO_ID.get(act_name)
+                    if act_id is None:
+                        return {"error": f"unknown action: {act_name}"}
+                    action_result["executed"] = True
+                    action_result["action_data"] = {"id": act_id}
+
+            return {"action_executed": True, **last_result}
+
+        # Build namespace with game state
+        import builtins
+        import io
+
+        namespace = {
+            "__builtins__": {
+                k: v for k, v in vars(builtins).items()
+                if not k.startswith("_") or k in ("__name__",)
+            },
+            "current_frame": last_frame,
+            "previous_frame": prev_frame,
+            "history": history_view,
+            "valid_actions": [self.ACTION_NAMES.get(a, f"ACTION{a}") for a in available],
+            "action": action_fn,
+            "action_result": last_result,
+            "result": None,
+        }
+
+        # Capture print output
+        stdout_lines = []
+        original_print = namespace["__builtins__"].get("print")
+
+        def capture_print(*args, **kwargs):
+            buf = io.StringIO()
+            kwargs["file"] = buf
+            original_print(*args, **kwargs)
+            stdout_lines.append(buf.getvalue())
+
+        namespace["__builtins__"]["print"] = capture_print
+
+        try:
+            exec(code, namespace)  # noqa: S102
+        except Exception as e:
+            return {
+                "error": f"{type(e).__name__}: {e}",
+                "stdout": "\n".join(stdout_lines),
+                "traceback": traceback.format_exc(),
+            }
+
+        result_value = namespace.get("result")
+        output = "\n".join(stdout_lines)
+
+        return {
+            "stdout": output,
+            "result": result_value,
+            "action_executed": action_result["executed"],
+            "action_data": action_result["action_data"],
+            **last_result,
+        }
+
+    def _build_user_prompt(
+        self,
+        frame_view: FrameView,
+        valid_names: list[str],
+        state: str,
+        available: list[int],
     ) -> str:
-        arr = np.array(grid)
-        
-        # ASCII grid
-        ascii_grid = "\n".join(
-            f"{r:2d}|" + "".join(f"{c:x}" for c in row)
-            for r, row in enumerate(grid)
-        )
-        
-        # Object detection (simple: count unique values)
-        unique, counts = np.unique(arr, return_counts=True)
-        palette_info = ", ".join(
-            f"{v}({n} cells)" for v, n in zip(unique, counts) if n < 1000
-        )
-        
-        # History summary
-        history_str = "none" if not self._transitions else "; ".join(self._transitions[-5:])
-        
-        # Diff feedback
-        diff_str = ""
-        if self._prev_frame is not None:
-            changes = int(np.sum(np.array(self._prev_frame) != arr))
-            if changes == 0:
-                diff_str = "\nWARNING: Your last action changed NOTHING. Try a different approach."
+        """Build the user prompt for the current turn."""
+        lines = []
+
+        # Previous step summary
+        if len(self._history) > 1:
+            prev_entry = self._history[-2]
+            if prev_entry.action:
+                lines.append(f"The code executed 1 action in the previous sequence.")
+                lines.append(f"Executed actions: {prev_entry.action}.")
             else:
-                diff_str = f"\nYour last action changed {changes} cells."
-        
-        return f"""Game state: {state} | Levels completed: {self._levels}
-Available actions: {available}
-Recent history: {history_str}{diff_str}
+                lines.append("No previous action sequence was captured.")
+        else:
+            lines.append("No previous sequence has been executed yet.")
 
-Palette (value: count): {palette_info}
+        # State
+        lines.append(f"Current state: step {self._step}, level {self._levels}.")
+        lines.append(f"Valid actions right now: {', '.join(valid_names)}.")
 
-Board (64x64, each char = cell value 0-f):
-{ascii_grid}
+        # Tool description
+        lines.append(
+            "Only tool: `python`. It receives `current_frame`, `previous_frame`, "
+            "`history`, `valid_actions`, and `action(actions)`."
+        )
+        lines.append(
+            "Only letter-coded board views and lightweight metadata are exposed; "
+            "raw numeric color IDs are not available."
+        )
+        lines.append(
+            "Use `current_frame.segmentation` as the primary view; "
+            "use `current_frame.ascii` only for a small specific region."
+        )
 
-Analyze the board structure. What patterns do you see? What might the goal be?
-Then output your action as JSON on the final line."""
+        # World model
+        wm_lines = [
+            f"- World model: {self._world_model['world_model']}" if self._world_model['world_model'] else None,
+            f"- Goal model: {self._world_model['goal_model']}" if self._world_model['goal_model'] else None,
+            f"- Action model: {self._world_model['action_model']}" if self._world_model['action_model'] else None,
+            f"- Recent findings: {self._world_model['recent_findings']}" if self._world_model['recent_findings'] else None,
+            f"- Plan: {self._world_model['current_plan']}" if self._world_model['current_plan'] else None,
+        ]
+        wm_lines = [l for l in wm_lines if l]
+        if wm_lines:
+            lines.append("Working world model from previous turn:")
+            lines.extend(wm_lines)
+            lines.append("Revise based on new evidence.")
 
-    def _parse_action(self, raw: str, available: list[int]) -> ArcAction:
-        matches = _JSON_RE.findall(raw)
+        # Instructions - MUST call action()
+        if self._step == 1:
+            lines.append(
+                "IMPORTANT: You MUST call `action(actions)` in your Python code to take an action. "
+                "Example: `action(['RIGHT'])` or `action([{{'action': 'MOUSE', 'row': 32, 'col': 32}}])`. "
+                "Do NOT just analyze without acting. Always end your code with an action call."
+            )
+        else:
+            lines.append(
+                "IMPORTANT: You MUST call `action(actions)` in your Python code to take an action. "
+                "Example: `action(['LEFT'])` or `action([{{'action': 'MOUSE', 'row': 32, 'col': 32}}])`. "
+                "Do NOT just analyze without acting. Always end your code with an action call."
+            )
+
+        lines.append(
+            "You may call `action(actions)` more than once in one Python snippet. "
+            "Batch multiple actions for efficiency: `action(['RIGHT', 'RIGHT', 'UP'])`."
+        )
+
+        return "\n".join(lines)
+
+    def _parse_action_from_text(self, text: str, available: list[int]) -> ArcAction | None:
+        """Fallback: parse action from text when model doesn't use tool."""
+        import re
+        json_re = re.compile(r"\{[^{}]*\}")
+        matches = json_re.findall(text)
         if not matches:
-            raise ValueError("no JSON in reply")
-        
-        data = json.loads(matches[-1])
-        action_id = int(data["id"])
-        
-        if action_id not in available:
-            raise ValueError(f"action {action_id} not in available {available}")
-        
-        if action_id == COMPLEX_ACTION_ID:
-            x = self._clamp_coord(data.get("x"))
-            y = self._clamp_coord(data.get("y"))
-            return ArcAction(id=action_id, x=x, y=y)
-        
-        return ArcAction(id=action_id)
+            return None
+
+        for match in reversed(matches):
+            try:
+                data = json.loads(match)
+                # Try various key names
+                act_id = data.get("id") or data.get("action")
+                if isinstance(act_id, str):
+                    act_id = self.NAME_TO_ID.get(act_id)
+                if act_id in available:
+                    if act_id == COMPLEX_ACTION_ID:
+                        x = self._clamp_coord(data.get("x", data.get("col")))
+                        y = self._clamp_coord(data.get("y", data.get("row")))
+                        return ArcAction(id=act_id, x=x, y=y)
+                    return ArcAction(id=act_id)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return None
+
+    def _data_to_action(self, data: dict[str, Any], available: list[int]) -> ArcAction:
+        """Convert action data dict to ArcAction."""
+        act_id = data.get("id")
+        if act_id not in available:
+            # Try name lookup
+            name = data.get("action", data.get("name"))
+            if name:
+                act_id = self.NAME_TO_ID.get(name)
+            if act_id not in available:
+                return self._fallback(available)
+
+        if act_id == COMPLEX_ACTION_ID:
+            x = self._clamp_coord(data.get("x", data.get("col", GRID_SIZE // 2)))
+            y = self._clamp_coord(data.get("y", data.get("row", GRID_SIZE // 2)))
+            return ArcAction(id=act_id, x=x, y=y)
+        return ArcAction(id=act_id)
 
     @staticmethod
     def _clamp_coord(val: Any) -> int:
@@ -256,33 +683,24 @@ Then output your action as JSON on the final line."""
         except (TypeError, ValueError):
             return GRID_SIZE // 2
 
+    def _evict_if_needed(self) -> None:
+        """Evict old messages to stay within context window."""
+        # Rough token estimate: 1 token per 4 chars
+        total_chars = sum(
+            len(json.dumps(m, default=str)) for m in self._messages
+        )
+        estimated_tokens = total_chars // 4
+
+        if estimated_tokens < self._context_window * 0.8:
+            return
+
+        # Keep system prompt (first message) + last N messages
+        if len(self._messages) <= 4:
+            return
+
+        # Evict oldest user/assistant pairs, keep last 10 messages
+        keep = min(10, len(self._messages) - 2)
+        self._messages = self._messages[:1] + self._messages[-keep:]
+
     def _fallback(self, available: list[int]) -> ArcAction:
         return random_action(available, __import__("random").Random())
-
-    def _complete(self, prompt: str, image_url: str | None = None) -> str:
-        from litellm import completion
-        
-        extra = {}
-        if self._api_base:
-            extra = {"api_base": self._api_base, "api_key": self._api_key}
-        
-        content: Any = prompt
-        if image_url:
-            content = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ]
-        
-        resp = completion(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": content},
-            ],
-            temperature=self._temperature,
-            max_tokens=self._max_tokens,
-            **extra,
-        )
-        msg = resp.choices[0].message
-        self.last_reasoning = getattr(msg, "reasoning_content", "") or ""
-        return msg.content or ""
