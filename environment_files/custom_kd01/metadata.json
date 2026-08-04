@@ -1,0 +1,8 @@
+{
+  "game_id": "custom_kd01-test",
+  "title": "Custom Key-Door 01",
+  "default_fps": 10,
+  "tags": ["keyboard"],
+  "baseline_actions": [1, 2, 3, 4],
+  "local_dir": "environment_files/custom_kd01"
+}

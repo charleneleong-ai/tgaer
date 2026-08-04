@@ -1,0 +1,21 @@
+[sweep] 25 games
+[sweep] scorecard d53ce34a-0a61-4bf5-8cba-ced9c1e565a8
+[sweep] 1/25 cn04-2fe56bfb score=0.0 levels=0 state=GAME_OVER err=None total_levels=0
+[sweep] 2/25 sp80-589a99af score=0.0 levels=0 state=GAME_OVER err=None total_levels=0
+[sweep] 3/25 wa30-ee6fef47 score=0.0 levels=0 state=NOT_FINISHED err=None total_levels=0
+[sweep] 4/25 tn36-ef4dde99 score=0.0 levels=None state=None err=HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6 total_levels=0
+[sweep] 5/25 r11l-495a7899 score=0.0 levels=None state=None err=HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6 total_levels=0
+[sweep] 6/25 vc33-5430563c score=0.0 levels=None state=None err=HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6 total_levels=0
+[sweep] 7/25 dc22-fdcac232 score=0.0 levels=0 state=NOT_FINISHED err=None total_levels=0
+[sweep] 8/25 ls20-9607627b score=1.0 levels=1 state=NOT_FINISHED err=None total_levels=1
+[sweep] 9/25 sb26-7fbdac44 score=0.0 levels=0 state=GAME_OVER err=None total_levels=1
+[sweep] 10/25 su15-1944f8ab score=0.0 levels=0 state=NOT_FINISHED err=None total_levels=1
+[sweep] 11/25 ka59-38d34dbb score=0.0 levels=0 state=NOT_FINISHED err=None total_levels=1
+[sweep] 12/25 lf52-271a04aa score=0.0 levels=0 state=GAME_OVER err=None total_levels=1
+[sweep] 13/25 g50t-5849a774 score=0.0 levels=0 state=NOT_FINISHED err=None total_levels=1
+[sweep] 14/25 ft09-0d8bbf25 score=0.0 levels=None state=None err=HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6 total_levels=1
+[sweep] 15/25 re86-8af5384d score=0.0 levels=0 state=NOT_FINISHED err=None total_levels=1
+[sweep] 16/25 s5i5-18d95033 score=0.0 levels=None state=None err=HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6 total_levels=1
+[sweep] 17/25 lp85-305b61c3 score=0.0 levels=None state=None err=HTTPError: 400 Client Error: Bad Request for url: https://three.arcprize.org/api/cmd/ACTION6 total_levels=1
+[sweep] 18/25 bp35-0a0ad940 score=0.0 levels=0 state=GAME_OVER err=None total_levels=1
+[sweep] 19/25 tu93-0768757b score=0.0 levels=0 state=GAME_OVER err=None total_levels=1

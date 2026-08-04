@@ -1,0 +1,9 @@
+[sweep] 25 games
+[sweep] scorecard abeaa531-2c2b-4d4f-8b27-225641189367
+Traceback (most recent call last):
+  File "/Users/charleneleong/Dropbox/Mac/Documents/gen-ai/orak-hackathon/tgaer/experiments/sweep_roster.py", line 73, in <module>
+    main()
+  File "/Users/charleneleong/Dropbox/Mac/Documents/gen-ai/orak-hackathon/tgaer/experiments/sweep_roster.py", line 40, in main
+    with open(OUT, "w") as fh:
+         ^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/tgaer/experiments/roster_results.jsonl'

@@ -77,7 +77,7 @@ def main() -> None:
                 try:
                     env = ArcAgi3Environment(client, gid, max_actions=80)
                     agent = ArcAgi3ReplAgent(
-                        model="openai/gpt-4o-mini",
+                        model="openai/gpt-5.6",
                         vision=True,
                         max_tool_steps=12,
                         temperature=0.6,

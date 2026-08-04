@@ -234,7 +234,7 @@ class ArcAgi3ReplAgent(Agent):
     def __init__(
         self,
         seed: int = 0,
-        model: str = "openai/gpt-4o-mini",
+        model: str = "openai/gpt-5.6",
         temperature: float = 0.6,
         max_tokens: int = 2048,
         max_tool_steps: int = 12,

@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/Users/charleneleong/Dropbox/Mac/Documents/gen-ai/orak-hackathon/tgaer/experiments/sweep_roster_click.py", line 88, in <module>
+    main()
+  File "/Users/charleneleong/Dropbox/Mac/Documents/gen-ai/orak-hackathon/tgaer/experiments/sweep_roster_click.py", line 28, in main
+    key = os.environ["ARC_API_KEY"]
+          ~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "<frozen os>", line 714, in __getitem__
+KeyError: 'ARC_API_KEY'
