@@ -24,6 +24,7 @@ from tgaer.agents.arc_agi3_repl import ArcAgi3ReplAgent
 from tgaer.envs.arc_agi3.arc_agi3_client import BASE_URL, ArcAgi3Client
 from tgaer.envs.arc_agi3.arc_agi3_env import ArcAgi3Environment
 from tgaer.evaluation.arc_agi3_eval import evaluate_arc_agi3_agent
+from tgaer.evaluation.wandb_logger import WandbRunLogger
 
 OUT = "experiments/roster_results_repl.jsonl"
 
@@ -40,6 +41,7 @@ def main() -> None:
 
     # Wandb setup
     wandb_run = None
+    logger = None
     if os.environ.get("WANDB_ENABLED"):
         import wandb
 
@@ -53,7 +55,13 @@ def main() -> None:
                 "max_steps": 80,
             },
         )
-        print(f"[sweep] wandb: {wandb_run.url}", flush=True)
+        logger = WandbRunLogger(
+            project="tgaer-arc-agi3",
+            run_name=wandb_run.name,
+            log_images=True,
+            image_every=5,
+        )
+        print(f"[sweep] wandb: {logger.url}", flush=True)
 
     client = ArcAgi3Client(api_key=key)
     card = client.open_scorecard()
@@ -73,7 +81,7 @@ def main() -> None:
                         vision=True,
                     )
                     result = evaluate_arc_agi3_agent(
-                        agent, env, {"guards": [], "max_steps": 80}
+                        agent, env, {"guards": [], "max_steps": 80}, logger=logger
                     )
                     row = {"game": gid, "score": result.score, **result.details}
                     total_levels += int(result.details.get("levels_completed", 0) or 0)
