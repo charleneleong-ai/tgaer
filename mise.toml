@@ -321,6 +321,79 @@ echo "Deep clean completed. Run 'mise run uv-install' to reinstall dependencies.
 """
 
 #################################################################################
+# KAGGLE SUBMISSION                                                             #
+#################################################################################
+
+[tasks.kaggle-setup]
+description = "One-time setup for Kaggle submission (clones starter kit, installs deps)"
+run = """
+#!/usr/bin/env zsh
+if [ ! -d "vendor/ARC-AGI-3-Kaggle-Starter" ]; then
+  git clone --depth 1 https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter.git vendor/ARC-AGI-3-Kaggle-Starter
+fi
+cd vendor/ARC-AGI-3-Kaggle-Starter
+python3.12 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install "arc-agi>=0.9.6" "kaggle>=2.2" python-dotenv pandas pyarrow
+if [ ! -d "vendor/ARC-AGI-3-Agents/.git" ]; then
+  mkdir -p vendor && git clone --depth 1 https://github.com/arcprize/ARC-AGI-3-Agents.git vendor/ARC-AGI-3-Agents
+fi
+.venv/bin/python scripts/slim_framework.py
+echo "Setup complete. Copy agent file and run: mise run kaggle-play"
+"""
+
+[tasks.kaggle-copy-agent]
+description = "Copy our REPL agent to the starter kit"
+run = """
+#!/usr/bin/env zsh
+cp experiments/kaggle_submission.py vendor/ARC-AGI-3-Kaggle-Starter/agent/my_agent.py
+echo "Copied kaggle_submission.py -> agent/my_agent.py"
+"""
+
+[tasks.kaggle-play]
+description = "Run REPL agent against games locally via starter kit"
+run = """
+#!/usr/bin/env zsh
+cd vendor/ARC-AGI-3-Kaggle-Starter
+PYTHONPATH=../.. OPENAI_API_KEY=${OPENAI_API_KEY} .venv/bin/python scripts/play_local.py --max-steps 200
+"""
+
+[tasks.kaggle-play-game]
+description = "Run REPL agent against a single game (GAME=ls20)"
+run = """
+#!/usr/bin/env zsh
+cd vendor/ARC-AGI-3-Kaggle-Starter
+PYTHONPATH=../.. OPENAI_API_KEY=${OPENAI_API_KEY} .venv/bin/python scripts/play_local.py --game ${GAME} --max-steps 200
+"""
+
+[tasks.kaggle-submit]
+description = "Build notebook and push to Kaggle"
+run = """
+#!/usr/bin/env zsh
+cd vendor/ARC-AGI-3-Kaggle-Starter
+.venv/bin/python scripts/build_kaggle_notebook.py
+KAGGLE_API_TOKEN=$$(cat ../.kaggle/access_token) .venv/bin/kaggle kernels push -p notebooks/
+echo "Pushed. Check status with: mise run kaggle-status"
+"""
+
+[tasks.kaggle-status]
+description = "Check status of latest Kaggle run"
+run = """
+#!/usr/bin/env zsh
+cd vendor/ARC-AGI-3-Kaggle-Starter
+KERNEL_ID=$$(python3 -c "import json; print(json.load(open('notebooks/kernel-metadata.json'))['id'])")
+KAGGLE_API_TOKEN=$$(cat ../.kaggle/access_token) .venv/bin/kaggle kernels status $$KERNEL_ID
+"""
+
+[tasks.sweep-repl]
+description = "Run REPL sweep across all 25 games (MODEL=openai/gpt-5.6)"
+run = """
+#!/usr/bin/env zsh
+set -a && source .env && set +a
+PYTHONPATH=src uv run python experiments/sweep_roster_repl.py
+"""
+
+#################################################################################
 # DOCUMENTATION                                                                 #
 #################################################################################
 

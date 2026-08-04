@@ -104,3 +104,4 @@ results/
 # autoresearch sweep artifacts (per-tag subdirs under experiments/)
 experiments/*/
 models/
+.kaggle/
