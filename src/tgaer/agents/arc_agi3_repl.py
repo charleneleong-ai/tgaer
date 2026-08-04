@@ -1,22 +1,34 @@
-"""LLM REPL agent for ARC-AGI-3 — Duck-harness-style.
+"""LLM REPL agent for ARC-AGI-3 — Duck-harness-style with enhancements.
 
-Aligned with Tufa Labs' Duck harness approach:
-- OpenAI function calling with a `python` tool (not JSON parsing)
+Key features aligned with Tufa Labs' Duck harness:
+- OpenAI function calling with a `python` tool
 - Segmentation view (connected components) as primary board representation
 - Structured world model carried across turns
 - Context eviction for infinite play
 - Multiple tool calls per turn
-- Raw numeric grid intentionally hidden
 
-Key variables available to the model via the python tool:
-- current_frame: frame view with .ascii, .segmentation, .step, .level
-- history: list of (action, frame) snapshots
-- valid_actions: list of valid action names
-- action(actions): execute real game actions
+Enhancements over base Duck harness:
+- Retained Reasoning: chain-of-thought persisted across turns
+- Compaction: intelligent context summarization when approaching limits
+- Local model support: works with llama.cpp, vLLM, or API
 
 Usage:
+    # API mode (for testing)
     agent = ArcAgi3ReplAgent(model="openai/gpt-4o-mini")
-    action = agent.act(observation)
+
+    # Local vLLM mode (for Kaggle)
+    agent = ArcAgi3ReplAgent(
+        model="Qwen/Qwen3.6-27B-FP8",
+        api_base="http://localhost:8000/v1",
+        api_key="none",
+    )
+
+    # llama.cpp mode (for macOS testing)
+    agent = ArcAgi3ReplAgent(
+        model="qwen3.6-27b",
+        api_base="http://localhost:8080/v1",
+        api_key="none",
+    )
 """
 
 from __future__ import annotations
@@ -50,17 +62,6 @@ ARC_COLOR_LEGEND = ", ".join(f"{v}={k}" for k, v in ARC_COLORS.items() if v != "
 
 
 @dataclass
-class SegmentationNode:
-    """A connected component in the grid."""
-    id: int
-    color: str
-    hash: str
-    pixels: int
-    boundary: list[list[int]]
-    children: list[int] = field(default_factory=list)
-
-
-@dataclass
 class FrameView:
     """Lightweight frame view exposed to the model."""
     ascii: str
@@ -83,7 +84,6 @@ def _segment_grid(grid: list[list[int]]) -> dict[str, Any]:
     rows, cols = arr.shape
     visited = np.zeros((rows, cols), dtype=bool)
     nodes: list[dict[str, Any]] = []
-    node_map = np.full((rows, cols), -1, dtype=np.int32)
 
     node_id = 0
     for r0 in range(rows):
@@ -99,7 +99,6 @@ def _segment_grid(grid: list[list[int]]) -> dict[str, Any]:
             while q:
                 r, c = q.popleft()
                 pixels.append((r, c))
-                node_map[r, c] = node_id
                 is_boundary = False
                 for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
                     r2, c2 = r + dr, c + dc
@@ -118,31 +117,26 @@ def _segment_grid(grid: list[list[int]]) -> dict[str, Any]:
             centroid_c = sum(c for _, c in pixels) / len(pixels)
             obj_hash = f"{color_val}_{len(pixels)}_{centroid_r:.1f}_{centroid_c:.1f}"
 
-            # Simple boundary as corner points
-            boundary = sorted([[r, c] for r, c in boundary_set])[:20]
-
             nodes.append({
                 "id": node_id,
                 "color": ARC_COLORS.get(color_val, f"{color_val}"),
                 "hash": obj_hash,
                 "pixels": len(pixels),
-                "boundary": boundary,
+                "boundary": sorted([[r, c] for r, c in boundary_set])[:20],
                 "children": [],
                 "centroid": [centroid_r, centroid_c],
             })
             node_id += 1
 
-    # Build adjacency list (share an edge)
+    # Build adjacency list
     adjacency: list[list[int]] = []
     for i, n1 in enumerate(nodes):
         for j, n2 in enumerate(nodes):
             if i >= j:
                 continue
-            # Simple bounding box proximity check
-            c1 = n1["centroid"]
-            c2 = n2["centroid"]
+            c1, c2 = n1["centroid"], n2["centroid"]
             dist = abs(c1[0] - c2[0]) + abs(c1[1] - c2[1])
-            if dist < 8:  # rough adjacency threshold
+            if dist < 8:
                 adjacency.append([i, j])
 
     return {"nodes": nodes, "adjacency_list": adjacency}
@@ -150,10 +144,10 @@ def _segment_grid(grid: list[list[int]]) -> dict[str, Any]:
 
 def _grid_to_ascii(grid: list[list[int]]) -> str:
     """Render grid as letter-coded ASCII."""
-    lines = []
-    for row in grid:
-        lines.append("".join(ARC_COLORS.get(v, f"{v:x}") for v in row))
-    return "\n".join(lines)
+    return "\n".join(
+        "".join(ARC_COLORS.get(v, f"{v:x}") for v in row)
+        for row in grid
+    )
 
 
 def _build_frame_view(grid: list[list[int]], step: int, level: int) -> FrameView:
@@ -167,7 +161,7 @@ def _build_frame_view(grid: list[list[int]], step: int, level: int) -> FrameView
     )
 
 
-# System prompt aligned with Duck harness
+# System prompt aligned with Duck harness + Retained Reasoning
 _SYSTEM = """You are a coding agent solving a grid-based puzzle game.
 
 Game overview:
@@ -187,6 +181,16 @@ Visual-game guidance:
 - In many games, a long horizontal or vertical line near an edge is a timer or remaining-steps bar.
 - Re-ground on the newest frame after any score increase or abrupt scene change.
 - `WIN` means the whole game is solved. Mid-run level completion is more likely to appear as a score increase.
+
+Retained Reasoning:
+- You maintain a structured world model across turns.
+- Before acting, revise your world model based on new evidence.
+- Format your reasoning as labeled sections:
+  World model: <what you know about the game>
+  Goal model: <what you think the objective is>
+  Action model: <what actions seem to do>
+  Recent findings: <what changed since last turn>
+  Plan: <what you'll try next>
 
 Runtime variables inside every `python` tool call:
 - `current_frame` exposes `.ascii`, `.step`, `.level`, `.shape`, `.segmentation`.
@@ -218,13 +222,14 @@ Tool session rules:
 
 
 class ArcAgi3ReplAgent(Agent):
-    """LLM REPL agent for ARC-AGI-3 — Duck-harness-style.
+    """LLM REPL agent for ARC-AGI-3 with Retained Reasoning and Compaction.
 
-    Uses OpenAI function calling with a python tool, segmentation view,
-    structured world model, and context eviction for infinite play.
+    Supports:
+    - API mode (OpenAI, Anthropic, etc.)
+    - Local vLLM mode (Qwen 3.6 27B FP8 on Kaggle RTX 6000)
+    - llama.cpp mode (macOS testing)
     """
 
-    # Action name mapping
     ACTION_NAMES = {
         1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT",
         5: "SPACE", 6: "MOUSE", 7: "ACTION7",
@@ -234,12 +239,13 @@ class ArcAgi3ReplAgent(Agent):
     def __init__(
         self,
         seed: int = 0,
-        model: str = "openai/gpt-5.6",
+        model: str = "openai/gpt-4o-mini",
         temperature: float = 0.6,
         max_tokens: int = 2048,
         max_tool_steps: int = 12,
         max_history: int = 30,
         context_window: int = 32768,
+        compaction_threshold: float = 0.75,
         api_base: str | None = None,
         api_key: str | None = None,
         vision: bool = True,
@@ -251,6 +257,7 @@ class ArcAgi3ReplAgent(Agent):
         self._max_tool_steps = max_tool_steps
         self._max_history = max_history
         self._context_window = context_window
+        self._compaction_threshold = compaction_threshold
         self._vision = vision
         self._api_base = api_base
         self._api_key = api_key or ("local" if api_base else None)
@@ -268,6 +275,7 @@ class ArcAgi3ReplAgent(Agent):
             "open_questions": "",
             "current_plan": "",
         }
+        self._reasoning_trace: list[str] = []
 
         # Logging
         self.last_reasoning: str = ""
@@ -286,6 +294,7 @@ class ArcAgi3ReplAgent(Agent):
             self._history.clear()
             self._messages.clear()
             self._world_model = {k: "" for k in self._world_model}
+            self._reasoning_trace.clear()
             self._step = 0
 
         if not frame:
@@ -298,19 +307,14 @@ class ArcAgi3ReplAgent(Agent):
         # Update history
         if self._history:
             last = self._history[-1]
-            self._history[-1] = HistoryEntry(
-                action=last.action,
-                frame=frame_view,
-            )
+            self._history[-1] = HistoryEntry(action=last.action, frame=frame_view)
         self._history.append(HistoryEntry(action="", frame=frame_view))
         if len(self._history) > self._max_history:
             self._history = self._history[-self._max_history:]
 
         # Build user message
         valid_names = [self.ACTION_NAMES.get(a, f"ACTION{a}") for a in available]
-        user_prompt = self._build_user_prompt(
-            frame_view, valid_names, state, available
-        )
+        user_prompt = self._build_user_prompt(frame_view, valid_names, state, available)
 
         # Add user message (with optional image)
         if self._vision:
@@ -325,6 +329,9 @@ class ArcAgi3ReplAgent(Agent):
         else:
             self._messages.append({"role": "user", "content": user_prompt})
 
+        # Compaction check
+        self._maybe_compact()
+
         # Tool-calling loop
         try:
             action = self._tool_loop(available)
@@ -338,7 +345,6 @@ class ArcAgi3ReplAgent(Agent):
         system_msg = _SYSTEM.format(color_legend=ARC_COLOR_LEGEND)
 
         for tool_step in range(self._max_tool_steps):
-            # Build tools
             tools = [self._python_tool_schema()]
 
             # Call LLM
@@ -359,17 +365,20 @@ class ArcAgi3ReplAgent(Agent):
             )
 
             msg = resp.choices[0].message
-            self.last_reasoning = getattr(msg, "reasoning_content", "") or ""
+            reasoning = getattr(msg, "reasoning_content", "") or ""
+            if reasoning:
+                self._reasoning_trace.append(reasoning)
+                if len(self._reasoning_trace) > 20:
+                    self._reasoning_trace = self._reasoning_trace[-20:]
+            self.last_reasoning = reasoning
 
-            # No tool call — model returned text only
+            # No tool call
             if not msg.tool_calls:
-                # Try to parse action from text as fallback
                 content = msg.content or ""
                 self._messages.append({"role": "assistant", "content": content})
                 action = self._parse_action_from_text(content, available)
                 if action:
                     return action
-                # Ask model to use the tool
                 self._messages.append({
                     "role": "user",
                     "content": "Please use the python tool to execute an action. Call action() with a valid action list.",
@@ -386,7 +395,6 @@ class ArcAgi3ReplAgent(Agent):
 
                 code = args.get("code", "")
 
-                # Add assistant message with tool call
                 self._messages.append({
                     "role": "assistant",
                     "content": msg.content or "",
@@ -400,29 +408,69 @@ class ArcAgi3ReplAgent(Agent):
                     }],
                 })
 
-                # Execute code
                 result = self._execute_python(code, available)
 
-                # Add tool response
                 self._messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "content": json.dumps(result, default=str),
                 })
 
-                # Check if an action was executed
                 if result.get("action_executed"):
                     action_data = result.get("action_data", {})
                     return self._data_to_action(action_data, available)
 
-            # Evict old messages if context is getting large
             self._evict_if_needed()
 
-        # Fallback after max tool steps
         return self._fallback(available)
 
+    def _maybe_compact(self) -> None:
+        """Compact context if approaching limit — Retained Reasoning feature."""
+        total_chars = sum(len(json.dumps(m, default=str)) for m in self._messages)
+        estimated_tokens = total_chars // 4
+
+        if estimated_tokens < self._context_window * self._compaction_threshold:
+            return
+
+        # Summarize reasoning trace into world model
+        if self._reasoning_trace:
+            recent_reasoning = "\n".join(self._reasoning_trace[-5:])
+            self._world_model["recent_findings"] = (
+                f"Recent reasoning: {recent_reasoning[:500]}"
+            )
+
+        # Compact messages: keep system + world model + last 6 messages
+        if len(self._messages) <= 4:
+            return
+
+        compacted = self._messages[:1]  # system prompt placeholder
+        world_summary = self._format_world_model()
+        if world_summary:
+            compacted.append({
+                "role": "user",
+                "content": f"[Context compacted. World model summary:]\n{world_summary}",
+            })
+            compacted.append({
+                "role": "assistant",
+                "content": "Understood. I'll continue from where we left off.",
+            })
+
+        # Keep last 6 messages for continuity
+        compacted.extend(self._messages[-6:])
+        self._messages = compacted
+
+    def _format_world_model(self) -> str:
+        """Format world model for compaction summary."""
+        lines = []
+        for key, value in self._world_model.items():
+            if value:
+                lines.append(f"- {key}: {value}")
+        if self._history:
+            lines.append(f"- Step: {self._step}, Level: {self._levels}")
+            lines.append(f"- Actions taken: {len(self._history)}")
+        return "\n".join(lines)
+
     def _python_tool_schema(self) -> dict[str, Any]:
-        """Define the python tool schema."""
         return {
             "type": "function",
             "function": {
@@ -451,20 +499,17 @@ class ArcAgi3ReplAgent(Agent):
 
     def _execute_python(self, code: str, available: list[int]) -> dict[str, Any]:
         """Execute Python code in a sandboxed environment."""
-        # Build the execution environment
         last_frame = self._history[-1].frame if self._history else None
         prev_frame = self._history[-2].frame if len(self._history) > 1 else None
 
-        # Build history view
         history_view = []
-        for entry in self._history[:-1]:  # exclude current
+        for entry in self._history[:-1]:
             if entry.action:
                 history_view.append(type("H", (), {
                     "action": entry.action,
                     "frame": entry.frame,
                 })())
 
-        # Build action result
         last_result = {
             "board_changed": True,
             "level_completed": False,
@@ -474,17 +519,13 @@ class ArcAgi3ReplAgent(Agent):
             "valid_actions": [self.ACTION_NAMES.get(a, f"ACTION{a}") for a in available],
         }
 
-        # Action function that captures the call
         action_result = {"executed": False, "action_data": {}}
 
         def action_fn(actions: list) -> dict:
-            """Execute actions and return result."""
             if not actions:
                 return {"error": "no actions provided"}
-
             act = actions[0] if isinstance(actions, list) else actions
             if isinstance(act, str):
-                # Simple action name
                 act_id = self.NAME_TO_ID.get(act)
                 if act_id is None:
                     return {"error": f"unknown action: {act}"}
@@ -493,13 +534,11 @@ class ArcAgi3ReplAgent(Agent):
             elif isinstance(act, dict):
                 act_name = act.get("action", act.get("id"))
                 if act_name == "MOUSE":
-                    row = act.get("row", 32)
-                    col = act.get("col", 32)
                     action_result["executed"] = True
                     action_result["action_data"] = {
                         "id": COMPLEX_ACTION_ID,
-                        "x": col,
-                        "y": row,
+                        "x": act.get("col", 32),
+                        "y": act.get("row", 32),
                     }
                 else:
                     act_id = self.NAME_TO_ID.get(act_name)
@@ -507,10 +546,8 @@ class ArcAgi3ReplAgent(Agent):
                         return {"error": f"unknown action: {act_name}"}
                     action_result["executed"] = True
                     action_result["action_data"] = {"id": act_id}
-
             return {"action_executed": True, **last_result}
 
-        # Build namespace with game state
         import builtins
         import io
 
@@ -528,7 +565,6 @@ class ArcAgi3ReplAgent(Agent):
             "result": None,
         }
 
-        # Capture print output
         stdout_lines = []
         original_print = namespace["__builtins__"].get("print")
 
@@ -549,12 +585,9 @@ class ArcAgi3ReplAgent(Agent):
                 "traceback": traceback.format_exc(),
             }
 
-        result_value = namespace.get("result")
-        output = "\n".join(stdout_lines)
-
         return {
-            "stdout": output,
-            "result": result_value,
+            "stdout": "\n".join(stdout_lines),
+            "result": namespace.get("result"),
             "action_executed": action_result["executed"],
             "action_data": action_result["action_data"],
             **last_result,
@@ -567,7 +600,6 @@ class ArcAgi3ReplAgent(Agent):
         state: str,
         available: list[int],
     ) -> str:
-        """Build the user prompt for the current turn."""
         lines = []
 
         # Previous step summary
@@ -581,71 +613,45 @@ class ArcAgi3ReplAgent(Agent):
         else:
             lines.append("No previous sequence has been executed yet.")
 
-        # State
         lines.append(f"Current state: step {self._step}, level {self._levels}.")
         lines.append(f"Valid actions right now: {', '.join(valid_names)}.")
-
-        # Tool description
         lines.append(
             "Only tool: `python`. It receives `current_frame`, `previous_frame`, "
             "`history`, `valid_actions`, and `action(actions)`."
-        )
-        lines.append(
-            "Only letter-coded board views and lightweight metadata are exposed; "
-            "raw numeric color IDs are not available."
         )
         lines.append(
             "Use `current_frame.segmentation` as the primary view; "
             "use `current_frame.ascii` only for a small specific region."
         )
 
-        # World model
-        wm_lines = [
-            f"- World model: {self._world_model['world_model']}" if self._world_model['world_model'] else None,
-            f"- Goal model: {self._world_model['goal_model']}" if self._world_model['goal_model'] else None,
-            f"- Action model: {self._world_model['action_model']}" if self._world_model['action_model'] else None,
-            f"- Recent findings: {self._world_model['recent_findings']}" if self._world_model['recent_findings'] else None,
-            f"- Plan: {self._world_model['current_plan']}" if self._world_model['current_plan'] else None,
-        ]
-        wm_lines = [l for l in wm_lines if l]
-        if wm_lines:
+        # World model with Retained Reasoning
+        wm = self._format_world_model()
+        if wm:
             lines.append("Working world model from previous turn:")
-            lines.extend(wm_lines)
+            lines.append(wm)
             lines.append("Revise based on new evidence.")
 
-        # Instructions - MUST call action()
-        if self._step == 1:
-            lines.append(
-                "IMPORTANT: You MUST call `action(actions)` in your Python code to take an action. "
-                "Example: `action(['RIGHT'])` or `action([{{'action': 'MOUSE', 'row': 32, 'col': 32}}])`. "
-                "Do NOT just analyze without acting. Always end your code with an action call."
-            )
-        else:
-            lines.append(
-                "IMPORTANT: You MUST call `action(actions)` in your Python code to take an action. "
-                "Example: `action(['LEFT'])` or `action([{{'action': 'MOUSE', 'row': 32, 'col': 32}}])`. "
-                "Do NOT just analyze without acting. Always end your code with an action call."
-            )
-
+        # Retained Reasoning prompt
+        lines.append(
+            "IMPORTANT: You MUST call `action(actions)` in your Python code. "
+            "Example: `action(['RIGHT'])` or `action([{'action': 'MOUSE', 'row': 32, 'col': 32}])`. "
+            "Always end your code with an action call."
+        )
         lines.append(
             "You may call `action(actions)` more than once in one Python snippet. "
-            "Batch multiple actions for efficiency: `action(['RIGHT', 'RIGHT', 'UP'])`."
+            "Batch multiple actions for efficiency."
         )
 
         return "\n".join(lines)
 
     def _parse_action_from_text(self, text: str, available: list[int]) -> ArcAction | None:
-        """Fallback: parse action from text when model doesn't use tool."""
-        import re
         json_re = re.compile(r"\{[^{}]*\}")
         matches = json_re.findall(text)
         if not matches:
             return None
-
         for match in reversed(matches):
             try:
                 data = json.loads(match)
-                # Try various key names
                 act_id = data.get("id") or data.get("action")
                 if isinstance(act_id, str):
                     act_id = self.NAME_TO_ID.get(act_id)
@@ -660,16 +666,13 @@ class ArcAgi3ReplAgent(Agent):
         return None
 
     def _data_to_action(self, data: dict[str, Any], available: list[int]) -> ArcAction:
-        """Convert action data dict to ArcAction."""
         act_id = data.get("id")
         if act_id not in available:
-            # Try name lookup
             name = data.get("action", data.get("name"))
             if name:
                 act_id = self.NAME_TO_ID.get(name)
             if act_id not in available:
                 return self._fallback(available)
-
         if act_id == COMPLEX_ACTION_ID:
             x = self._clamp_coord(data.get("x", data.get("col", GRID_SIZE // 2)))
             y = self._clamp_coord(data.get("y", data.get("row", GRID_SIZE // 2)))
@@ -684,21 +687,12 @@ class ArcAgi3ReplAgent(Agent):
             return GRID_SIZE // 2
 
     def _evict_if_needed(self) -> None:
-        """Evict old messages to stay within context window."""
-        # Rough token estimate: 1 token per 4 chars
-        total_chars = sum(
-            len(json.dumps(m, default=str)) for m in self._messages
-        )
+        total_chars = sum(len(json.dumps(m, default=str)) for m in self._messages)
         estimated_tokens = total_chars // 4
-
         if estimated_tokens < self._context_window * 0.8:
             return
-
-        # Keep system prompt (first message) + last N messages
         if len(self._messages) <= 4:
             return
-
-        # Evict oldest user/assistant pairs, keep last 10 messages
         keep = min(10, len(self._messages) - 2)
         self._messages = self._messages[:1] + self._messages[-keep:]
 
