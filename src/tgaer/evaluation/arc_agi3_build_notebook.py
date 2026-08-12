@@ -35,8 +35,9 @@ PORTED_MODULES = (
 # The notebook and its Kaggle metadata stay in the starter checkout: they are
 # pushed by the Kaggle CLI from that directory, which also holds the offline
 # wheelhouse and model snapshot the kernel needs.
-ROOT = Path(os.environ.get("ARC_STARTER_ROOT",
-                           REPO / "vendor" / "ARC-AGI-3-Kaggle-Starter"))
+ROOT = Path(
+    os.environ.get("ARC_STARTER_ROOT", REPO / "vendor" / "ARC-AGI-3-Kaggle-Starter")
+)
 NOTEBOOK_PATH = ROOT / "notebooks" / "submission.ipynb"
 METADATA_PATH = ROOT / "notebooks" / "kernel-metadata.json"
 
@@ -61,11 +62,11 @@ BACKEND = os.environ.get("ARC_BACKEND", "vllm")
 # Values accepted by the API (kagglesdk kernels_api_service.py). Exact casing
 # matters: "nvidiaTeslaP100" is silently not a valid machine shape.
 ACCELERATORS = {
-    "cpu":     {"machine_shape": "None",             "gpu": False},
-    "t4":      {"machine_shape": "NvidiaTeslaT4",    "gpu": True},
-    "p100":    {"machine_shape": "NvidiaTeslaP100",  "gpu": True},
-    "a100":    {"machine_shape": "NvidiaTeslaA100",  "gpu": True},
-    "l4":      {"machine_shape": "NvidiaL4",         "gpu": True},
+    "cpu": {"machine_shape": "None", "gpu": False},
+    "t4": {"machine_shape": "NvidiaTeslaT4", "gpu": True},
+    "p100": {"machine_shape": "NvidiaTeslaP100", "gpu": True},
+    "a100": {"machine_shape": "NvidiaTeslaA100", "gpu": True},
+    "l4": {"machine_shape": "NvidiaL4", "gpu": True},
     "rtx6000": {"machine_shape": "NvidiaRtxPro6000", "gpu": True},
 }
 
@@ -184,9 +185,7 @@ def build() -> dict:
     )
 
     # Cell3: Write agent code
-    write_agent_cell = code_cell(
-        "%%writefile /tmp/my_agent.py\n" + agent_body
-    )
+    write_agent_cell = code_cell("%%writefile /tmp/my_agent.py\n" + agent_body)
 
     # Cell3b: stage the ported tgaer modules as a real package. %%writefile
     # cannot create directories and refuses to write into one that does not
@@ -194,7 +193,8 @@ def build() -> dict:
     # module bodies follow one magic cell each — the magic copies the rest of
     # the cell verbatim, so no escaping of docstrings or quotes is involved.
     pkg_dirs = sorted({str(Path(m).parent) for m in PORTED_MODULES})
-    stage_pkg_cell = code_cell(dedent(f"""\
+    stage_pkg_cell = code_cell(
+        dedent(f"""\
         import sys
         from pathlib import Path
 
@@ -211,10 +211,12 @@ def build() -> dict:
         if str(PKG) not in sys.path:
             sys.path.insert(0, str(PKG))
         print(f"[pkg] staged {{PKG}} on sys.path")
-        """))
+        """)
+    )
     module_cells = [
-        code_cell(f"%%writefile {KERNEL_PKG}/{rel}\n"
-                  + (REPO / "src" / rel).read_text())
+        code_cell(
+            f"%%writefile {KERNEL_PKG}/{rel}\n" + (REPO / "src" / rel).read_text()
+        )
         for rel in PORTED_MODULES
     ]
 
@@ -774,8 +776,7 @@ def build() -> dict:
 
     if ACCELERATOR not in ACCELERATORS:
         raise SystemExit(
-            f"Unknown ACCELERATOR={ACCELERATOR!r}. Pick one of: "
-            f"{sorted(ACCELERATORS)}"
+            f"Unknown ACCELERATOR={ACCELERATOR!r}. Pick one of: {sorted(ACCELERATORS)}"
         )
     accel = ACCELERATORS[ACCELERATOR]
 
@@ -810,9 +811,16 @@ def build() -> dict:
             ),
             stage_pkg_cell,
             *module_cells,
-            *([vllm_install_cell, write_agent_cell, vllm_serve_cell, vllm_preflight_cell]
-              if BACKEND == "vllm"
-              else [install_cell, load_model_cell, write_agent_cell, preflight_cell]),
+            *(
+                [
+                    vllm_install_cell,
+                    write_agent_cell,
+                    vllm_serve_cell,
+                    vllm_preflight_cell,
+                ]
+                if BACKEND == "vllm"
+                else [install_cell, load_model_cell, write_agent_cell, preflight_cell]
+            ),
             mock_submission_cell,
             run_cell,
             dummy_submission_cell,
@@ -824,8 +832,10 @@ def build() -> dict:
 def main() -> None:
     NOTEBOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     NOTEBOOK_PATH.write_text(json.dumps(build(), indent=1))
-    print(f"[arc_agi3_build_notebook] Wrote {NOTEBOOK_PATH.relative_to(ROOT)}  "
-          f"(backend: {BACKEND}, accelerator: {ACCELERATOR})")
+    print(
+        f"[arc_agi3_build_notebook] Wrote {NOTEBOOK_PATH.relative_to(ROOT)}  "
+        f"(backend: {BACKEND}, accelerator: {ACCELERATOR})"
+    )
 
     # Sync metadata. machine_shape is the field the CLI actually reads; keep
     # enable_gpu consistent even though it is deprecated and ignored.

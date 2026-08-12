@@ -4,6 +4,7 @@ The harness exists to make agent comparisons trustworthy, so its two pieces of
 real logic — the llama-cpp overflow rule and the ollama→OpenAI response shim —
 need to be right, or every measurement taken with it is suspect.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -28,7 +29,9 @@ class FakeResponse:
         return self._payload
 
 
-def stub_post(monkeypatch: pytest.MonkeyPatch, be: sl.OllamaBackend, payload: dict[str, Any]) -> list[dict[str, Any]]:
+def stub_post(
+    monkeypatch: pytest.MonkeyPatch, be: sl.OllamaBackend, payload: dict[str, Any]
+) -> list[dict[str, Any]]:
     sent: list[dict[str, Any]] = []
 
     def fake_post(url: str, json: dict[str, Any]) -> FakeResponse:  # noqa: A002
@@ -45,9 +48,13 @@ class TestOverflowRule:
     @pytest.mark.parametrize(
         ("used", "raises"), [(4095, False), (4096, True), (9000, True)]
     )
-    def test_boundary(self, monkeypatch: pytest.MonkeyPatch, used: int, raises: bool) -> None:
+    def test_boundary(
+        self, monkeypatch: pytest.MonkeyPatch, used: int, raises: bool
+    ) -> None:
         be = backend(4096)
-        stub_post(monkeypatch, be, {"prompt_eval_count": used, "message": {"content": "hi"}})
+        stub_post(
+            monkeypatch, be, {"prompt_eval_count": used, "message": {"content": "hi"}}
+        )
         if raises:
             with pytest.raises(sl.ContextOverflow):
                 be.create_chat_completion([{"role": "user", "content": "x"}])
@@ -57,7 +64,9 @@ class TestOverflowRule:
         assert be.overflows == int(raises)
         assert be.calls == 1
 
-    def test_missing_token_count_fails_loudly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_token_count_fails_loudly(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Defaulting to 0 here would silently report 'no overflows' forever."""
         be = backend()
         stub_post(monkeypatch, be, {"message": {"content": "hi"}})
@@ -69,7 +78,9 @@ class TestOverflowRule:
     ) -> None:
         """ollama truncates to num_ctx; asking for exactly n_ctx would hide overflows."""
         be = backend(4096)
-        sent = stub_post(monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}})
+        sent = stub_post(
+            monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}}
+        )
         be.create_chat_completion([{"role": "user", "content": "x"}])
         assert sent[0]["options"]["num_ctx"] > be.n_ctx
 
@@ -77,37 +88,65 @@ class TestOverflowRule:
 class TestResponseShim:
     """The agent parses llama-cpp's shape; ollama's differs in two ways."""
 
-    def test_tool_arguments_become_a_json_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_tool_arguments_become_a_json_string(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """ollama returns a dict; the agent calls json.loads on it."""
         be = backend()
-        stub_post(monkeypatch, be, {
-            "prompt_eval_count": 10,
-            "message": {"tool_calls": [{"function": {"name": "MOUSE", "arguments": {"x": 3, "y": 4}}}]},
-        })
+        stub_post(
+            monkeypatch,
+            be,
+            {
+                "prompt_eval_count": 10,
+                "message": {
+                    "tool_calls": [
+                        {"function": {"name": "MOUSE", "arguments": {"x": 3, "y": 4}}}
+                    ]
+                },
+            },
+        )
         out = be.create_chat_completion([{"role": "user", "content": "x"}])
         call = out["choices"][0]["message"]["tool_calls"][0]
         assert isinstance(call["function"]["arguments"], str)
         import json
+
         assert json.loads(call["function"]["arguments"]) == {"x": 3, "y": 4}
 
-    def test_plain_content_has_no_tool_calls_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_plain_content_has_no_tool_calls_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         be = backend()
-        stub_post(monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "action(['UP'])"}})
-        message = be.create_chat_completion([{"role": "user", "content": "x"}])["choices"][0]["message"]
+        stub_post(
+            monkeypatch,
+            be,
+            {"prompt_eval_count": 10, "message": {"content": "action(['UP'])"}},
+        )
+        message = be.create_chat_completion([{"role": "user", "content": "x"}])[
+            "choices"
+        ][0]["message"]
         assert message["content"] == "action(['UP'])"
         assert "tool_calls" not in message
 
     def test_thinking_is_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """qwen3 reasons by default, which would blow past max_tokens every turn."""
         be = backend()
-        sent = stub_post(monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}})
+        sent = stub_post(
+            monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}}
+        )
         be.create_chat_completion([{"role": "user", "content": "x"}])
         assert sent[0]["think"] is False
 
 
 class TestRender:
-    ROWS = [{"game": "sk48", "levels_completed": 0, "actions": 201,
-             "state": "GameState.NOT_FINISHED", "seconds": 1.0}]
+    ROWS = [
+        {
+            "game": "sk48",
+            "levels_completed": 0,
+            "actions": 201,
+            "state": "GameState.NOT_FINISHED",
+            "seconds": 1.0,
+        }
+    ]
 
     def test_a_backend_without_token_stats_does_not_kill_the_run(self) -> None:
         """The HTTP backend counts no tokens. Crashing on the decorative stat
@@ -164,9 +203,10 @@ class TestFeatureAssertions:
         assert inert == ["image_sent"]
 
     def test_silent_when_every_enabled_feature_fired(self) -> None:
-        assert sl.inert_features(
-            self.Agent, {"image_sent": 900, "probe": 5, "exploit": 3}
-        ) == []
+        assert (
+            sl.inert_features(self.Agent, {"image_sent": 900, "probe": 5, "exploit": 3})
+            == []
+        )
 
     def test_disabled_features_are_not_required_to_fire(self) -> None:
         """REPL_STEPS is 0 here, so repl_call being absent is correct."""

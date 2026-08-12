@@ -9,6 +9,7 @@ Usage:
     2. Run: make play-local
     3. Run: make submit
 """
+
 from __future__ import annotations
 
 import base64
@@ -52,9 +53,22 @@ RUN_BUDGET_S = float(os.environ.get("ARC_RUN_BUDGET_S", str(7.5 * 3600)))
 _RUN_DEADLINE = time.monotonic() + RUN_BUDGET_S
 
 ARC_SYMBOLS: dict[int, str] = {
-    0: ".", 1: "A", 2: "B", 3: "C", 4: "D",
-    5: "E", 6: "F", 7: "G", 8: "H", 9: "I",
-    10: "J", 11: "K", 12: "L", 13: "M", 14: "N", 15: "O",
+    0: ".",
+    1: "A",
+    2: "B",
+    3: "C",
+    4: "D",
+    5: "E",
+    6: "F",
+    7: "G",
+    8: "H",
+    9: "I",
+    10: "J",
+    11: "K",
+    12: "L",
+    13: "M",
+    14: "N",
+    15: "O",
 }
 ARC_LEGEND = "'.'=0 (empty), A-O=values 1-15; hex letter if >15"
 
@@ -62,8 +76,13 @@ ARC_LEGEND = "'.'=0 (empty), A-O=values 1-15; hex letter if >15"
 # NOT_PLAYED, so the very first action MUST be a reset or the model plays blind.
 ACTION_NAMES: dict[int, str] = {
     0: "RESET",
-    1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT",
-    5: "SPACE", 6: "MOUSE", 7: "ACTION7",
+    1: "UP",
+    2: "DOWN",
+    3: "LEFT",
+    4: "RIGHT",
+    5: "SPACE",
+    6: "MOUSE",
+    7: "ACTION7",
 }
 NAME_TO_ID: dict[str, int] = {v: k for k, v in ACTION_NAMES.items()}
 
@@ -153,8 +172,7 @@ TOOL_SYSTEM = (
 RAW_TEXT_SYSTEM = (
     "You solve grid puzzles by choosing actions. "
     "ALWAYS output EXACTLY ONE line starting with action([...]). "
-    "Nothing else. No explanation. Just the action call."
-    + NO_THINK
+    "Nothing else. No explanation. Just the action call." + NO_THINK
 )
 
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
@@ -188,9 +206,14 @@ def parse_text_tool_calls(text: str) -> list[dict[str, Any]]:
         except ValueError:
             continue
         if name := parsed.get("name"):
-            calls.append({
-                "function": {"name": name, "arguments": json.dumps(parsed.get("arguments") or {})}
-            })
+            calls.append(
+                {
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(parsed.get("arguments") or {}),
+                    }
+                }
+            )
     return calls
 
 
@@ -203,10 +226,22 @@ Grid = tuple[tuple[int, ...], ...]
 # The ARC palette. Distinct hues so adjacent values stay separable once the
 # board is scaled down to a few hundred pixels.
 ARC_COLOURS: dict[int, tuple[int, int, int]] = {
-    0: (0, 0, 0), 1: (0, 116, 217), 2: (255, 65, 54), 3: (46, 204, 64),
-    4: (255, 220, 0), 5: (170, 170, 170), 6: (240, 18, 190), 7: (255, 133, 27),
-    8: (127, 219, 255), 9: (135, 12, 37), 10: (100, 65, 165), 11: (0, 128, 128),
-    12: (255, 255, 255), 13: (60, 60, 60), 14: (200, 120, 60), 15: (80, 200, 180),
+    0: (0, 0, 0),
+    1: (0, 116, 217),
+    2: (255, 65, 54),
+    3: (46, 204, 64),
+    4: (255, 220, 0),
+    5: (170, 170, 170),
+    6: (240, 18, 190),
+    7: (255, 133, 27),
+    8: (127, 219, 255),
+    9: (135, 12, 37),
+    10: (100, 65, 165),
+    11: (0, 128, 128),
+    12: (255, 255, 255),
+    13: (60, 60, 60),
+    14: (200, 120, 60),
+    15: (80, 200, 180),
 }
 
 
@@ -215,7 +250,9 @@ ARC_COLOURS: dict[int, tuple[int, int, int]] = {
 _RENDER_FAILURE: str = ""
 
 
-def render_board_png(grid: Grid, cell_px: int = 8, gridline_every: int = 8) -> bytes | None:
+def render_board_png(
+    grid: Grid, cell_px: int = 8, gridline_every: int = 8
+) -> bytes | None:
     """Draw the board as a PNG, or None if PIL is unavailable.
 
     The served model is `Qwen3_5ForConditionalGeneration` — it has a vision
@@ -245,11 +282,9 @@ def render_board_png(grid: Grid, cell_px: int = 8, gridline_every: int = 8) -> b
 
     # One pixel per cell, then nearest-neighbour upscale: no drawing primitives.
     image = Image.new("RGB", (cols, rows))
-    image.putdata([
-        ARC_COLOURS.get(value, (255, 0, 255))
-        for row in grid
-        for value in row
-    ])
+    image.putdata(
+        [ARC_COLOURS.get(value, (255, 0, 255)) for row in grid for value in row]
+    )
     image = image.resize((cols * cell_px, rows * cell_px), Image.NEAREST)
 
     # Gridlines every `gridline_every` cells give the model something to count
@@ -306,30 +341,44 @@ def segment(grid: Grid, background: int = 0) -> dict[str, Any]:
                 cells.append((cr, cc))
                 for nr, nc in ((cr - 1, cc), (cr + 1, cc), (cr, cc - 1), (cr, cc + 1)):
                     if (
-                        0 <= nr < rows and 0 <= nc < len(grid[nr])
-                        and (nr, nc) not in node_at and grid[nr][nc] == colour
+                        0 <= nr < rows
+                        and 0 <= nc < len(grid[nr])
+                        and (nr, nc) not in node_at
+                        and grid[nr][nc] == colour
                     ):
                         node_at[(nr, nc)] = len(nodes)
                         stack.append((nr, nc))
             min_r = min(cr for cr, _ in cells)
             min_c = min(cc for _, cc in cells)
             shape = frozenset((cr - min_r, cc - min_c) for cr, cc in cells)
-            nodes.append({
-                "id": len(nodes),
-                "colour": ARC_SYMBOLS.get(colour, str(colour)),
-                "pixels": len(cells),
-                "bbox": [min_r, min_c, max(cr for cr, _ in cells), max(cc for _, cc in cells)],
-                "hash": f"{ARC_SYMBOLS.get(colour, colour)}{abs(hash(shape)) % 100000:05d}",
-                "cells": sorted(cells),
-                "children": [],
-            })
+            nodes.append(
+                {
+                    "id": len(nodes),
+                    "colour": ARC_SYMBOLS.get(colour, str(colour)),
+                    "pixels": len(cells),
+                    "bbox": [
+                        min_r,
+                        min_c,
+                        max(cr for cr, _ in cells),
+                        max(cc for _, cc in cells),
+                    ],
+                    "hash": f"{ARC_SYMBOLS.get(colour, colour)}{abs(hash(shape)) % 100000:05d}",
+                    "cells": sorted(cells),
+                    "children": [],
+                }
+            )
 
-    adjacency = sorted({
-        (min(node_at[(r, c)], node_at[(nr, nc)]), max(node_at[(r, c)], node_at[(nr, nc)]))
-        for (r, c), _ in node_at.items()
-        for nr, nc in ((r + 1, c), (r, c + 1))
-        if (nr, nc) in node_at and node_at[(nr, nc)] != node_at[(r, c)]
-    })
+    adjacency = sorted(
+        {
+            (
+                min(node_at[(r, c)], node_at[(nr, nc)]),
+                max(node_at[(r, c)], node_at[(nr, nc)]),
+            )
+            for (r, c), _ in node_at.items()
+            for nr, nc in ((r + 1, c), (r, c + 1))
+            if (nr, nc) in node_at and node_at[(nr, nc)] != node_at[(r, c)]
+        }
+    )
 
     # Containment: every cell of the inner object's bounding box lies strictly
     # inside the outer object's box, and the outer object encloses it.
@@ -364,10 +413,40 @@ def describe_segmentation(seg: dict[str, Any], limit: int = 24) -> str:
 SANDBOX_BUILTINS = {
     name: getattr(builtins, name)
     for name in (
-        "abs", "all", "any", "bool", "dict", "dir", "divmod", "enumerate", "filter",
-        "float", "frozenset", "getattr", "hasattr", "int", "isinstance", "len", "list",
-        "map", "max", "min", "print", "range", "repr", "reversed", "round", "set",
-        "setattr", "slice", "sorted", "str", "sum", "tuple", "type", "zip",
+        "abs",
+        "all",
+        "any",
+        "bool",
+        "dict",
+        "dir",
+        "divmod",
+        "enumerate",
+        "filter",
+        "float",
+        "frozenset",
+        "getattr",
+        "hasattr",
+        "int",
+        "isinstance",
+        "len",
+        "list",
+        "map",
+        "max",
+        "min",
+        "print",
+        "range",
+        "repr",
+        "reversed",
+        "round",
+        "set",
+        "setattr",
+        "slice",
+        "sorted",
+        "str",
+        "sum",
+        "tuple",
+        "type",
+        "zip",
     )
 }
 
@@ -445,7 +524,9 @@ class ActionModel:
         """Families ordered cheapest first, so exploring cannot lose the game."""
         return sorted(families, key=self.costly)
 
-    def record(self, family: str, changed_gameplay: bool, touched_hud: bool = False) -> None:
+    def record(
+        self, family: str, changed_gameplay: bool, touched_hud: bool = False
+    ) -> None:
         self.tried[family] = self.tried.get(family, 0) + 1
         if touched_hud:
             self.spent[family] = self.spent.get(family, 0) + 1
@@ -496,8 +577,9 @@ class ClickSearch:
     BACKGROUND_SHARE = 0.10
 
     @staticmethod
-    def targets(segmentation: dict[str, Any], board_cells: int = GRID_SIZE * GRID_SIZE
-                ) -> list[tuple[int, int]]:
+    def targets(
+        segmentation: dict[str, Any], board_cells: int = GRID_SIZE * GRID_SIZE
+    ) -> list[tuple[int, int]]:
         """One representative cell per object, most clickable first.
 
         Largest-first was wrong, and measurably so: clicking the centre of each
@@ -508,8 +590,10 @@ class ClickSearch:
         pieces ahead of single-pixel noise (bp35 segments into 190 objects).
         """
         candidates = [
-            node for node in segmentation["nodes"]
-            if node["cells"] and node["pixels"] <= board_cells * ClickSearch.BACKGROUND_SHARE
+            node
+            for node in segmentation["nodes"]
+            if node["cells"]
+            and node["pixels"] <= board_cells * ClickSearch.BACKGROUND_SHARE
         ]
         return [
             node["cells"][len(node["cells"]) // 2]
@@ -566,15 +650,19 @@ class ObjectTracker:
     @staticmethod
     def centroid(node: dict[str, Any]) -> tuple[float, float]:
         cells = node["cells"]
-        return (sum(r for r, _ in cells) / len(cells), sum(c for _, c in cells) / len(cells))
+        return (
+            sum(r for r, _ in cells) / len(cells),
+            sum(c for _, c in cells) / len(cells),
+        )
 
     # Scenery reshapes constantly as pieces pass over it, so its hash changes
     # and it reads as vanished-then-appeared every turn. Track only pieces,
     # sized against the actual board rather than an assumed 64x64.
     SCENERY_SHARE = 0.10
 
-    def update(self, segmentation: dict[str, Any],
-               board_cells: int = GRID_SIZE * GRID_SIZE) -> list[str]:
+    def update(
+        self, segmentation: dict[str, Any], board_cells: int = GRID_SIZE * GRID_SIZE
+    ) -> list[str]:
         """Match this frame against the last and describe what changed."""
         limit = board_cells * self.SCENERY_SHARE
         current = [n for n in segmentation["nodes"] if n["pixels"] <= limit]
@@ -589,17 +677,24 @@ class ObjectTracker:
                 events.append(f"{old['colour']} object ({old['pixels']}px) vanished")
                 continue
             old_at = self.centroid(old)
-            new = min(same_shape, key=lambda n: abs(self.centroid(n)[0] - old_at[0])
-                      + abs(self.centroid(n)[1] - old_at[1]))
+            new = min(
+                same_shape,
+                key=lambda n: (
+                    abs(self.centroid(n)[0] - old_at[0])
+                    + abs(self.centroid(n)[1] - old_at[1])
+                ),
+            )
             unmatched.remove(new)
             self.matched = True
             dr = round(self.centroid(new)[0] - old_at[0])
             dc = round(self.centroid(new)[1] - old_at[1])
             if dr or dc:
                 self.last_moves.append((dr, dc))
-                where = f"{'down' if dr > 0 else 'up' if dr else ''}" \
-                        f"{'' if not (dr and dc) else ' and '}" \
-                        f"{'right' if dc > 0 else 'left' if dc else ''}"
+                where = (
+                    f"{'down' if dr > 0 else 'up' if dr else ''}"
+                    f"{'' if not (dr and dc) else ' and '}"
+                    f"{'right' if dc > 0 else 'left' if dc else ''}"
+                )
                 events.append(
                     f"{new['colour']} object ({new['pixels']}px) moved {where} "
                     f"by ({abs(dr)},{abs(dc)})"
@@ -709,7 +804,7 @@ class ForwardModel:
         seen = self.effects.setdefault(action, {})
         if sum(seen.values()) >= self.WINDOW:
             for vector in list(seen):
-                seen[vector] //= 2       # halve the past so recent evidence wins
+                seen[vector] //= 2  # halve the past so recent evidence wins
                 if not seen[vector]:
                     del seen[vector]
         seen[actual] = seen.get(actual, 0) + 1
@@ -719,8 +814,13 @@ class ForwardModel:
         """Share of predictions that matched. 0.0 when nothing was predicted."""
         return self.correct / self.predicted if self.predicted else 0.0
 
-    def step(self, cells: dict[str, frozenset[tuple[int, int]]], action: str,
-             rows: int, cols: int) -> dict[str, frozenset[tuple[int, int]]] | None:
+    def step(
+        self,
+        cells: dict[str, frozenset[tuple[int, int]]],
+        action: str,
+        rows: int,
+        cols: int,
+    ) -> dict[str, frozenset[tuple[int, int]]] | None:
         """Where the pieces sit after one action, or None if unpredictable.
 
         Summing translations cannot express a wall: told UP moves a piece -6,
@@ -889,7 +989,8 @@ class LevelMemory:
         return {
             cell
             for cell, count in self._change_counts.items()
-            if count >= threshold and len(self._actions_seen[cell]) >= self.HUD_MIN_ACTIONS
+            if count >= threshold
+            and len(self._actions_seen[cell]) >= self.HUD_MIN_ACTIONS
         }
 
     @property
@@ -912,13 +1013,17 @@ class LevelMemory:
         rows_n, cols_n = self._dims
         threshold = self.transitions * self.HUD_CHANGE_RATIO
         rows = {
-            r for r, count in self._row_counts.items()
-            if count >= threshold and r in (0, rows_n - 1)
+            r
+            for r, count in self._row_counts.items()
+            if count >= threshold
+            and r in (0, rows_n - 1)
             and len(self._row_cells.get(r, ())) >= self.HUD_MIN_SWEEP
         }
         cols = {
-            c for c, count in self._col_counts.items()
-            if count >= threshold and c in (0, cols_n - 1)
+            c
+            for c, count in self._col_counts.items()
+            if count >= threshold
+            and c in (0, cols_n - 1)
             and len(self._col_cells.get(c, ())) >= self.HUD_MIN_SWEEP
         }
         return rows, cols
@@ -960,9 +1065,11 @@ class LevelMemory:
         hud = self.hud_cells
         hud_rows, hud_cols = self.hud_lines
         gameplay = [
-            cell for cell in changed
+            cell
+            for cell in changed
             if (cell[0], cell[1]) not in hud
-            and cell[0] not in hud_rows and cell[1] not in hud_cols
+            and cell[0] not in hud_rows
+            and cell[1] not in hud_cols
         ]
         # The meter moving is what a spent budget looks like from outside.
         self.last_touched_hud = len(gameplay) < len(changed)
@@ -989,7 +1096,7 @@ class LevelMemory:
             )
         cells = ", ".join(
             f"({r},{c}) {ARC_SYMBOLS.get(before, before)}->{ARC_SYMBOLS.get(after, after)}"
-            for r, c, before, after in gameplay[:self.MAX_LISTED_CELLS]
+            for r, c, before, after in gameplay[: self.MAX_LISTED_CELLS]
         )
         if len(gameplay) > self.MAX_LISTED_CELLS:
             rows = [r for r, _, _, _ in gameplay]
@@ -1024,7 +1131,9 @@ class LevelMemory:
                 f"different kind of action, or a very different part of the board."
             )
         if hud := self.hud_cells:
-            listed = ", ".join(f"({r},{c})" for r, c in sorted(hud)[:self.MAX_LISTED_CELLS])
+            listed = ", ".join(
+                f"({r},{c})" for r, c in sorted(hud)[: self.MAX_LISTED_CELLS]
+            )
             notes.append(
                 f"{len(hud)} cell(s) change on almost every action and are a timer or "
                 f"counter, not the game: {listed}"
@@ -1053,15 +1162,20 @@ def load_llama() -> Any:
         # and 4096 left no headroom (640 MiB KV at 4096 -> 1.25 GiB at 8192).
         n_ctx = int(os.environ.get("LLAMA_N_CTX", "8192"))
         n_gpu_layers = int(os.environ.get("LLAMA_N_GPU_LAYERS", "99"))
-        print(f"[MyAgent] Loading model from {model_path} "
-              f"(n_ctx={n_ctx}, n_gpu_layers={n_gpu_layers})")
-        llm = Llama(model_path=model_path, n_ctx=n_ctx,
-                    n_gpu_layers=n_gpu_layers, verbose=False)
+        print(
+            f"[MyAgent] Loading model from {model_path} "
+            f"(n_ctx={n_ctx}, n_gpu_layers={n_gpu_layers})"
+        )
+        llm = Llama(
+            model_path=model_path, n_ctx=n_ctx, n_gpu_layers=n_gpu_layers, verbose=False
+        )
         print("[MyAgent] Model loaded")
         return llm
     except Exception as exc:  # noqa: BLE001
-        print(f"[MyAgent] WARNING: model load failed ({exc!r}); "
-              "degrading to random actions")
+        print(
+            f"[MyAgent] WARNING: model load failed ({exc!r}); "
+            "degrading to random actions"
+        )
         return None
 
 
@@ -1178,6 +1292,7 @@ except ImportError:
     # Local testing — provide a stub base class
     class Agent:  # type: ignore[no-redef]
         """Stub base class for local testing."""
+
         game_id: str = ""
         MAX_ACTIONS: int = 80
         arc_env: Any = None
@@ -1253,7 +1368,9 @@ class MyAgent(Agent):
             if latest_frame.state is GameState.WIN:
                 return True
             if time.monotonic() > _RUN_DEADLINE:
-                print(f"[MyAgent] {self.game_id}: shared run budget ({RUN_BUDGET_S:.0f}s) spent")
+                print(
+                    f"[MyAgent] {self.game_id}: shared run budget ({RUN_BUDGET_S:.0f}s) spent"
+                )
                 return True
         except Exception as exc:  # noqa: BLE001
             print(f"[MyAgent] {self.game_id}: is_done error ({exc!r}); returning False")
@@ -1272,9 +1389,13 @@ class MyAgent(Agent):
             return self._choose_action_inner(frames, latest_frame)
         except Exception as exc:  # noqa: BLE001
             self.stats["choose_action_exception"] += 1
-            print(f"[MyAgent] {self.game_id}: choose_action error ({exc!r}); "
-                  "using random fallback")
-            action = self._random_action(latest_frame.available_actions or [1, 2, 3, 4, 5])
+            print(
+                f"[MyAgent] {self.game_id}: choose_action error ({exc!r}); "
+                "using random fallback"
+            )
+            action = self._random_action(
+                latest_frame.available_actions or [1, 2, 3, 4, 5]
+            )
             # Record it, or _last_action_name still names the previous action
             # and the next frame's movement is credited to it. A mis-scored
             # effect costs one turn; a world model taught that UP does what a
@@ -1339,19 +1460,26 @@ class MyAgent(Agent):
         # always one turn stale.
         if self._last_grid is not None:
             self.memory.record(
-                self._last_action_name, self._last_grid, tuple(tuple(row) for row in grid)
+                self._last_action_name,
+                self._last_grid,
+                tuple(tuple(row) for row in grid),
             )
             family = self._last_action_name.split("@")[0]
             worked = self.memory.no_effect_streak == 0
             self.actions.record(family, worked, self.memory.last_touched_hud)
             board_now = tuple(tuple(row) for row in grid)
-            if self._undo_pending and self.undo.candidate == family and worked is False \
-                    and board_now == self._last_grid:
+            if (
+                self._undo_pending
+                and self.undo.candidate == family
+                and worked is False
+                and board_now == self._last_grid
+            ):
                 # It claimed to be an undo and changed nothing; stop trusting it.
                 self.undo.rule_out(family)
             self._undo_pending = False
-            self.undo.observe(self._last_action_name, board_now,
-                              self.actions.costly(family))
+            self.undo.observe(
+                self._last_action_name, board_now, self.actions.costly(family)
+            )
             if family == "MOUSE" and self._last_click is not None:
                 self.clicks.record((self._last_click[1], self._last_click[0]), worked)
             # Arm once per newly-discovered action, keyed on the full identity so
@@ -1405,7 +1533,9 @@ class MyAgent(Agent):
         self._record_action(grid, action)
         return game_action
 
-    def _policy_action(self, valid_names: list[str], available: list[int]) -> Any | None:
+    def _policy_action(
+        self, valid_names: list[str], available: list[int]
+    ) -> Any | None:
         """Probe unknown actions, then exploit what works. None means ask the model.
 
         Both branches are free — no inference — and the score squares wasted
@@ -1446,9 +1576,11 @@ class MyAgent(Agent):
         # A costly action that achieved nothing leaves the board somewhere we did
         # not want. Reverting with the free undo costs 0; walking back with
         # another costly action costs 1 more, and the score squares the total.
-        if (self.undo.candidate in playable
-                and self.memory.no_effect_streak == 1
-                and self.actions.costly(self._last_action_name.split("@")[0])):
+        if (
+            self.undo.candidate in playable
+            and self.memory.no_effect_streak == 1
+            and self.actions.costly(self._last_action_name.split("@")[0])
+        ):
             self.stats["undo"] += 1
             self._policy_streak += 1
             self._undo_pending = True
@@ -1507,7 +1639,8 @@ class MyAgent(Agent):
         if self.memory.no_effect_streak < ESCAPE_AFTER:
             return action
         untried = [
-            name for name in self.memory.untried(valid_names)
+            name
+            for name in self.memory.untried(valid_names)
             if NAME_TO_ID.get(name) in available and NAME_TO_ID.get(name) != 0
         ]
         if not untried:
@@ -1517,7 +1650,9 @@ class MyAgent(Agent):
         self.stats["escape_forced"] += 1
         if choice == COMPLEX_ACTION_ID:
             return ArcAction(
-                id=choice, x=self._rng.randrange(GRID_SIZE), y=self._rng.randrange(GRID_SIZE)
+                id=choice,
+                x=self._rng.randrange(GRID_SIZE),
+                y=self._rng.randrange(GRID_SIZE),
             )
         return ArcAction(id=choice)
 
@@ -1554,10 +1689,9 @@ class MyAgent(Agent):
                         max_c = c
         if max_r < min_r:
             return "all zeros", None
-        crop = [row[min_c:max_c + 1] for row in grid[min_r:max_r + 1]]
+        crop = [row[min_c : max_c + 1] for row in grid[min_r : max_r + 1]]
         body = "\n".join(
-            "".join(ARC_SYMBOLS.get(v, f"{v:x}") for v in row)
-            for row in crop
+            "".join(ARC_SYMBOLS.get(v, f"{v:x}") for v in row) for row in crop
         )
         if (min_r, min_c) == (0, 0) and max_r == rows - 1 and max_c == cols - 1:
             return body, None
@@ -1578,9 +1712,15 @@ class MyAgent(Agent):
         board arrives (see _choose_action_inner).
         """
         name = ACTION_NAMES.get(arc_action.id, f"ACTION{arc_action.id}")
-        if arc_action.id == COMPLEX_ACTION_ID and getattr(arc_action, "x", None) is not None:
+        if (
+            arc_action.id == COMPLEX_ACTION_ID
+            and getattr(arc_action, "x", None) is not None
+        ):
             name = f"MOUSE@({arc_action.x},{arc_action.y})"
-        if arc_action.id == COMPLEX_ACTION_ID and getattr(arc_action, "x", None) is not None:
+        if (
+            arc_action.id == COMPLEX_ACTION_ID
+            and getattr(arc_action, "x", None) is not None
+        ):
             self._last_click = (arc_action.x, arc_action.y)
         self._last_action_id = arc_action.id
         self._last_action_name = name
@@ -1644,8 +1784,13 @@ class MyAgent(Agent):
             self._segmentation = segment(board)
             self._seg_board = board
         return self._build_prompt(
-            encoded, describe_segmentation(self._segmentation), bbox, valid_names, state,
-            self.memory.describe_last() if effect is None else effect, tool_mode=tool_mode,
+            encoded,
+            describe_segmentation(self._segmentation),
+            bbox,
+            valid_names,
+            state,
+            self.memory.describe_last() if effect is None else effect,
+            tool_mode=tool_mode,
         )
 
     def _progress_line(self) -> str:
@@ -1656,7 +1801,9 @@ class MyAgent(Agent):
         board shows. Stating the count keeps that in front of the model.
         """
         parts = [f"level {self._prev_levels}", f"action {self._step}"]
-        if spenders := sorted(n for n in ACTION_NAMES.values() if self.actions.costly(n)):
+        if spenders := sorted(
+            n for n in ACTION_NAMES.values() if self.actions.costly(n)
+        ):
             parts.append(f"budget spent by {', '.join(spenders)}")
         if self.undo.candidate:
             parts.append(f"{self.undo.candidate} undoes the last move for free")
@@ -1693,10 +1840,12 @@ class MyAgent(Agent):
         theory = ""
         if MECHANIC_NOTES and tool_mode:
             theory = (
-                f"\nYour theory so far (yours, may be wrong - revise it): "
-                f"{self.memory.mechanic}"
-            ) if self.memory.mechanic else (
-                "\nYou have not yet recorded a theory of this game's mechanic."
+                (
+                    f"\nYour theory so far (yours, may be wrong - revise it): "
+                    f"{self.memory.mechanic}"
+                )
+                if self.memory.mechanic
+                else ("\nYou have not yet recorded a theory of this game's mechanic.")
             )
         click_guide = ""
         if bbox is not None:
@@ -1713,12 +1862,16 @@ class MyAgent(Agent):
                 "1. Analyze the board and infer the game rules as you go.\n"
                 "2. Call EXACTLY ONE function for the best action.\n"
                 f"3. The available functions are: {', '.join(valid_names)}\n"
-                "4. For clicks, call MOUSE with the full-board row/col (0-63)." + click_guide
-                + ("\n5. Pass `note`: at most 12 words stating a RULE that is true "
-                   "every turn, e.g. 'arrows push blocks, blocks stop at walls'. "
-                   "NOT your plan for this turn and NOT the board state. Repeat "
-                   "your previous note unchanged unless the board disproved it."
-                   if MECHANIC_NOTES else "")
+                "4. For clicks, call MOUSE with the full-board row/col (0-63)."
+                + click_guide
+                + (
+                    "\n5. Pass `note`: at most 12 words stating a RULE that is true "
+                    "every turn, e.g. 'arrows push blocks, blocks stop at walls'. "
+                    "NOT your plan for this turn and NOT the board state. Repeat "
+                    "your previous note unchanged unless the board disproved it."
+                    if MECHANIC_NOTES
+                    else ""
+                )
             )
         else:
             instructions = (
@@ -1728,7 +1881,8 @@ class MyAgent(Agent):
                 "3. You MUST output EXACTLY ONE line in this format: action(['ACTION_NAME'])\n"
                 f"   Where ACTION_NAME is one of: {', '.join(valid_names)}\n"
                 "4. For mouse clicks, use: action([{'action': 'MOUSE', 'row': <row>, 'col': <col>}])"
-                + click_guide + "\n"
+                + click_guide
+                + "\n"
                 "Example output: action(['RIGHT'])"
             )
 
@@ -1740,7 +1894,7 @@ Effect of that action: {effect}
 What moved: {moved}
 Progress: {progress}{theory}{notes}
 
-Valid actions: {', '.join(valid_names)}
+Valid actions: {", ".join(valid_names)}
 
 Objects on the board (4-connected same-colour; hash ignores position):
 {objects}
@@ -1751,7 +1905,10 @@ Current board (symbols: {ARC_LEGEND}):
 {instructions}"""
 
     def _call_llm(
-        self, raw_prompt: Callable[[], str], tool_prompt: str, available: list[int],
+        self,
+        raw_prompt: Callable[[], str],
+        tool_prompt: str,
+        available: list[int],
         board: Grid | None = None,
     ) -> Any:
         """Call the local LLM and parse the response.
@@ -1777,7 +1934,9 @@ Current board (symbols: {ARC_LEGEND}):
         if response is None:
             self.stats["no_model"] += 1
             return self._random_arc_action(available)
-        content = strip_thinking(response["choices"][0]["message"].get("content", "") or "")
+        content = strip_thinking(
+            response["choices"][0]["message"].get("content", "") or ""
+        )
         if parsed := self._parse_action_from_code(content, available):
             self.stats["raw_text_parsed"] += 1
             return parsed
@@ -1822,13 +1981,16 @@ Current board (symbols: {ARC_LEGEND}):
             code = json.loads(arguments).get("code", "") if arguments else ""
         except (TypeError, ValueError):
             code = arguments or ""
-        return run_python(code, {
-            "grid": board,
-            "objects": self._segmentation,
-            "prev": self._last_grid,
-            "hud_cells": self.memory.hud_cells,
-            "SYMBOLS": ARC_SYMBOLS,
-        })
+        return run_python(
+            code,
+            {
+                "grid": board,
+                "objects": self._segmentation,
+                "prev": self._last_grid,
+                "hud_cells": self.memory.hud_cells,
+                "SYMBOLS": ARC_SYMBOLS,
+            },
+        )
 
     def _complete_messages(
         self, messages: list[dict[str, Any]], temperature: float, **kwargs: Any
@@ -1838,8 +2000,10 @@ Current board (symbols: {ARC_LEGEND}):
             if llm is None:
                 return None
             return llm.create_chat_completion(
-                messages=messages, temperature=temperature,
-                max_tokens=MAX_OUTPUT_TOKENS, **kwargs,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=MAX_OUTPUT_TOKENS,
+                **kwargs,
             )
 
     def _complete(
@@ -1865,8 +2029,9 @@ Current board (symbols: {ARC_LEGEND}):
                 **kwargs,
             )
 
-    def _call_tool(self, available: list[int], prompt: str,
-                   board: Grid | None = None) -> Any | None:
+    def _call_tool(
+        self, available: list[int], prompt: str, board: Grid | None = None
+    ) -> Any | None:
         """Choose an action, optionally inspecting the board with Python first.
 
         Up to REPL_STEPS `python` calls may precede the action, each running
@@ -1890,7 +2055,9 @@ Current board (symbols: {ARC_LEGEND}):
         try:
             for step in range(REPL_STEPS + 1):
                 # The last turn must produce an action, so drop the python tool.
-                turn_tools = tools if step < REPL_STEPS else self._build_tools(available)
+                turn_tools = (
+                    tools if step < REPL_STEPS else self._build_tools(available)
+                )
                 response = self._complete_messages(
                     messages, temperature=0.4, tools=turn_tools, tool_choice="required"
                 )
@@ -1898,13 +2065,16 @@ Current board (symbols: {ARC_LEGEND}):
                     return None
                 message = response["choices"][0]["message"]
                 content = strip_thinking(message.get("content") or "")
-                calls = (message.get("tool_calls") or []) or parse_text_tool_calls(content)
+                calls = (message.get("tool_calls") or []) or parse_text_tool_calls(
+                    content
+                )
 
                 code = next(
                     (
                         (c.get("function") or {}).get("arguments")
                         for c in calls
-                        if ((c.get("function") or {}).get("name") or "").lower() == "python"
+                        if ((c.get("function") or {}).get("name") or "").lower()
+                        == "python"
                     ),
                     None,
                 )
@@ -1912,13 +2082,26 @@ Current board (symbols: {ARC_LEGEND}):
                     break
                 self.stats["repl_call"] += 1
                 output = self._inspect(code, board)
-                if output.split("\n")[-1].startswith(("NameError", "SyntaxError", "TypeError",
-                                                       "ValueError", "KeyError", "AttributeError")):
+                if output.split("\n")[-1].startswith(
+                    (
+                        "NameError",
+                        "SyntaxError",
+                        "TypeError",
+                        "ValueError",
+                        "KeyError",
+                        "AttributeError",
+                    )
+                ):
                     self.stats["repl_error"] += 1
-                messages.extend([
-                    {"role": "assistant", "content": f"python:\n{code}"},
-                    {"role": "user", "content": f"python output:\n{output}\n\nNow act."},
-                ])
+                messages.extend(
+                    [
+                        {"role": "assistant", "content": f"python:\n{code}"},
+                        {
+                            "role": "user",
+                            "content": f"python output:\n{output}\n\nNow act.",
+                        },
+                    ]
+                )
             else:
                 return None
             # The template may leave the call as text in `content` instead of
@@ -1935,8 +2118,12 @@ Current board (symbols: {ARC_LEGEND}):
                     args = json.loads(fn.get("arguments") or "{}")
                 except (TypeError, ValueError):
                     args = {}
-                self.stats["tool_call" if message.get("tool_calls") else "tool_from_text"] += 1
-                if MECHANIC_NOTES and self.memory.record_mechanic(args.get("note") or ""):
+                self.stats[
+                    "tool_call" if message.get("tool_calls") else "tool_from_text"
+                ] += 1
+                if MECHANIC_NOTES and self.memory.record_mechanic(
+                    args.get("note") or ""
+                ):
                     self.stats["mechanic_note"] += 1
                 if aid != COMPLEX_ACTION_ID:
                     return ArcAction(id=aid)
@@ -1946,13 +2133,17 @@ Current board (symbols: {ARC_LEGEND}):
                 except (TypeError, ValueError):
                     self.stats["mouse_without_coords"] += 1
                     continue
-                return ArcAction(id=COMPLEX_ACTION_ID, x=clamp_coord(x), y=clamp_coord(y))
+                return ArcAction(
+                    id=COMPLEX_ACTION_ID, x=clamp_coord(x), y=clamp_coord(y)
+                )
             # No usable tool call, but the reply may still name an action.
             # Parsing it here saves a second inference round-trip per turn.
             return self._parse_action_from_code(content, available)
         except Exception as exc:  # noqa: BLE001
             self.stats["tool_path_exception"] += 1
-            print(f"[MyAgent] {self.game_id}: tool-call failed ({exc!r}); using raw-text path")
+            print(
+                f"[MyAgent] {self.game_id}: tool-call failed ({exc!r}); using raw-text path"
+            )
         return None
 
     @staticmethod
@@ -1971,8 +2162,14 @@ Current board (symbols: {ARC_LEGEND}):
                 params: dict[str, Any] = {
                     "type": "object",
                     "properties": {
-                        "x": {"type": "integer", "description": f"Column 0-{GRID_SIZE - 1}"},
-                        "y": {"type": "integer", "description": f"Row 0-{GRID_SIZE - 1}"},
+                        "x": {
+                            "type": "integer",
+                            "description": f"Column 0-{GRID_SIZE - 1}",
+                        },
+                        "y": {
+                            "type": "integer",
+                            "description": f"Row 0-{GRID_SIZE - 1}",
+                        },
                     },
                     "required": ["x", "y"],
                 }
@@ -2034,7 +2231,8 @@ Current board (symbols: {ARC_LEGEND}):
         # order-independently (models write x/y or row/col, in either order).
         match = re.search(
             r"action\(\[\{.*?['\"]action['\"]\s*:\s*['\"]MOUSE['\"].*?\}(?:\s*\])?\)",
-            text, re.DOTALL,
+            text,
+            re.DOTALL,
         )
         if match:
             block = match.group(0)
@@ -2058,7 +2256,7 @@ Current board (symbols: {ARC_LEGEND}):
                 continue
             if aid in available and name in text_upper:
                 # Only match if it's a clear keyword (not embedded in a word)
-                if re.search(rf'\b{name}\b', text_upper):
+                if re.search(rf"\b{name}\b", text_upper):
                     return ArcAction(id=aid)
 
         return None
@@ -2098,7 +2296,9 @@ Current board (symbols: {ARC_LEGEND}):
         """
         return self._convert_raw_frame_data(
             self.arc_env.step(
-                action, data=self._pending_data, reasoning=self._pending_reasoning_dict()
+                action,
+                data=self._pending_data,
+                reasoning=self._pending_reasoning_dict(),
             )
         )
 
