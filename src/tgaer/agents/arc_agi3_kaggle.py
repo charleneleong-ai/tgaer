@@ -148,7 +148,7 @@ PYTHON_TOOL = {
             "Run Python against the board and print what you want to know. "
             "Available: grid (tuple of rows of ints), objects (segmentation dict "
             "with 'nodes' and 'adjacency'), prev (previous board or None), "
-            "hud_cells (set of chrome cells to ignore), SYMBOLS (int->char). "
+            "SYMBOLS (int->char). "
             "Use print(); each call starts fresh."
         ),
         "parameters": {
@@ -497,39 +497,29 @@ class ActionModel:
     """
 
     # An action is called costly once most of its uses move the meter.
-    COSTLY_RATIO = 0.5
+    # Budget awareness lived here and has been removed with the chrome
+    # detection it was built on. `spent` was only ever incremented when a HUD
+    # cell moved, and no HUD cell was ever detected, so `costly` was always
+    # False: every action was labelled "(free)", free_first was the identity,
+    # and the "SPENDS the limited move budget" note was never sent.
+    #
+    # The budgets themselves are real and decisive — sk48 decrements a life
+    # counter in its arrow handler and never in its click handler, and cn04
+    # caps its first level at 75 actions — so this needs rebuilding on a signal
+    # that works. Reading the meter from pixels is not one: no cell in any of
+    # the 25 games changes on more than 48% of transitions, and no colour
+    # population is monotonic across a respawn.
 
     def __init__(self) -> None:
         self.tried: dict[str, int] = {}
         self.worked: dict[str, int] = {}
-        self.spent: dict[str, int] = {}
         self.last_effective: str | None = None
 
     def reset(self) -> None:
         self.__init__()
 
-    def costly(self, family: str) -> bool:
-        """Does this action spend the level's budget?
-
-        Read from the meter, not from the game's source: sk48 decrements a life
-        counter inside the arrow-key handler and never in the click handler, so
-        arrows can lose the game while clicks are free. The same shape appears
-        wherever a game shows a move counter, which is why this is inferred
-        rather than hardcoded.
-        """
-        tried = self.tried.get(family, 0)
-        return bool(tried) and self.spent.get(family, 0) / tried > self.COSTLY_RATIO
-
-    def free_first(self, families: list[str]) -> list[str]:
-        """Families ordered cheapest first, so exploring cannot lose the game."""
-        return sorted(families, key=self.costly)
-
-    def record(
-        self, family: str, changed_gameplay: bool, touched_hud: bool = False
-    ) -> None:
+    def record(self, family: str, changed_gameplay: bool) -> None:
         self.tried[family] = self.tried.get(family, 0) + 1
-        if touched_hud:
-            self.spent[family] = self.spent.get(family, 0) + 1
         if changed_gameplay:
             self.worked[family] = self.worked.get(family, 0) + 1
             self.last_effective = family
@@ -543,7 +533,6 @@ class ActionModel:
         """A line per action: how often it did something. Empty until probed."""
         lines = [
             f"  {name}: worked {self.worked.get(name, 0)}/{self.tried[name]}"
-            + (" (SPENDS the move budget)" if self.costly(name) else " (free)")
             for name in valid_names
             if name in self.tried
         ]
@@ -877,13 +866,12 @@ class UndoDetector:
     def reset(self) -> None:
         self.__init__()
 
-    def observe(self, action: str, board: Grid, costly: bool) -> None:
+    def observe(self, action: str, board: Grid) -> None:
         """Record a transition and decide whether `action` reverted the board."""
         family = action.split("@")[0]
         if (
             self.candidate is None
             and family not in self._ruled_out
-            and not costly
             and len(self.history) >= 2
             and board == self.history[-2]
             and board != self.history[-1]
@@ -916,30 +904,23 @@ class LevelMemory:
     score.
     """
 
-    # A cell must move under this fraction of actions, and under several
-    # different ones, before it is called chrome. Set high: misclassifying a
-    # real object as HUD would hide the very effect we are looking for.
-    HUD_CHANGE_RATIO = 0.8
-    HUD_MIN_ACTIONS = 3
-    # Distinct cells a border line must touch before it counts as a sweeping
-    # meter rather than a real object that happens to sit on the edge.
-    HUD_MIN_SWEEP = 3
+    # Chrome detection lived here and has been removed. It required a cell to
+    # change on 80% of transitions; measured across all 25 games, no cell
+    # changes on more than 48% (cn04 0.33, sk48 0.28, ls20 0.12, dc22 0.15), so
+    # it never fired once and the prompt line it produced was never sent. It
+    # cannot be repaired by lowering the threshold either: there is no gap
+    # between chrome and gameplay to put one in, and any value low enough to
+    # fire marks the busiest gameplay cells as chrome. The alternative
+    # discriminator — cells that change under every action — is no better,
+    # flagging 651 cells on ls20 and none on sk48 or dc22. These boards carry
+    # incidental churn everywhere (741 frame signatures for 30 avatar cells),
+    # so what flickers cannot identify chrome.
     MAX_LISTED_CELLS = 12
 
     def __init__(self) -> None:
         self.transitions = 0
-        self._change_counts: dict[tuple[int, int], int] = {}
-        self._actions_seen: dict[tuple[int, int], set[str]] = {}
-        # Per row/column too, so a sweeping progress bar is visible.
-        self._row_counts: dict[int, int] = {}
-        self._col_counts: dict[int, int] = {}
-        self._row_cells: dict[int, set[int]] = {}
-        self._col_cells: dict[int, set[int]] = {}
-        self._dims: tuple[int, int] | None = None
         self._last: tuple[str, list[tuple[int, int, int, int]]] | None = None
         self._dead: set[str] = set()
-        self.last_touched_hud = False
-        self._costly_names: set[str] = set()
         # Every action family tried since the board last changed, so the agent
         # can be told what it has NOT tried. MOUSE@(12,39) and MOUSE@(13,38) are
         # different strings but the same idea, so families are the useful unit:
@@ -981,54 +962,6 @@ class LevelMemory:
         return True
 
     @property
-    def hud_cells(self) -> set[tuple[int, int]]:
-        """Cells that move on almost every action, whatever the action was."""
-        if self.transitions < self.HUD_MIN_ACTIONS:
-            return set()
-        threshold = self.transitions * self.HUD_CHANGE_RATIO
-        return {
-            cell
-            for cell, count in self._change_counts.items()
-            if count >= threshold
-            and len(self._actions_seen[cell]) >= self.HUD_MIN_ACTIONS
-        }
-
-    @property
-    def hud_lines(self) -> tuple[set[int], set[int]]:
-        """Border rows/columns that behave like a sweeping progress bar.
-
-        A per-cell rule cannot see a sweeping bar: a countdown consuming one
-        cell per turn changes a *different* cell each time, so no single cell is
-        ever frequent. Observed on m0r0, where row 0 and row 63 ticked down on
-        nearly every action and the agent read it as progress.
-
-        Deliberately narrow, because the cost of a false positive is hiding a
-        real move: the line must be on the board edge (where these meters live),
-        must change on most turns, and must sweep across several distinct cells
-        rather than blink in one place. An earlier version without the edge test
-        suppressed a genuine object that merely shared a column with a timer.
-        """
-        if self.transitions < self.HUD_MIN_ACTIONS or not self._dims:
-            return set(), set()
-        rows_n, cols_n = self._dims
-        threshold = self.transitions * self.HUD_CHANGE_RATIO
-        rows = {
-            r
-            for r, count in self._row_counts.items()
-            if count >= threshold
-            and r in (0, rows_n - 1)
-            and len(self._row_cells.get(r, ())) >= self.HUD_MIN_SWEEP
-        }
-        cols = {
-            c
-            for c, count in self._col_counts.items()
-            if count >= threshold
-            and c in (0, cols_n - 1)
-            and len(self._col_cells.get(c, ())) >= self.HUD_MIN_SWEEP
-        }
-        return rows, cols
-
-    @property
     def dead_actions(self) -> set[str]:
         return set(self._dead)
 
@@ -1050,33 +983,12 @@ class LevelMemory:
             for c, value in enumerate(row)
             if r < len(before) and c < len(before[r]) and before[r][c] != value
         ]
-        for r, c, _, _ in changed:
-            self._change_counts[(r, c)] = self._change_counts.get((r, c), 0) + 1
-            self._actions_seen.setdefault((r, c), set()).add(action)
-        self._dims = (len(after), len(after[0]) if after else 0)
-        for r in {r for r, _, _, _ in changed}:
-            self._row_counts[r] = self._row_counts.get(r, 0) + 1
-        for c in {c for _, c, _, _ in changed}:
-            self._col_counts[c] = self._col_counts.get(c, 0) + 1
-        for r, c, _, _ in changed:
-            self._row_cells.setdefault(r, set()).add(c)
-            self._col_cells.setdefault(c, set()).add(r)
-
-        hud = self.hud_cells
-        hud_rows, hud_cols = self.hud_lines
-        gameplay = [
-            cell
-            for cell in changed
-            if (cell[0], cell[1]) not in hud
-            and cell[0] not in hud_rows
-            and cell[1] not in hud_cols
-        ]
-        # The meter moving is what a spent budget looks like from outside.
-        self.last_touched_hud = len(gameplay) < len(changed)
+        # Every change now counts as gameplay: the chrome filter that used to
+        # sit here never classified a single cell in any of the 25 games.
+        gameplay = changed
         self._last = (action, gameplay)
         family = action.split("@")[0]
         self._tried_families.add(family)
-        # Only chrome moved, so the action achieved nothing worth repeating.
         if gameplay:
             self._dead.clear()
             self._tried_families = {family}
@@ -1114,11 +1026,6 @@ class LevelMemory:
             notes.append(
                 f"Actions already shown to change NOTHING on this board: {', '.join(dead)}"
             )
-        if costly := [n for n in (valid_names or []) if n in self._costly_names]:
-            notes.append(
-                f"These SPEND the limited move budget and end the level at zero: "
-                f"{', '.join(sorted(costly))}. Use them deliberately, not to explore."
-            )
         if valid_names and (untried := self.untried(valid_names)):
             notes.append(
                 f"You have NOT yet tried: {', '.join(untried)}. Prefer one of these "
@@ -1129,14 +1036,6 @@ class LevelMemory:
                 f"WARNING: {self._no_effect_streak} actions in a row changed nothing. "
                 f"Whatever you are doing is not the mechanic here - switch to a "
                 f"different kind of action, or a very different part of the board."
-            )
-        if hud := self.hud_cells:
-            listed = ", ".join(
-                f"({r},{c})" for r, c in sorted(hud)[: self.MAX_LISTED_CELLS]
-            )
-            notes.append(
-                f"{len(hud)} cell(s) change on almost every action and are a timer or "
-                f"counter, not the game: {listed}"
             )
         return ("\n" + "\n".join(notes)) if notes else ""
 
@@ -1466,7 +1365,7 @@ class MyAgent(Agent):
             )
             family = self._last_action_name.split("@")[0]
             worked = self.memory.no_effect_streak == 0
-            self.actions.record(family, worked, self.memory.last_touched_hud)
+            self.actions.record(family, worked)
             board_now = tuple(tuple(row) for row in grid)
             if (
                 self._undo_pending
@@ -1477,9 +1376,7 @@ class MyAgent(Agent):
                 # It claimed to be an undo and changed nothing; stop trusting it.
                 self.undo.rule_out(family)
             self._undo_pending = False
-            self.undo.observe(
-                self._last_action_name, board_now, self.actions.costly(family)
-            )
+            self.undo.observe(self._last_action_name, board_now)
             if family == "MOUSE" and self._last_click is not None:
                 self.clicks.record((self._last_click[1], self._last_click[0]), worked)
             # Arm once per newly-discovered action, keyed on the full identity so
@@ -1573,14 +1470,11 @@ class MyAgent(Agent):
             self._policy_streak += 1
             return self._named_action(unprobed[0])
 
-        # A costly action that achieved nothing leaves the board somewhere we did
-        # not want. Reverting with the free undo costs 0; walking back with
-        # another costly action costs 1 more, and the score squares the total.
-        if (
-            self.undo.candidate in playable
-            and self.memory.no_effect_streak == 1
-            and self.actions.costly(self._last_action_name.split("@")[0])
-        ):
+        # An action that achieved nothing leaves the board somewhere we did not
+        # want, and the score squares the total, so reverting with the free undo
+        # beats walking back. This used to require the action to be costly,
+        # which was never true once chrome detection turned out never to fire.
+        if self.undo.candidate in playable and self.memory.no_effect_streak == 1:
             self.stats["undo"] += 1
             self._policy_streak += 1
             self._undo_pending = True
@@ -1589,9 +1483,9 @@ class MyAgent(Agent):
         # Exploring must not cost the game. Arrow keys in sk48 decrement a life
         # counter and lose at zero, while clicks are free — so once the meter
         # has revealed which is which, wander with the free actions.
-        idle = [n for n in playable if not self.actions.costly(n)]
+        idle = list(playable)
         if self.memory.no_effect_streak >= ESCAPE_AFTER and idle:
-            choice = self.actions.free_first(idle)[0]
+            choice = idle[0]
             self.stats["explore_free"] += 1
             self._policy_streak += 1
             return self._named_action(choice)
@@ -1646,7 +1540,7 @@ class MyAgent(Agent):
         if not untried:
             return action
         # Cheapest first: an escape that spends the budget can end the level.
-        choice = NAME_TO_ID[self.actions.free_first(untried)[0]]
+        choice = NAME_TO_ID[untried[0]]
         self.stats["escape_forced"] += 1
         if choice == COMPLEX_ACTION_ID:
             return ArcAction(
@@ -1801,10 +1695,6 @@ class MyAgent(Agent):
         board shows. Stating the count keeps that in front of the model.
         """
         parts = [f"level {self._prev_levels}", f"action {self._step}"]
-        if spenders := sorted(
-            n for n in ACTION_NAMES.values() if self.actions.costly(n)
-        ):
-            parts.append(f"budget spent by {', '.join(spenders)}")
         if self.undo.candidate:
             parts.append(f"{self.undo.candidate} undoes the last move for free")
         return "; ".join(parts)
@@ -1827,7 +1717,6 @@ class MyAgent(Agent):
         dropped. `tool_mode` swaps the strict raw-text output instruction for
         a function-calling one.
         """
-        self.memory._costly_names = {n for n in valid_names if self.actions.costly(n)}
         notes = self.memory.prompt_notes(valid_names)
         moved = "; ".join(self._last_events[:6]) or "nothing moved"
         progress = self._progress_line()
@@ -1987,7 +1876,6 @@ Current board (symbols: {ARC_LEGEND}):
                 "grid": board,
                 "objects": self._segmentation,
                 "prev": self._last_grid,
-                "hud_cells": self.memory.hud_cells,
                 "SYMBOLS": ARC_SYMBOLS,
             },
         )
