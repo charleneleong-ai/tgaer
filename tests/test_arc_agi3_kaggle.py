@@ -1767,3 +1767,73 @@ class TestFrontierPolicy:
         assert a.graph.untested_at(a._sig) is not None
         a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2), levels=1))
         assert a._frontier_plan == deque()
+
+
+class TestFrontierClicks:
+    """The frontier has to reach click-driven games to be worth anything.
+
+    Six of the 25 games accept MOUSE only, and they include the one game this
+    agent reliably clears. Offering non-click actions alone meant the frontier
+    fired exactly zero times on all six — verified across four runs of lp85,
+    where it never fired once while the level was being cleared by other means.
+    """
+
+    @pytest.fixture(autouse=True)
+    def enable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ma, "FRONTIER", True)
+        monkeypatch.setattr(ma, "PROBE_ACTIONS", False)
+        monkeypatch.setattr(ma, "EXPLOIT_REPEATS", 0)
+
+    @staticmethod
+    def board_with_pieces() -> list[list[int]]:
+        grid = [[0] * 16 for _ in range(16)]
+        for n, (r, c) in enumerate([(2, 2), (5, 9), (11, 4)], start=1):
+            grid[r][c] = grid[r][c + 1] = n + 3
+        return grid
+
+    def test_the_frontier_fires_on_a_click_only_game(self) -> None:
+        a = make_agent(tool_calls=tool_call("MOUSE", '{"x": 1, "y": 1}'))
+        act = a.choose_action(
+            [], mk_frame(grid=self.board_with_pieces(), available=(6,))
+        )
+        assert a.stats["frontier"] == 1, "a MOUSE-only game must reach the frontier"
+        assert act is GameAction.ACTION6
+        assert a._llm.calls == [], "systematic clicking must not cost an inference"
+
+    def test_click_options_carry_their_target(self) -> None:
+        """A click option has to round-trip to the cell it names, or the graph
+        edge records an action that was never taken."""
+        a = make_agent(tool_calls=tool_call("MOUSE"))
+        action = a._option_action("MOUSE@(37,12)")
+        assert (action.id, action.x, action.y) == (ma.COMPLEX_ACTION_ID, 37, 12)
+
+    def test_click_targets_are_bounded(self) -> None:
+        """bp35 segments into 190 objects and cn04 allows 75 actions on its
+        first level, so an unbounded state could never be exhausted."""
+        a = make_agent(tool_calls=tool_call("MOUSE"))
+        grid = [[0] * 32 for _ in range(32)]
+        for i in range(40):  # far more objects than the cap
+            grid[(i * 3) % 32][(i * 7) % 32] = 5
+        a.observe_frame(grid)
+        options = a._frontier_options([], clickable=True)
+        assert len(options) <= a.FRONTIER_CLICKS
+
+    def test_a_distinct_target_is_offered_each_turn(self) -> None:
+        """Repeating one cell is what the random-position policy did, and it
+        learned nothing; the point is to cover different objects."""
+        a = make_agent(tool_calls=tool_call("MOUSE", '{"x": 1, "y": 1}'))
+        board = self.board_with_pieces()
+        seen = set()
+        for _ in range(3):
+            act = a.choose_action([], mk_frame(grid=board, available=(6,)))
+            if act is GameAction.ACTION6 and a._pending_data:
+                seen.add((a._pending_data["x"], a._pending_data["y"]))
+        assert len(seen) > 1, f"frontier repeated one target: {seen}"
+
+    def test_simple_actions_still_come_first(self) -> None:
+        """Clicks are appended, so a game with movement still explores it."""
+        a = make_agent(tool_calls=tool_call("UP"))
+        a.observe_frame(self.board_with_pieces())
+        options = a._frontier_options(["UP", "DOWN"], clickable=True)
+        assert options[:2] == ["UP", "DOWN"]
+        assert any(o.startswith("MOUSE@(") for o in options)
