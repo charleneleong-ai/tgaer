@@ -12,6 +12,7 @@ import io
 import json
 import random
 import threading
+from collections import deque
 from typing import Any
 
 import pytest
@@ -104,6 +105,10 @@ def isolated_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ma, "REMOTE_BACKEND", None)
     monkeypatch.setattr(ma, "PROBE_ACTIONS", False)
     monkeypatch.setattr(ma, "EXPLOIT_REPEATS", 0)
+    # Pinned so the suite stays green with the flag on for an A/B. Almost every
+    # state is new, so the frontier has something untried nearly every turn and
+    # would answer the model-path tests before the model is asked.
+    monkeypatch.setattr(ma, "FRONTIER", False)
 
 
 @pytest.fixture
@@ -1653,3 +1658,112 @@ class TestRollout:
         for _ in range(3):
             cells = fm.step(cells, "UP", 8, 8)
         assert cells == {"a": frozenset({(0, 2)})}
+
+
+class TestStateGraph:
+    """What has been tried where, and how to get back to somewhere untried.
+
+    This is the only mechanism measured to beat random play on any game. The
+    explorer clears ls20 and lp85 and instrumenting it showed both clears came
+    from this frontier, not from its avatar induction — lp85 cleared at step 19
+    with the avatar unpinned and an empty move lattice. Random with five seeds
+    clears neither.
+    """
+
+    def test_an_untried_option_is_offered(self) -> None:
+        g = ma.StateGraph()
+        g.register("a", ["UP", "DOWN"])
+        g.take("a", "UP")
+        assert g.untested_at("a") == ["DOWN"]
+
+    def test_a_revisit_does_not_resurrect_tried_options(self) -> None:
+        """Re-registering would turn the frontier into a loop over the same
+        few actions, which is the cycle it exists to break."""
+        g = ma.StateGraph()
+        g.register("a", ["UP", "DOWN"])
+        g.take("a", "UP")
+        g.register("a", ["UP", "DOWN"])
+        assert g.untested_at("a") == ["DOWN"]
+
+    def test_an_exhausted_state_routes_back_to_an_unexhausted_one(self) -> None:
+        g = ma.StateGraph()
+        g.register("start", ["UP"])
+        g.take("start", "UP")
+        g.connect("start", "UP", "dead")
+        g.register("dead", [])
+        g.connect("dead", "DOWN", "start")
+        g.register("far", ["LEFT"])
+        g.connect("dead", "RIGHT", "far")
+        assert g.path_to_frontier("dead") == ["RIGHT"]
+
+    def test_a_frontier_state_needs_no_walk(self) -> None:
+        g = ma.StateGraph()
+        g.register("a", ["UP"])
+        assert g.path_to_frontier("a") == []
+
+    def test_no_route_is_not_a_route(self) -> None:
+        g = ma.StateGraph()
+        g.register("a", [])
+        assert g.path_to_frontier("a") == []
+
+    def test_a_long_walk_back_is_refused(self) -> None:
+        """Walking back spends real budget, and cn04 allows 75 actions on its
+        first level."""
+        g = ma.StateGraph()
+        for i in range(20):
+            g.register(f"s{i}", [])
+            g.connect(f"s{i}", "UP", f"s{i + 1}")
+        g.register("s20", ["LEFT"])
+        assert g.path_to_frontier("s0", limit=5) == []
+
+
+class TestFrontierPolicy:
+    @pytest.fixture(autouse=True)
+    def enable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ma, "FRONTIER", True)
+        monkeypatch.setattr(ma, "PROBE_ACTIONS", False)
+        monkeypatch.setattr(ma, "EXPLOIT_REPEATS", 0)
+
+    def test_the_frontier_takes_an_untried_action_without_asking_the_model(
+        self,
+    ) -> None:
+        a = make_agent(tool_calls=tool_call("UP"))
+        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2, 3)))
+        assert a.stats["frontier"] == 1
+        assert a._llm.calls == [], "coverage must not cost an inference"
+
+    def test_the_signature_ignores_scenery_churn(self) -> None:
+        """The explorer keys its frontier on every in-field pixel and its own
+        TODO records the cost: 741 signatures for 30 avatar positions on live
+        ls20, so churn fragmented one state into many and revisits went
+        unrecognised."""
+        a = make_agent(tool_calls=tool_call("UP"))
+        small = [[0] * 8 for _ in range(8)]
+        small[2][2] = 5
+        a.observe_frame([r[:] for r in small])
+        before = a._sig
+        churned = [r[:] for r in small]
+        for c in range(8):  # a large background region changes colour
+            churned[7][c] = 9
+        a.observe_frame(churned)
+        assert a._sig == before, "background churn must not create a new state"
+
+    def test_a_moved_piece_is_a_new_state(self) -> None:
+        a = make_agent(tool_calls=tool_call("UP"))
+        board = [[0] * 8 for _ in range(8)]
+        board[2][2] = 5
+        a.observe_frame([r[:] for r in board])
+        before = a._sig
+        moved = [[0] * 8 for _ in range(8)]
+        moved[3][2] = 5
+        a.observe_frame(moved)
+        assert a._sig != before
+
+    def test_a_level_change_forgets_the_old_board_s_states(self) -> None:
+        """States from the previous level are unreachable, and a stale plan
+        routes toward one of them."""
+        a = make_agent(tool_calls=tool_call("UP"))
+        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2)))
+        assert a.graph.untested_at(a._sig) is not None
+        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2), levels=1))
+        assert a._frontier_plan == deque()

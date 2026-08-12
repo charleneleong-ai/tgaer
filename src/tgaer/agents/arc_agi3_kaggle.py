@@ -21,7 +21,7 @@ import random
 import re
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -126,6 +126,18 @@ MAX_POLICY_STREAK = int(os.environ.get("ARC_MAX_POLICY_STREAK", "10"))
 # Probe every available action once at the start of a level before asking the
 # model to choose. ~6 actions out of a ~400 budget buys a real effect model.
 PROBE_ACTIONS = os.environ.get("ARC_PROBE", "1") not in {"0", "false", ""}
+# Try what has not been tried in this state, and walk back to a state that
+# still has something untried. Ported from the explorer, where instrumenting
+# its two wins showed both came from this frontier and not from its avatar
+# induction — lp85 cleared at step 19 with the avatar unpinned and an empty
+# move lattice. Random play with five seeds clears neither game, so the
+# coverage is doing work that undirected sampling does not.
+# Default off pending an A/B. With a position-sensitive signature almost every
+# state is new, so the frontier has something untried on nearly every turn and
+# would take all but one action in ten. That is how the explorer runs and it is
+# what wins there, but it is too large a change to adopt on inference from
+# another agent — the same reasoning that made the mechanic note look obvious.
+FRONTIER = os.environ.get("ARC_FRONTIER", "0") not in {"0", "false", ""}
 # Let the model carry one sentence of its own understanding across turns. Every
 # other note in the prompt is harness bookkeeping — dead actions, budget, chrome
 # — so the model re-derives the mechanic ("arrows push tiles") from scratch on
@@ -844,6 +856,81 @@ class ForwardModel:
         return {**settled, **moved}
 
 
+class StateGraph:
+    """States seen, what has been tried in each, and how to get back to one.
+
+    This is the only mechanism in either agent measured to beat random play.
+    The explorer clears ls20 and lp85 and nothing else, and instrumenting it
+    shows both clears came from this frontier rather than from its avatar
+    induction: lp85 cleared at step 19 with the avatar still unpinned and an
+    empty move lattice, so no induction had happened at all. Random play with
+    five seeds clears neither game, so the coverage is doing real work.
+
+    Nothing here predicts or models anything. It records what has been tried
+    where, and walks back to somewhere with something left to try. The Kaggle
+    agent had no equivalent: it re-decided from scratch every turn, which is
+    why 89% action-effect prediction converted into no levels — knowing what an
+    action does is worth little without a record of what has been tried.
+    """
+
+    def __init__(self) -> None:
+        self._untested: dict[Any, list[str]] = {}
+        self._edges: dict[Any, list[tuple[str, Any]]] = {}
+
+    def reset(self) -> None:
+        self.__init__()
+
+    def register(self, sig: Any, options: list[str]) -> None:
+        """Record a state's options on first sighting only.
+
+        Re-registering would resurrect options already taken, turning the
+        frontier into a loop over the same few actions.
+        """
+        if sig not in self._untested:
+            self._untested[sig] = list(options)
+
+    def take(self, sig: Any, option: str) -> None:
+        rest = self._untested.get(sig)
+        if rest and option in rest:
+            rest.remove(option)
+
+    def connect(self, src: Any, option: str, dst: Any) -> None:
+        edges = self._edges.setdefault(src, [])
+        if (option, dst) not in edges:
+            edges.append((option, dst))
+
+    def untested_at(self, sig: Any) -> list[str]:
+        return self._untested.get(sig, [])
+
+    def path_to_frontier(self, start: Any, limit: int = 12) -> list[str]:
+        """Options leading from `start` to the nearest state with something
+        untested. Empty when `start` is itself a frontier or none is reachable.
+
+        Bounded: a long walk back spends real budget, and cn04 allows 75
+        actions on its first level.
+        """
+        if self.untested_at(start):
+            return []
+        prev: dict[Any, tuple[Any, str]] = {}
+        seen, queue = {start}, deque([start])
+        while queue:
+            node = queue.popleft()
+            for option, dst in self._edges.get(node, []):
+                if dst in seen:
+                    continue
+                seen.add(dst)
+                prev[dst] = (node, option)
+                if self.untested_at(dst):
+                    path = []
+                    at = dst
+                    while at != start:
+                        at, option = prev[at]
+                        path.append(option)
+                    return list(reversed(path)) if len(path) <= limit else []
+                queue.append(dst)
+        return []
+
+
 class UndoDetector:
     """Finds an action that reverts the board, and reports when it is worth using.
 
@@ -1243,6 +1330,9 @@ class MyAgent(Agent):
         self.undo = UndoDetector()
         self.objects = ObjectTracker()
         self.forward = ForwardModel()
+        self.graph = StateGraph()
+        self._sig: tuple[tuple[int, str, int, int], ...] | None = None
+        self._frontier_plan: deque[str] = deque()
         self._undo_pending = False
         self._last_events: list[str] = []
         self._exploit_left = 0
@@ -1331,6 +1421,11 @@ class MyAgent(Agent):
             self._last_events = []
             self._exploit_left = 0
             self._exploited.clear()
+            # A new level is a new arrangement: states from the old board are
+            # unreachable, and a stale plan routes toward one of them.
+            self.graph.reset()
+            self._sig = None
+            self._frontier_plan.clear()
 
         # Start / restart the game. The gateway returns an empty frame while
         # NOT_PLAYED and a dead board after GAME_OVER; RESET yields the real
@@ -1469,6 +1564,16 @@ class MyAgent(Agent):
             self.stats["probe"] += 1
             self._policy_streak += 1
             return self._named_action(unprobed[0])
+
+        # Frontier: try what has not been tried in *this* state, and otherwise
+        # walk back to a state that still has something untried. This is the
+        # only mechanism measured to beat random on any game — it is what
+        # cleared ls20 and lp85 for the explorer, while random play with five
+        # seeds cleared neither. It sits after probing so a level still starts
+        # by learning what the actions do.
+        if FRONTIER and self._sig is not None:
+            if (frontier := self._frontier_action(simple)) is not None:
+                return frontier
 
         # An action that achieved nothing leaves the board somewhere we did not
         # want, and the score squares the total, so reverting with the free undo
@@ -1620,6 +1725,52 @@ class MyAgent(Agent):
         self._last_action_name = name
         self._last_grid = tuple(tuple(row) for row in grid)
 
+    def _frontier_action(self, options: list[str]) -> Any | None:
+        """An untried option here, or the next step of a walk back to one."""
+        self.graph.register(self._sig, options)
+        untested = [n for n in self.graph.untested_at(self._sig) if n in options]
+        if untested:
+            self.graph.take(self._sig, untested[0])
+            self.stats["frontier"] += 1
+            self._policy_streak += 1
+            self._frontier_plan.clear()
+            return self._named_action(untested[0])
+
+        # A plan is a route through states, so it is void the moment a step
+        # cannot be played here — following it blind would walk a route that
+        # no longer exists.
+        if self._frontier_plan and self._frontier_plan[0] not in options:
+            self._frontier_plan.clear()
+        if not self._frontier_plan:
+            self._frontier_plan = deque(self.graph.path_to_frontier(self._sig))
+        if self._frontier_plan:
+            self.stats["frontier_walk"] += 1
+            self._policy_streak += 1
+            return self._named_action(self._frontier_plan.popleft())
+        return None
+
+    def state_signature(
+        self, board_cells: int
+    ) -> tuple[tuple[int, str, int, int], ...]:
+        """Identity of the board as an arrangement of pieces.
+
+        Keyed on objects rather than pixels. The explorer keys its frontier on
+        every in-field pixel and its own TODO records what that costs: on live
+        ls20 the board produced 741 distinct signatures for 30 avatar
+        positions, so incidental churn fragmented one state into many and the
+        frontier never recognised a revisit. Scenery is already filtered out
+        here by size, and a piece is identified by colour, shape and position,
+        so a flickering background does not create a new state.
+        """
+        limit = board_cells * ObjectTracker.SCENERY_SHARE
+        return tuple(
+            sorted(
+                (node["colour"], node["hash"], *min(node["cells"]))
+                for node in self._segmentation["nodes"]
+                if node["pixels"] <= limit
+            )
+        )
+
     def observe_frame(self, grid: list[list[int]]) -> None:
         """Take in one frame: segment it, match objects, score the world model.
 
@@ -1633,6 +1784,10 @@ class MyAgent(Agent):
         self._last_events = self.objects.update(
             self._segmentation, len(grid) * len(grid[0])
         )
+        previous_sig = self._sig
+        self._sig = self.state_signature(len(grid) * len(grid[0]))
+        if previous_sig is not None and self._last_action_name not in {"None", "RESET"}:
+            self.graph.connect(previous_sig, self._last_action_name, self._sig)
         # RESET has no predecessor, and the "movement" from a fresh layout is
         # not an action's effect.
         if self._last_action_name.split("@")[0] in {"None", "RESET"}:
