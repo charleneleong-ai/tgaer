@@ -45,6 +45,19 @@ class EmpiricalSemantics:
     def door(self) -> int | None:
         return self._door
 
+    def move_lattice(self) -> dict[int, np.ndarray]:
+        """The avatar's learned move map — per-action majority Δ, in the form the
+        ``Planner`` consumes. Empty until the avatar is pinned; an action whose
+        majority outcome is a refused (0,0) move drops out."""
+        if self._avatar is None:
+            return {}
+        lattice: dict[int, np.ndarray] = {}
+        for action, counter in self._deltas.get(self._avatar, {}).items():
+            dr, dc = counter.most_common(1)[0][0]
+            if dr or dc:
+                lattice[action] = np.array([dr, dc])
+        return lattice
+
     def observe(
         self, prev: np.ndarray | None, action: int | None, cur: np.ndarray, levels: int
     ) -> None:
@@ -57,23 +70,32 @@ class EmpiricalSemantics:
                     self._observe_key(prev, cur)
         self._levels = levels
 
+    def _record_delta(
+        self, prev: np.ndarray, action: int, cur: np.ndarray, v: int
+    ) -> bool:
+        """Tally value ``v``'s integer Δ under ``action``; False if it has no single
+        in-field centroid in both frames (ambiguous — skip)."""
+        p = _single_in_field_centroid(prev, v)
+        c = _single_in_field_centroid(cur, v)
+        if p is None or c is None:
+            return False
+        delta = (int(round(c[0] - p[0])), int(round(c[1] - p[1])))
+        self._deltas.setdefault(v, {}).setdefault(action, Counter())[delta] += 1
+        return True
+
     def _observe_motion(self, prev: np.ndarray, action: int, cur: np.ndarray) -> None:
         if self._avatar is not None:
+            # Keep completing the pinned avatar's move lattice — controllability can
+            # latch after only two directions, so later moves still teach new ones.
+            self._record_delta(prev, action, cur, self._avatar)
             return
         shared = set(np.unique(prev)).intersection(np.unique(cur))
-        # Accumulate deltas for all shared values this step.
-        candidates: list[int] = []
-        for v in shared:
-            p = _single_in_field_centroid(prev, int(v))
-            c = _single_in_field_centroid(cur, int(v))
-            if p is None or c is None:
-                continue
-            delta = (int(round(c[0] - p[0])), int(round(c[1] - p[1])))
-            self._deltas.setdefault(int(v), {}).setdefault(action, Counter())[
-                delta
-            ] += 1
-            if self._is_controllable(int(v)):
-                candidates.append(int(v))
+        candidates = [
+            int(v)
+            for v in shared
+            if self._record_delta(prev, action, cur, int(v))
+            and self._is_controllable(int(v))
+        ]
         if not candidates:
             return
         # Prefer the most sprite-like candidate; fall back to smallest footprint.

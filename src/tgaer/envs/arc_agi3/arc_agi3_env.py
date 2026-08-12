@@ -24,10 +24,12 @@ class ArcAgi3Environment(Environment):
         transport: ArcTransport,
         game_id: str,
         max_actions: int = DEFAULT_MAX_ACTIONS,
+        reset_on_game_over: bool = False,
     ) -> None:
         self._transport = transport
         self._game_id = game_id
         self._max_actions = max_actions
+        self._reset_on_game_over = reset_on_game_over
         self._frame: ArcFrame | None = None
         self._steps = 0
 
@@ -41,12 +43,24 @@ class ArcAgi3Environment(Environment):
         frame = self._transport.act(
             self._game_id, self._frame.guid, action.id, action.x, action.y
         )
-        self._frame = frame
         self._steps += 1
         reward = float(frame.levels_completed - prev_levels)
+        # On death, optionally respawn (within budget) so the agent can learn the
+        # fatal transition and keep playing rather than forfeiting the episode.
+        respawned = (
+            frame.state == "GAME_OVER"
+            and self._reset_on_game_over
+            and self._steps < self._max_actions
+        )
+        if respawned:
+            frame = self._transport.reset(self._game_id)
+        self._frame = frame
         done = frame.state in TERMINAL_STATES or self._steps >= self._max_actions
+        obs = self._obs(frame)
+        if respawned:
+            obs["terminal"] = True  # signal the agent: the prior action was fatal
         return Transition(
-            state=self._obs(frame),
+            state=obs,
             action=action,
             reward=reward,
             done=done,

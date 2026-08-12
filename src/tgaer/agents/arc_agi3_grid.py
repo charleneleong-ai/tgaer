@@ -235,7 +235,7 @@ class KeyDoorController:
             if (clk := self._click_target(arr, sem, avail)) is not None:
                 self._progressed = True
                 return clk
-            return to_action(self._fallback(avail, move_avail))
+            return ArcAction(id=self._fallback(avail, move_avail))
 
         # Bootstrap: probe each directional action once to learn its move vector.
         unprobed = [a for a in move_avail if a not in self.probed]
@@ -248,7 +248,7 @@ class KeyDoorController:
         if not len(av) or not self.delta:
             action = self._fallback(avail, move_avail)
             self._remember(arr, action, sem)
-            return to_action(action)
+            return ArcAction(id=action)
 
         ks = self._keys(arr, sem)
         d = self._door(arr, sem)
@@ -284,7 +284,7 @@ class KeyDoorController:
 
         action = self._fallback(avail, move_avail)
         self._remember(arr, action, sem)
-        return to_action(action)
+        return ArcAction(id=action)
 
 
 class Planner:
@@ -328,7 +328,6 @@ class Planner:
             if int(round(d[0])) or int(round(d[1]))
         }
         prev, seen, q = {}, {s}, deque([s])
-        best, bestd = s, self._cover(s, g)
         while q:
             node = q.popleft()
             if self._cover(node, g) <= 1:
@@ -339,9 +338,10 @@ class Planner:
                     seen.add(nxt)
                     prev[nxt] = (node, aid)
                     q.append(nxt)
-                    if (d := self._cover(nxt, g)) < bestd:
-                        best, bestd = nxt, d
-        return self._trace(prev, s, best) if best != s else None
+        # Goal unreachable on this lattice: return no route rather than a best-effort
+        # approach — chasing the closest reachable cell makes the affordance bootstrap
+        # oscillate between off-stride targets it can never cover (the ls20 limit cycle).
+        return None
 
     @staticmethod
     def _trace(prev, start, node) -> list[int]:

@@ -37,10 +37,10 @@ class _ScriptedTransport:
 
 @pytest.fixture
 def env_factory():
-    def make(reset_frame=None, step_frames=(), max_actions=80):
+    def make(reset_frame=None, step_frames=(), max_actions=80, **env_kwargs):
         transport = _ScriptedTransport(reset_frame or _frame(), list(step_frames))
         env = ArcAgi3Environment(
-            transport, game_id="ls20-test", max_actions=max_actions
+            transport, game_id="ls20-test", max_actions=max_actions, **env_kwargs
         )
         return env, transport
 
@@ -94,6 +94,33 @@ class TestStep:
         env.reset()
         env.step(ArcAction(3))
         assert transport.calls[-1] == ("act", "ls20-test", "g0", 3, None, None)
+
+
+class TestResetOnGameOver:
+    """With reset_on_game_over, a GAME_OVER respawns the game and surfaces a
+    terminal flag instead of ending the episode — so the agent can learn the
+    fatal transition and keep playing within budget."""
+
+    def _env(self, env_factory, **kw):
+        return env_factory(
+            reset_frame=_frame(guid="fresh"),
+            step_frames=[_frame(state="GAME_OVER"), _frame()],
+            **kw,
+        )
+
+    def test_flag_respawns_and_continues(self, env_factory):
+        env, transport = self._env(env_factory, reset_on_game_over=True)
+        env.reset()
+        tr = env.step(ArcAction(1))
+        assert tr.done is False
+        assert tr.state["terminal"] is True
+        assert transport.calls.count(("reset", "ls20-test")) == 2  # initial + respawn
+
+    def test_respawn_at_budget_cap_still_ends(self, env_factory):
+        env, _ = self._env(env_factory, max_actions=1, reset_on_game_over=True)
+        env.reset()
+        # the death lands on the final allowed step → no respawn, episode ends
+        assert env.step(ArcAction(1)).done is True
 
 
 class TestTaskId:

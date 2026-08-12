@@ -110,3 +110,7 @@ models/
 # Upstream code plus downloaded game sources and an offline wheelhouse; our
 # own agent and harness live in src/tgaer/. See docs/arc-agi3-kaggle.md.
 vendor/ARC-AGI-3-Kaggle-Starter/
+
+# ls20 induction-telemetry replay captures (regenerable; top-level so not covered above)
+experiments/ls20_capture.jsonl
+experiments/ls20_telemetry.jsonl

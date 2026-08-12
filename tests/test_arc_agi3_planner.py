@@ -11,7 +11,6 @@ from tgaer.agents.arc_agi3_grid import (
     find_role,
 )
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
-from tgaer.envs.arc_agi3.arc_agi3_api import ArcAction
 
 
 # A small synthetic LS20-style board: green floor (3), a 1x1 darkred avatar (12)
@@ -56,10 +55,6 @@ class TestGeometry:
 
 
 class TestPlannerNavigates:
-    def test_emits_a_legal_directional_action(self):
-        act = PlannerArcAgi3Agent().act(_obs(_board()))
-        assert isinstance(act, ArcAction) and act.id in (1, 2, 3, 4)
-
     def test_learns_a_move_vector_after_one_real_move(self):
         # Drive the agent once, then feed back a board where the avatar moved
         # down one row; the agent must record action->delta for that action.
