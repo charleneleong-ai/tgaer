@@ -16,6 +16,7 @@ COMPETITION_GAMES below.
 `--agent-rev` scores a committed revision of the agent instead of the working
 tree, which is what makes before/after comparisons possible.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -42,8 +43,9 @@ REPO = Path(__file__).resolve().parents[3]
 # not part of this repo: it carries the bundled SDK and the game sources the
 # SDK downloads into environment_files/. Only the path is referenced, so the
 # checkout can live anywhere.
-ROOT = Path(os.environ.get("ARC_STARTER_ROOT",
-                           REPO / "vendor" / "ARC-AGI-3-Kaggle-Starter"))
+ROOT = Path(
+    os.environ.get("ARC_STARTER_ROOT", REPO / "vendor" / "ARC-AGI-3-Kaggle-Starter")
+)
 if not ROOT.exists():
     raise SystemExit(
         f"Starter checkout not found at {ROOT}. Clone "
@@ -101,7 +103,9 @@ class OllamaBackend:
     # get a true token count, then apply llama-cpp's limit ourselves.
     RUNTIME_CTX_MULTIPLIER = 4
 
-    def __init__(self, model: str, n_ctx: int, host: str, timeout: float = 300.0) -> None:
+    def __init__(
+        self, model: str, n_ctx: int, host: str, timeout: float = 300.0
+    ) -> None:
         self.model = model
         self.n_ctx = n_ctx
         self.runtime_ctx = n_ctx * self.RUNTIME_CTX_MULTIPLIER
@@ -173,7 +177,9 @@ class OllamaBackend:
                 {
                     "function": {
                         "name": (tc.get("function") or {}).get("name", ""),
-                        "arguments": json.dumps((tc.get("function") or {}).get("arguments") or {}),
+                        "arguments": json.dumps(
+                            (tc.get("function") or {}).get("arguments") or {}
+                        ),
                     }
                 }
                 for tc in calls
@@ -197,7 +203,9 @@ def inert_features(agent_module: Any, decisions: dict[str, int]) -> list[str]:
         "repl_call": agent_module.REPL_STEPS > 0,
         "exploit": agent_module.EXPLOIT_REPEATS > 0,
     }
-    return sorted(name for name, on in expected.items() if on and not decisions.get(name))
+    return sorted(
+        name for name, on in expected.items() if on and not decisions.get(name)
+    )
 
 
 def resolve_games(games: str, available: list[str]) -> list[str]:
@@ -244,7 +252,10 @@ def load_agent_class(rev: str | None) -> type[Any]:
     if rev:
         source = subprocess.run(
             ["git", "show", f"{rev}:{AGENT_PATH}"],
-            cwd=REPO, capture_output=True, text=True, check=True,
+            cwd=REPO,
+            capture_output=True,
+            text=True,
+            check=True,
         ).stdout
         tmp = Path(tempfile.mkdtemp()) / "my_agent_rev.py"
         tmp.write_text(source)
@@ -291,7 +302,9 @@ class WandbRun:
         self.wandb = wandb
         self.run = wandb.init(
             project=os.environ.get("WANDB_PROJECT", "arc-agi-3"),
-            name=label, config=config, reinit=True,
+            name=label,
+            config=config,
+            reinit=True,
         )
 
     def log_frames(self, agent_module: Any, game: str, frames: list[Any]) -> None:
@@ -306,9 +319,9 @@ class WandbRun:
                 continue
             png = agent_module.render_board_png(tuple(tuple(r) for r in grid))
             if png:
-                images.append(self.wandb.Image(
-                    io.BytesIO(png), caption=f"{game} step {index}"
-                ))
+                images.append(
+                    self.wandb.Image(io.BytesIO(png), caption=f"{game} step {index}")
+                )
         if images:
             self.run.log({f"frames/{game}": images})
 
@@ -321,15 +334,25 @@ class WandbRun:
             self.run.finish()
 
 
-def play(agent_cls: type[Any], game_id: str, arc: Any,
-         backend: OllamaBackend | None, max_steps: int) -> dict[str, Any]:
+def play(
+    agent_cls: type[Any],
+    game_id: str,
+    arc: Any,
+    backend: OllamaBackend | None,
+    max_steps: int,
+) -> dict[str, Any]:
     env = arc.make(game_id)
     if env is None:
         return {"game": game_id, "error": "env-unavailable"}
 
     agent = agent_cls(
-        card_id="local-dev", game_id=game_id, agent_name=f"score.{game_id}",
-        ROOT_URL="http://localhost", record=False, arc_env=env, tags=["score-local"],
+        card_id="local-dev",
+        game_id=game_id,
+        agent_name=f"score.{game_id}",
+        ROOT_URL="http://localhost",
+        record=False,
+        arc_env=env,
+        tags=["score-local"],
     )
     agent._llm = backend
     agent.MAX_ACTIONS = max_steps
@@ -348,8 +371,13 @@ def play(agent_cls: type[Any], game_id: str, arc: Any,
     }
 
 
-def render(rows: list[dict[str, Any]], label: str, score: float,
-           levels: int, backend: Any | None) -> None:
+def render(
+    rows: list[dict[str, Any]],
+    label: str,
+    score: float,
+    levels: int,
+    backend: Any | None,
+) -> None:
     table = Table(title=f"Dev-set result — {label}", title_style="bold")
     for col in ("game", "levels", "actions", "state", "sec"):
         table.add_column(col, justify="right" if col != "state" else "left")
@@ -358,12 +386,17 @@ def render(rows: list[dict[str, Any]], label: str, score: float,
             table.add_row(row["game"], "-", "-", row["error"], "-")
             continue
         table.add_row(
-            row["game"], str(row["levels_completed"]), str(row["actions"]),
-            row["state"].replace("GameState.", ""), str(row["seconds"]),
+            row["game"],
+            str(row["levels_completed"]),
+            str(row["actions"]),
+            row["state"].replace("GameState.", ""),
+            str(row["seconds"]),
         )
     console.print(table)
 
-    console.print(f"[bold]levels completed: {levels}[/]   scorecard score: [bold]{score}[/]")
+    console.print(
+        f"[bold]levels completed: {levels}[/]   scorecard score: [bold]{score}[/]"
+    )
     # Only the ollama backend counts tokens; the HTTP one has no stats to show.
     # This line is decoration, and it once crashed the run before the inert-feature
     # check downstream of it could report which features had silently died.
@@ -374,31 +407,42 @@ def render(rows: list[dict[str, Any]], label: str, score: float,
 @app.command()
 def main(
     games: str = typer.Option(
-        "competition", help="'competition' (the 6 rerun games), 'all' (25), or a csv of ids."
+        "competition",
+        help="'competition' (the 6 rerun games), 'all' (25), or a csv of ids.",
     ),
     backend: str = typer.Option(
-        "vllm", help="'vllm' (A100 or any OpenAI-compatible server), 'ollama', "
-                     "or 'random' (no model: the floor)."
+        "vllm",
+        help="'vllm' (A100 or any OpenAI-compatible server), 'ollama', "
+        "or 'random' (no model: the floor).",
     ),
     model: str = typer.Option("arc-agent", help="Served model name / ollama tag."),
     host: str = typer.Option(
-        "", help="Server base URL. Defaults per backend: vllm "
-                 "http://127.0.0.1:8000/v1 (tunnel the A100 with `make tunnel-a100`), "
-                 "ollama http://localhost:11434."
+        "",
+        help="Server base URL. Defaults per backend: vllm "
+        "http://127.0.0.1:8000/v1 (tunnel the A100 with `make tunnel-a100`), "
+        "ollama http://localhost:11434.",
     ),
-    n_ctx: int = typer.Option(8192, help="Context window; overflow raises, as llama-cpp does."),
+    n_ctx: int = typer.Option(
+        8192, help="Context window; overflow raises, as llama-cpp does."
+    ),
     max_steps: int = typer.Option(80, help="Per-game action cap."),
-    agent_rev: str | None = typer.Option(None, help="Git rev of src/tgaer/agents/arc_agi3_kaggle.py to score."),
+    agent_rev: str | None = typer.Option(
+        None, help="Git rev of src/tgaer/agents/arc_agi3_kaggle.py to score."
+    ),
     label: str | None = typer.Option(None, help="Name for this run in the output."),
-    out: Path = typer.Option(Path("experiments/score_local.jsonl"), help="JSONL results path."),
+    out: Path = typer.Option(
+        Path("experiments/score_local.jsonl"), help="JSONL results path."
+    ),
     workers: int = typer.Option(
-        6, help="Games played concurrently. vLLM batches across them, so this is "
-                "close to free until the server's --max-num-seqs is reached."
+        6,
+        help="Games played concurrently. vLLM batches across them, so this is "
+        "close to free until the server's --max-num-seqs is reached.",
     ),
     wandb: bool | None = typer.Option(
-        None, help="Log metrics and sample frames to W&B. Defaults on when "
-                   "WANDB_API_KEY is set; the Kaggle kernel has no internet and "
-                   "never runs this script, so it is local-only by construction."
+        None,
+        help="Log metrics and sample frames to W&B. Defaults on when "
+        "WANDB_API_KEY is set; the Kaggle kernel has no internet and "
+        "never runs this script, so it is local-only by construction.",
     ),
 ) -> None:
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -424,15 +468,25 @@ def main(
         console.print(f"[dim]backend reachable: {backend} -> {reply!r}[/]")
     if wandb is None:
         wandb = bool(os.getenv("WANDB_API_KEY"))
-    tracker = WandbRun(wandb, run_label, {
-        "agent_rev": agent_rev, "backend": backend, "model": model,
-        "n_ctx": n_ctx, "max_steps": max_steps, "games": len(game_ids),
-    })
+    tracker = WandbRun(
+        wandb,
+        run_label,
+        {
+            "agent_rev": agent_rev,
+            "backend": backend,
+            "model": model,
+            "n_ctx": n_ctx,
+            "max_steps": max_steps,
+            "games": len(game_ids),
+        },
+    )
 
     rows: list[dict[str, Any]] = []
     with Progress(
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(), TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
         console=console,
     ) as progress:
         task = progress.add_task(f"scoring {run_label}", total=len(game_ids))
@@ -454,15 +508,22 @@ def main(
                 agent = row.pop("_agent", None)
                 if agent is not None:
                     tracker.log_frames(agent_module, row["game"], agent.frames)
-                tracker.log({
-                    f"game/{row['game']}/levels": row.get("levels_completed") or 0,
-                    f"game/{row['game']}/actions": row.get("actions") or 0,
-                    **{f"decisions/{k}": v for k, v in (row.get("decisions") or {}).items()},
-                })
+                tracker.log(
+                    {
+                        f"game/{row['game']}/levels": row.get("levels_completed") or 0,
+                        f"game/{row['game']}/actions": row.get("actions") or 0,
+                        **{
+                            f"decisions/{k}": v
+                            for k, v in (row.get("decisions") or {}).items()
+                        },
+                    }
+                )
                 rows.append(row)
                 progress.advance(task)
 
-    rows.sort(key=lambda r: game_ids.index(r["game"]) if r.get("game") in game_ids else 0)
+    rows.sort(
+        key=lambda r: game_ids.index(r["game"]) if r.get("game") in game_ids else 0
+    )
     card = arc.get_scorecard()
     score = float(getattr(card, "score", 0.0) or 0.0)
     levels_total = sum(r.get("levels_completed") or 0 for r in rows)
@@ -473,15 +534,24 @@ def main(
     # the vLLM client is stateless so it stays safe across game threads.
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("a") as fh:
-        fh.write(json.dumps({
-            "label": run_label, "agent_rev": agent_rev, "backend": backend,
-            "model": model if backend != "random" else None, "n_ctx": n_ctx,
-            "max_steps": max_steps, "score": score,
-            "levels_total": levels_total,
-            "overflows": getattr(llm, "overflows", None),
-            "llm_calls": getattr(llm, "calls", None),
-            "games": rows,
-        }) + "\n")
+        fh.write(
+            json.dumps(
+                {
+                    "label": run_label,
+                    "agent_rev": agent_rev,
+                    "backend": backend,
+                    "model": model if backend != "random" else None,
+                    "n_ctx": n_ctx,
+                    "max_steps": max_steps,
+                    "score": score,
+                    "levels_total": levels_total,
+                    "overflows": getattr(llm, "overflows", None),
+                    "llm_calls": getattr(llm, "calls", None),
+                    "games": rows,
+                }
+            )
+            + "\n"
+        )
     decisions: dict[str, int] = {}
     for row in rows:
         for key, count in (row.get("decisions") or {}).items():

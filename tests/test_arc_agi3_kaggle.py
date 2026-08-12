@@ -5,6 +5,7 @@ regression-guarded. `agents.agent` is not importable from here, so MyAgent picks
 up the local stub base and the dispatch tests can fake `arc_env` — the seam that
 actually carries the action payload to the gateway.
 """
+
 from __future__ import annotations
 
 import io
@@ -117,10 +118,12 @@ class TestResetHandling:
         ("state", "grid"),
         [(GameState.NOT_PLAYED, []), (GameState.GAME_OVER, [[1, 0], [0, 1]])],
     )
-    def test_unplayable_state_resets(self, state: GameState, grid: list[list[int]]) -> None:
-        assert make_agent("action(['RIGHT'])").choose_action([], mk_frame(state, grid)) is (
-            GameAction.RESET
-        )
+    def test_unplayable_state_resets(
+        self, state: GameState, grid: list[list[int]]
+    ) -> None:
+        assert make_agent("action(['RIGHT'])").choose_action(
+            [], mk_frame(state, grid)
+        ) is (GameAction.RESET)
 
     def test_repeated_reset_falls_back_to_real_input(self) -> None:
         a = make_agent("action(['RIGHT'])")
@@ -173,7 +176,9 @@ class TestRawTextParsing:
             if not unusable:
                 a._llm = None
             a._rng = random.Random(seed)
-            acts.add(a.choose_action([], mk_frame(grid=SMALL_GRID, available=(0, 1, 2))))
+            acts.add(
+                a.choose_action([], mk_frame(grid=SMALL_GRID, available=(0, 1, 2)))
+            )
         assert GameAction.RESET not in acts
         assert len(acts) > 1
 
@@ -192,15 +197,24 @@ class TestToolCalling:
 
     @pytest.mark.parametrize("bad_name", ["NOPE", "ACTION7"])
     def test_unusable_tool_call_falls_back_to_raw_text(self, bad_name: str) -> None:
-        a = make_agent(responses=[tool_response(bad_name), text_response("action(['DOWN'])")])
-        act = a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2, 3, 4, 5, 6)))
+        a = make_agent(
+            responses=[tool_response(bad_name), text_response("action(['DOWN'])")]
+        )
+        act = a.choose_action(
+            [], mk_frame(grid=SMALL_GRID, available=(1, 2, 3, 4, 5, 6))
+        )
         assert act is GameAction.ACTION2
         assert "EXACTLY ONE line in this format" in user_text(a._llm.calls[1])
 
     def test_tools_cover_exactly_the_available_actions(self, agent: ma.MyAgent) -> None:
         tools = agent._build_tools([1, 2, 3, 4, 5, 6])
         assert [t["function"]["name"] for t in tools] == [
-            "UP", "DOWN", "LEFT", "RIGHT", "SPACE", "MOUSE",
+            "UP",
+            "DOWN",
+            "LEFT",
+            "RIGHT",
+            "SPACE",
+            "MOUSE",
         ]
         mouse = next(t for t in tools if t["function"]["name"] == "MOUSE")
         assert mouse["function"]["parameters"]["required"] == ["x", "y"], (
@@ -236,9 +250,7 @@ class TestTemplateQuirks:
     with <think>. Together those disabled tool calling on every real turn.
     """
 
-    QWEN_TOOL_TEXT = (
-        '<think>\n\n<tool_call>\n{"name": "MOUSE", "arguments": {"x": 32, "y": 32}}\n</tool_call>'
-    )
+    QWEN_TOOL_TEXT = '<think>\n\n<tool_call>\n{"name": "MOUSE", "arguments": {"x": 32, "y": 32}}\n</tool_call>'
 
     def test_tool_call_left_as_text_is_recovered(self) -> None:
         a = make_agent(self.QWEN_TOOL_TEXT)
@@ -303,7 +315,9 @@ class TestModelPool:
         assert len(loads) == 1, "sequential use must not grow the pool"
         assert pool.size == 1
 
-    def test_grows_to_max_under_concurrency(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_grows_to_max_under_concurrency(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Holding all slots at once must create exactly max_size instances."""
         monkeypatch.setattr(ma, "load_llama", object)
         pool = ma.ModelPool(3)
@@ -428,7 +442,10 @@ class FakeEnv:
         self.steps: list[tuple[GameAction, dict[str, int] | None, Any]] = []
 
     def step(
-        self, action: GameAction, data: dict[str, int] | None = None, reasoning: Any = None
+        self,
+        action: GameAction,
+        data: dict[str, int] | None = None,
+        reasoning: Any = None,
     ) -> None:
         self.steps.append((action, data, reasoning))
 
@@ -451,14 +468,19 @@ class TestActionDispatch:
         a = make_agent(tool_calls=tool_call("MOUSE", '{"x": 11, "y": 22}'))
         a.arc_env = FakeEnv()
         a.do_action_request(a.choose_action([], mk_frame(grid=SMALL_GRID)))
-        assert (GameAction.ACTION6.action_data.x, GameAction.ACTION6.action_data.y) == (0, 0)
+        assert (GameAction.ACTION6.action_data.x, GameAction.ACTION6.action_data.y) == (
+            0,
+            0,
+        )
 
     def test_concurrent_games_each_dispatch_their_own_coords(self) -> None:
         seen: dict[int, dict[str, int] | None] = {}
         barrier = threading.Barrier(8)
 
         def play(idx: int) -> None:
-            a = make_agent(tool_calls=tool_call("MOUSE", f'{{"x": {idx}, "y": {idx + 1}}}'))
+            a = make_agent(
+                tool_calls=tool_call("MOUSE", f'{{"x": {idx}, "y": {idx + 1}}}')
+            )
             a.arc_env = FakeEnv()
             act = a.choose_action([], mk_frame(grid=SMALL_GRID))
             barrier.wait()  # maximize the interleaving window before dispatch
@@ -492,7 +514,10 @@ class TestActionDispatch:
 
     def test_simple_action_clears_stale_click_data(self) -> None:
         a = make_agent(
-            responses=[tool_response("MOUSE", '{"x": 5, "y": 6}'), tool_response("RIGHT")]
+            responses=[
+                tool_response("MOUSE", '{"x": 5, "y": 6}'),
+                tool_response("RIGHT"),
+            ]
         )
         a.choose_action([], mk_frame(grid=SMALL_GRID))
         a.choose_action([], mk_frame(grid=[[1, 1], [0, 0]]))
@@ -559,7 +584,9 @@ class TestGridEncoding:
         assert bbox is None
         assert encoded in {"empty", "all zeros"}
 
-    def test_change_detection_tracks_the_previous_board(self, agent: ma.MyAgent) -> None:
+    def test_change_detection_tracks_the_previous_board(
+        self, agent: ma.MyAgent
+    ) -> None:
         agent.choose_action([], mk_frame(grid=SMALL_GRID))
         assert agent._grid_changed(SMALL_GRID) is False
         assert agent._grid_changed([[0, 1], [1, 9]]) is True
@@ -570,9 +597,12 @@ class TestPromptShape:
 
     def test_raw_text_prompt_markers(self, agent: ma.MyAgent) -> None:
         prompt = agent._build_prompt(
-            "AB\nCD", "  #0 A 2px", (2, 3, 5, 7),
-            ["UP", "DOWN", "LEFT", "RIGHT", "MOUSE"], "NOT_FINISHED",
-            "1 cell(s) changed: (0,0) .->A"
+            "AB\nCD",
+            "  #0 A 2px",
+            (2, 3, 5, 7),
+            ["UP", "DOWN", "LEFT", "RIGHT", "MOUSE"],
+            "NOT_FINISHED",
+            "1 cell(s) changed: (0,0) .->A",
         )
         assert "EXACTLY ONE line in this format" in prompt
         assert "FULL-BOARD coordinates" in prompt
@@ -581,16 +611,22 @@ class TestPromptShape:
 
     def test_tool_prompt_markers(self, agent: ma.MyAgent) -> None:
         prompt = agent._build_prompt(
-            "AB\nCD", "  #0 A 2px", None, ["UP", "DOWN", "MOUSE"], "NOT_FINISHED",
-            "no change", tool_mode=True
+            "AB\nCD",
+            "  #0 A 2px",
+            None,
+            ["UP", "DOWN", "MOUSE"],
+            "NOT_FINISHED",
+            "no change",
+            tool_mode=True,
         )
         assert "Call EXACTLY ONE function" in prompt
         assert "Reasoning:" not in prompt
         assert "Recent actions" not in prompt
 
     def test_no_click_guide_when_whole_board_is_shown(self, agent: ma.MyAgent) -> None:
-        prompt = agent._build_prompt("AB", "  #0 A 1px", None, ["UP", "MOUSE"],
-                                    "NOT_FINISHED", "n/a")
+        prompt = agent._build_prompt(
+            "AB", "  #0 A 1px", None, ["UP", "MOUSE"], "NOT_FINISHED", "n/a"
+        )
         assert "FULL-BOARD coordinates" not in prompt
 
 
@@ -631,7 +667,9 @@ class TestHTTPChatBackend:
         body = self.sent_payload(monkeypatch)["body"]
         assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
-    def test_forwards_tools_and_tool_choice(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_forwards_tools_and_tool_choice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         body = self.sent_payload(monkeypatch)["body"]
         assert body["tool_choice"] == "required"
         assert body["tools"][0]["function"]["name"] == "UP"
@@ -642,7 +680,6 @@ class TestHTTPChatBackend:
         assert self.sent_payload(monkeypatch)["url"] == (
             "http://127.0.0.1:8000/v1/chat/completions"
         )
-
 
 
 class TestBackendSelection:
@@ -659,7 +696,9 @@ class TestBackendSelection:
         fake = FakeLLM(tool_calls=tool_call("RIGHT"))
         monkeypatch.setattr(ma, "REMOTE_BACKEND", fake)
         monkeypatch.setattr(
-            ma, "load_llama", lambda: pytest.fail("pool loaded despite a configured server")
+            ma,
+            "load_llama",
+            lambda: pytest.fail("pool loaded despite a configured server"),
         )
         a = ma.MyAgent()  # no _llm injected: the real rerun shape
         assert a.choose_action([], mk_frame(grid=SMALL_GRID)) is GameAction.ACTION4
@@ -735,7 +774,9 @@ class TestLevelMemory:
     def test_a_real_move_alongside_a_timer_still_counts(self) -> None:
         mem = ma.LevelMemory()
         for step, action in enumerate(["UP", "DOWN", "LEFT", "RIGHT"]):
-            mem.record(action, self.board(f"0{step}", "00"), self.board(f"0{step + 1}", "00"))
+            mem.record(
+                action, self.board(f"0{step}", "00"), self.board(f"0{step + 1}", "00")
+            )
         # Same ticking timer, but this time a game cell moves too.
         mem.record("UP", self.board("04", "00"), self.board("05", "07"))
         summary = mem.describe_last()
@@ -762,7 +803,9 @@ class TestLevelMemory:
     def test_notes_list_dead_actions_and_chrome(self) -> None:
         mem = ma.LevelMemory()
         for step, action in enumerate(["UP", "DOWN", "LEFT", "RIGHT"]):
-            mem.record(action, self.board(f"0{step}", "00"), self.board(f"0{step + 1}", "00"))
+            mem.record(
+                action, self.board(f"0{step}", "00"), self.board(f"0{step + 1}", "00")
+            )
         notes = mem.prompt_notes()
         assert "change NOTHING" in notes
         assert "timer or counter" in notes
@@ -896,25 +939,49 @@ class TestReplLoop:
         monkeypatch.setattr(ma, "REPL_STEPS", 2)
 
     def python_call(self, code: str) -> list[dict[str, Any]]:
-        return [{"function": {"name": "python", "arguments": json.dumps({"code": code})}}]
+        return [
+            {"function": {"name": "python", "arguments": json.dumps({"code": code})}}
+        ]
 
     def test_inspection_output_is_fed_back_then_an_action_is_taken(self) -> None:
-        a = make_agent(responses=[
-            {"choices": [{"message": {"tool_calls": self.python_call("print(len(grid))")}}]},
-            tool_response("RIGHT"),
-        ])
+        a = make_agent(
+            responses=[
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": self.python_call("print(len(grid))")
+                            }
+                        }
+                    ]
+                },
+                tool_response("RIGHT"),
+            ]
+        )
         assert a.choose_action([], mk_frame(grid=SMALL_GRID)) is GameAction.ACTION4
         second_call = a._llm.calls[1]["messages"]
         assert any("python output:" in m["content"] for m in second_call)
-        assert any("2" in m["content"] for m in second_call if "python output" in m["content"])
+        assert any(
+            "2" in m["content"] for m in second_call if "python output" in m["content"]
+        )
 
     def test_the_last_turn_cannot_call_python(self) -> None:
         """Otherwise a model that only inspects would never act."""
-        a = make_agent(responses=[
-            {"choices": [{"message": {"tool_calls": self.python_call("print(1)")}}]},
-            {"choices": [{"message": {"tool_calls": self.python_call("print(2)")}}]},
-            tool_response("DOWN"),
-        ])
+        a = make_agent(
+            responses=[
+                {
+                    "choices": [
+                        {"message": {"tool_calls": self.python_call("print(1)")}}
+                    ]
+                },
+                {
+                    "choices": [
+                        {"message": {"tool_calls": self.python_call("print(2)")}}
+                    ]
+                },
+                tool_response("DOWN"),
+            ]
+        )
         a.choose_action([], mk_frame(grid=SMALL_GRID))
         offered = [
             [t["function"]["name"] for t in call["tools"]] for call in a._llm.calls
@@ -939,12 +1006,14 @@ class TestBoardImage:
     def test_image_scales_with_the_board(self) -> None:
         pytest.importorskip("PIL")
         from PIL import Image
+
         png = ma.render_board_png(tuple((0,) * 10 for _ in range(6)), cell_px=5)
         assert Image.open(io.BytesIO(png)).size == (50, 30)
 
     def test_colours_differ_per_value_so_objects_are_separable(self) -> None:
         pytest.importorskip("PIL")
         from PIL import Image
+
         img = Image.open(io.BytesIO(ma.render_board_png(((1, 2),), cell_px=4)))
         assert img.getpixel((1, 1)) != img.getpixel((5, 1))
 
@@ -958,13 +1027,17 @@ class TestBoardImage:
         assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
         assert a.stats["image_sent"] == 1
 
-    def test_disabling_images_sends_plain_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_disabling_images_sends_plain_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(ma, "SEND_IMAGE", False)
         a = make_agent(tool_calls=tool_call("RIGHT"))
         a.choose_action([], mk_frame(grid=SMALL_GRID))
         assert isinstance(a._llm.calls[0]["messages"][-1]["content"], str)
 
-    def test_missing_pil_degrades_to_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_pil_degrades_to_text(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A render failure must cost the turn nothing."""
         monkeypatch.setattr(ma, "render_board_png", lambda *a, **k: None)
         a = make_agent(tool_calls=tool_call("RIGHT"))
@@ -1026,7 +1099,9 @@ class TestActionPolicy:
         still = mk_frame(grid=SMALL_GRID, available=(1, 2))
         for _ in range(4):
             a.choose_action([], still)
-        assert a.actions.last_effective != "UP", "a dead action must stop being exploited"
+        assert a.actions.last_effective != "UP", (
+            "a dead action must stop being exploited"
+        )
 
     def test_repeats_are_capped_when_the_action_keeps_working(
         self, monkeypatch: pytest.MonkeyPatch
@@ -1034,7 +1109,9 @@ class TestActionPolicy:
         """Every arrow changes a movement board, so re-arming on success never
         drained the counter and the agent held one direction until the move
         budget died — 53% of every action in the v59 run, zero levels."""
-        monkeypatch.setattr(ma, "MAX_POLICY_STREAK", 99)  # or the streak cap passes this
+        monkeypatch.setattr(
+            ma, "MAX_POLICY_STREAK", 99
+        )  # or the streak cap passes this
         a = make_agent(tool_calls=tool_call("UP"))
         a._prev_levels = 0
         a.actions.tried = {"UP": 1, "DOWN": 1}
@@ -1045,7 +1122,9 @@ class TestActionPolicy:
         for i in range(ma.EXPLOIT_REPEATS + 3):
             a.choose_action([], mk_frame(grid=[[i % 2, 1], [1, 0]], available=(1, 2)))
         assert a.stats["exploit"] <= ma.EXPLOIT_REPEATS
-        assert not a.stats["policy_yield"], "the cap must be what stops it, not the streak"
+        assert not a.stats["policy_yield"], (
+            "the cap must be what stops it, not the streak"
+        )
 
     def test_a_newly_productive_click_cell_is_exploited_too(self) -> None:
         """Every click shares the family MOUSE, so keying the burst on the family
@@ -1061,12 +1140,13 @@ class TestActionPolicy:
             a._last_action_name = f"MOUSE@{cell[0]},{cell[1]}"
             a._last_click = cell
             a._last_grid = ((1 - board, 1 - board), (1 - board, 1 - board))
-            a.choose_action([], mk_frame(grid=[[board, board], [board, board]],
-                                         available=(1, 6)))
+            a.choose_action(
+                [], mk_frame(grid=[[board, board], [board, board]], available=(1, 6))
+            )
 
-        productive_click((1, 1), 1)      # the first cell that ever worked
-        a._exploit_left = 0              # its burst is spent
-        productive_click((9, 9), 0)      # a different cell, found later, also works
+        productive_click((1, 1), 1)  # the first cell that ever worked
+        a._exploit_left = 0  # its burst is spent
+        productive_click((9, 9), 0)  # a different cell, found later, also works
         assert a._exploit_left, "a newly productive cell must arm its own burst"
 
     def test_summary_reports_what_each_action_did(self) -> None:
@@ -1132,14 +1212,16 @@ class TestClickSearch:
 
     def test_targets_skip_background_and_prefer_larger_pieces(self) -> None:
         """Clicking sk48's six biggest objects changed nothing; they are scenery."""
-        rows = [[3] * 8 for _ in range(8)]      # a big background region
+        rows = [[3] * 8 for _ in range(8)]  # a big background region
         for c in range(4):
-            rows[1][c] = 1                       # a 4-cell piece
-        rows[5][6] = 2                           # a single pixel
+            rows[1][c] = 1  # a 4-cell piece
+        rows[5][6] = 2  # a single pixel
         seg = ma.segment(tuple(tuple(r) for r in rows))
         targets = ma.ClickSearch.targets(seg, board_cells=64)
         assert len(targets) == 2, "the background region must not be a target"
-        assert targets[0][0] == 1, "the 4-cell piece should come before the single pixel"
+        assert targets[0][0] == 1, (
+            "the 4-cell piece should come before the single pixel"
+        )
 
     def test_walks_objects_without_repeating(self) -> None:
         seg = ma.segment(self.board())
@@ -1210,7 +1292,9 @@ class TestBudgetAwareness:
     source, which is why it carries over to games we have not seen.
     """
 
-    def spend(self, model: ma.ActionModel, family: str, times: int, *, meter: bool) -> None:
+    def spend(
+        self, model: ma.ActionModel, family: str, times: int, *, meter: bool
+    ) -> None:
         for _ in range(times):
             model.record(family, changed_gameplay=False, touched_hud=meter)
 
@@ -1245,7 +1329,7 @@ class TestBudgetAwareness:
         a = make_agent(tool_calls=tool_call("UP"))
         a._prev_levels = 0
         a.actions.tried = {"UP": 4, "SPACE": 4}
-        a.actions.spent = {"UP": 4}          # arrows move the meter
+        a.actions.spent = {"UP": 4}  # arrows move the meter
         still = mk_frame(grid=SMALL_GRID, available=(1, 5))
         for _ in range(5):
             a.choose_action([], still)
@@ -1325,7 +1409,7 @@ class TestUndoDetection:
         a = make_agent(tool_calls=tool_call("UP"))
         a._prev_levels = 0
         a.actions.tried = {"UP": 4, "ACTION7": 4}
-        a.actions.spent = {"UP": 4}            # arrows move the meter
+        a.actions.spent = {"UP": 4}  # arrows move the meter
         a.undo.candidate = "ACTION7"
         a.memory._no_effect_streak = 1
         a._last_action_name = "UP"
@@ -1383,7 +1467,10 @@ class TestObjectTracking:
         big = {(r, c): 7 for r in range(8) for c in range(8)}
         tracker = ma.ObjectTracker()
         tracker.update(ma.segment(self.grid(big)), board_cells=64)
-        assert tracker.update(ma.segment(self.grid({**big, (0, 0): 0})), board_cells=64) == []
+        assert (
+            tracker.update(ma.segment(self.grid({**big, (0, 0): 0})), board_cells=64)
+            == []
+        )
 
     def test_movers_rank_the_pieces_in_play(self) -> None:
         tracker = ma.ObjectTracker()
@@ -1531,11 +1618,11 @@ class TestForwardModel:
         """Scoring must happen before learning. Learning from an outcome and
         then claiming to have predicted it measures nothing at all."""
         fm = ma.ForwardModel()
-        fm.observe("UP", [(-6, 0)])          # nothing predictable yet
-        fm.observe("UP", [(-6, 0)])          # still below the threshold
+        fm.observe("UP", [(-6, 0)])  # nothing predictable yet
+        fm.observe("UP", [(-6, 0)])  # still below the threshold
         assert fm.predicted == 0, "unpredicted turns must not count as correct"
-        fm.observe("UP", [(-6, 0)])          # now predicted, and right
-        fm.observe("UP", [(9, 9)])           # predicted, and wrong
+        fm.observe("UP", [(-6, 0)])  # now predicted, and right
+        fm.observe("UP", [(9, 9)])  # predicted, and wrong
         assert (fm.predicted, fm.correct) == (2, 1)
         assert fm.accuracy == 0.5
 
@@ -1567,8 +1654,10 @@ class TestForwardModel:
 
     @pytest.mark.parametrize(
         ("kwargs", "path"),
-        [({"tool_calls": tool_call("UP")}, "tool call"),
-         ({"text": "action(['UP'])"}, "raw text")],
+        [
+            ({"tool_calls": tool_call("UP")}, "tool call"),
+            ({"text": "action(['UP'])"}, "raw text"),
+        ],
     )
     def test_a_turn_is_observed_exactly_once(
         self, kwargs: dict[str, Any], path: str
@@ -1627,7 +1716,9 @@ class TestRollout:
     def test_a_piece_stops_at_an_obstacle(self) -> None:
         cells = {"a": frozenset({(4, 2)}), "wall": frozenset({(3, 2)})}
         after = self.model().step(cells, "UP", 8, 8)
-        assert after["a"] == frozenset({(4, 2)}), "a blocked piece must not pass through"
+        assert after["a"] == frozenset({(4, 2)}), (
+            "a blocked piece must not pass through"
+        )
 
     def test_an_unknown_action_is_not_guessed(self) -> None:
         assert self.model().step({"a": frozenset({(4, 2)})}, "DOWN", 8, 8) is None

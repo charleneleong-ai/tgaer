@@ -6,6 +6,7 @@ scores zero. Three features have already shipped in this project built,
 unit-tested and never executed; a staged package that cannot be imported is the
 same failure with a bigger blast radius.
 """
+
 from __future__ import annotations
 
 import json
@@ -38,9 +39,14 @@ class TestPortedModules:
         missing = [m for m in bnb.PORTED_MODULES if not (REPO / "src" / m).exists()]
         assert not missing, f"builder would copy files that do not exist: {missing}"
 
-    def test_each_module_gets_its_own_writefile_cell(self, code_cells: list[str]) -> None:
-        written = {c.split("\n", 1)[0].split(maxsplit=1)[1].strip()
-                   for c in code_cells if c.startswith("%%writefile")}
+    def test_each_module_gets_its_own_writefile_cell(
+        self, code_cells: list[str]
+    ) -> None:
+        written = {
+            c.split("\n", 1)[0].split(maxsplit=1)[1].strip()
+            for c in code_cells
+            if c.startswith("%%writefile")
+        }
         for module in bnb.PORTED_MODULES:
             assert f"{bnb.KERNEL_PKG}/{module}" in written
 
@@ -49,7 +55,10 @@ class TestPortedModules:
         and a hand-maintained second copy drifts out of date silently."""
         target = f"%%writefile {bnb.KERNEL_PKG}/tgaer/agents/arc_agi3_semantics.py\n"
         cell = next(c for c in code_cells if c.startswith(target))
-        assert cell[len(target):] == (REPO / "src/tgaer/agents/arc_agi3_semantics.py").read_text()
+        assert (
+            cell[len(target) :]
+            == (REPO / "src/tgaer/agents/arc_agi3_semantics.py").read_text()
+        )
 
     def test_the_staging_cell_runs_before_any_module_is_written(
         self, code_cells: list[str]
@@ -57,11 +66,16 @@ class TestPortedModules:
         """%%writefile will not create parent directories, so the tree and its
         __init__.py files have to exist first."""
         staging = next(i for i, c in enumerate(code_cells) if "[pkg] staged" in c)
-        first_module = next(i for i, c in enumerate(code_cells)
-                            if c.startswith(f"%%writefile {bnb.KERNEL_PKG}/"))
+        first_module = next(
+            i
+            for i, c in enumerate(code_cells)
+            if c.startswith(f"%%writefile {bnb.KERNEL_PKG}/")
+        )
         assert staging < first_module
 
-    def test_no_placeholder_survives_into_the_notebook(self, code_cells: list[str]) -> None:
+    def test_no_placeholder_survives_into_the_notebook(
+        self, code_cells: list[str]
+    ) -> None:
         """Cell bodies are plain strings full of braces, so the package path is
         substituted rather than f-string interpolated; an unsubstituted
         placeholder would be a NameError in the kernel."""
@@ -92,7 +106,9 @@ class TestStagedPackageImports:
                 if not cell.startswith(f"%%writefile {bnb.KERNEL_PKG}/"):
                     continue
                 head, _, body = cell.partition("\n")
-                dest = Path(head.split(maxsplit=1)[1].strip().replace(bnb.KERNEL_PKG, pkg))
+                dest = Path(
+                    head.split(maxsplit=1)[1].strip().replace(bnb.KERNEL_PKG, pkg)
+                )
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(body)
 
@@ -107,8 +123,12 @@ class TestStagedPackageImports:
                 "print(a.id)\n"
             )
             # -E so an inherited PYTHONPATH cannot satisfy the import instead.
-            out = subprocess.run([sys.executable, "-E", "-c", probe],
-                                 capture_output=True, text=True, cwd=tmp)
+            out = subprocess.run(
+                [sys.executable, "-E", "-c", probe],
+                capture_output=True,
+                text=True,
+                cwd=tmp,
+            )
         assert out.returncode == 0, out.stderr[-800:]
         assert out.stdout.strip().isdigit(), out.stdout
         assert np  # the fixture guard is the reason this test can run at all
