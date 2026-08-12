@@ -111,3 +111,12 @@ experiments/ls20_telemetry.jsonl
 # ARC-AGI-3 game sources the SDK downloads on first use, under <game>/<hash>/.
 # The hand-authored fixtures (environment_files/custom_*) stay tracked.
 environment_files/*/*/
+
+# Local model snapshots and Kaggle credentials
+models/
+.kaggle/
+
+# Competition starter: a checkout of arcprize/ARC-AGI-3-Kaggle-Starter.
+# Upstream code plus downloaded game sources and an offline wheelhouse; our
+# own agent and harness live in src/tgaer/. See docs/arc-agi3-kaggle.md.
+vendor/ARC-AGI-3-Kaggle-Starter/
