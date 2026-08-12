@@ -46,18 +46,34 @@ REPO = Path(__file__).resolve().parents[3]
 ROOT = Path(
     os.environ.get("ARC_STARTER_ROOT", REPO / "vendor" / "ARC-AGI-3-Kaggle-Starter")
 )
-if not ROOT.exists():
-    raise SystemExit(
-        f"Starter checkout not found at {ROOT}. Clone "
-        "https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter there, or set "
-        "ARC_STARTER_ROOT to an existing checkout."
-    )
 sys.path.insert(0, str(REPO / "src"))
 
 VENDOR = ROOT / "vendor" / "ARC-AGI-3-Agents"
-if not VENDOR.exists():
-    raise SystemExit(f"Framework not found at {VENDOR}. Run `make setup` first.")
-sys.path.insert(0, str(VENDOR))
+if VENDOR.exists():
+    sys.path.insert(0, str(VENDOR))
+
+
+def require_starter() -> Path:
+    """The starter checkout, or a clear error naming how to get one.
+
+    Checked here rather than at import. Raising SystemExit while a module is
+    being imported takes down whatever imported it: the checkout is gitignored,
+    so on a clean CI machine this aborted pytest during collection and *no*
+    tests ran — a missing optional dependency reported as a total suite
+    failure. Only the code that actually plays a game needs the checkout.
+    """
+    if not ROOT.exists():
+        raise typer.BadParameter(
+            f"Starter checkout not found at {ROOT}. Clone "
+            "https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter there, or set "
+            "ARC_STARTER_ROOT to an existing checkout."
+        )
+    if not VENDOR.exists():
+        raise typer.BadParameter(
+            f"Framework not found at {VENDOR}. Run `make setup` in {ROOT} first."
+        )
+    return ROOT
+
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -448,6 +464,7 @@ def main(
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     run_label = label or f"{agent_rev or 'worktree'}/{backend}"
 
+    require_starter()  # the games and the SDK live there, not in this repo
     arc = arc_agi.Arcade(operation_mode=OperationMode.NORMAL)
     available = [e.game_id.split("-")[0] for e in arc.get_environments()]
     game_ids = resolve_games(games, available)
