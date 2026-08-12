@@ -53,7 +53,20 @@ testpaths = ["tests"]
 line-length = 88
 target-version = "py311"
 # Vendored env + git submodules + loose research/runtime artefacts are not ours to lint.
-extend-exclude = ["challenges", "environments", "experiments", "wandb", "logs"]
+# `environment_files` holds ARC-AGI-3 game sources: the SDK downloads them there
+# on first use, and they are obfuscated machine-generated code we neither author
+# nor edit. Linting them reported an undefined name in a downloaded game as if it
+# were ours, and the list already excluded the similarly-named `environments`,
+# so the omission read like a typo rather than a decision.
+extend-exclude = [
+  "challenges",
+  "environments",
+  "environment_files",
+  "experiments",
+  "vendor",
+  "wandb",
+  "logs",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]  # pyflakes, pycodestyle, warnings, isort (ruff owns import order + format)
