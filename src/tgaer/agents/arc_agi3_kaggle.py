@@ -1551,10 +1551,14 @@ class MyAgent(Agent):
                 self._policy_streak += 1
                 return ArcAction(id=COMPLEX_ACTION_ID, x=target[1], y=target[0])
 
-        # Only clicks available and nothing systematic to try: let the model
-        # choose, as it did before. On tn36 the policy otherwise took 201
-        # actions in 1.2s at random positions without ever asking.
-        if all(NAME_TO_ID.get(n) == COMPLEX_ACTION_ID for n in playable):
+        # Click-only games used to hand straight back to the model here, which
+        # is why the frontier never fired once on lp85, tn36 or the other four
+        # MOUSE-only games. The reason for the hand-back was that the policy
+        # clicked at *random* positions and learned nothing; the frontier picks
+        # ranked object targets and records what each did, so it earns a turn.
+        # MAX_POLICY_STREAK still guarantees the model one turn in ten.
+        click_only = all(NAME_TO_ID.get(n) == COMPLEX_ACTION_ID for n in playable)
+        if click_only and not (FRONTIER and self._sig is not None):
             return None
 
         # Probe the simple actions only. One click somewhere random says nothing
@@ -1572,7 +1576,8 @@ class MyAgent(Agent):
         # seeds cleared neither. It sits after probing so a level still starts
         # by learning what the actions do.
         if FRONTIER and self._sig is not None:
-            if (frontier := self._frontier_action(simple)) is not None:
+            options = self._frontier_options(simple, bool(clickable))
+            if (frontier := self._frontier_action(options)) is not None:
                 return frontier
 
         # An action that achieved nothing leaves the board somewhere we did not
@@ -1614,6 +1619,37 @@ class MyAgent(Agent):
             x, y = self._last_click
             return ArcAction(id=action_id, x=x, y=y)
         return self._named_action(family)
+
+    # Click targets offered to the frontier per state. Unbounded is not an
+    # option: bp35 segments into 190 objects, so a state would take 190 actions
+    # to exhaust and cn04 allows 75 on its first level. Ranked by ClickSearch,
+    # which puts real pieces ahead of single-pixel noise.
+    FRONTIER_CLICKS = 6
+
+    def _frontier_options(self, simple: list[str], clickable: bool) -> list[str]:
+        """What is worth trying in this state, clicks included.
+
+        Without clicks the frontier cannot fire at all on the six MOUSE-only
+        games — a fifth of the set, and the only games where this agent has
+        ever cleared a level. Clicks are named exactly as _record_action names
+        them so a graph edge matches the action that produced it.
+        """
+        options = list(simple)
+        if clickable:
+            options += [
+                f"MOUSE@({c},{r})"
+                for r, c in ClickSearch.targets(
+                    self._segmentation, len(self._seg_board or ()) ** 2 or GRID_SIZE**2
+                )[: self.FRONTIER_CLICKS]
+            ]
+        return options
+
+    def _option_action(self, option: str) -> Any:
+        """An ArcAction for a frontier option, which may carry a click target."""
+        if option.startswith("MOUSE@("):
+            x, y = option[len("MOUSE@(") : -1].split(",")
+            return ArcAction(id=COMPLEX_ACTION_ID, x=int(x), y=int(y))
+        return self._named_action(option)
 
     def _named_action(self, name: str) -> Any:
         """An ArcAction for a family name, with a random target for clicks."""
@@ -1734,7 +1770,7 @@ class MyAgent(Agent):
             self.stats["frontier"] += 1
             self._policy_streak += 1
             self._frontier_plan.clear()
-            return self._named_action(untested[0])
+            return self._option_action(untested[0])
 
         # A plan is a route through states, so it is void the moment a step
         # cannot be played here — following it blind would walk a route that
@@ -1746,7 +1782,7 @@ class MyAgent(Agent):
         if self._frontier_plan:
             self.stats["frontier_walk"] += 1
             self._policy_streak += 1
-            return self._named_action(self._frontier_plan.popleft())
+            return self._option_action(self._frontier_plan.popleft())
         return None
 
     def state_signature(
