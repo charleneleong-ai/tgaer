@@ -760,17 +760,6 @@ class TestLevelMemory:
         assert "rows 0..19" in summary
         assert summary.count("->") <= ma.LevelMemory.MAX_LISTED_CELLS
 
-    def test_a_ticking_timer_is_classified_as_chrome_not_progress(self) -> None:
-        """A cell that moves under every action must not count as the move working."""
-        mem = ma.LevelMemory()
-        for step, action in enumerate(["UP", "DOWN", "LEFT", "RIGHT", "SPACE"]):
-            before = self.board(f"0{step % 10}", "00")
-            after = self.board(f"0{(step + 1) % 10}", "00")  # only the timer cell moves
-            mem.record(action, before, after)
-        assert (0, 1) in mem.hud_cells
-        assert "NOTHING changed" in mem.describe_last()
-        assert mem.dead_actions, "an action that only ticks the timer is dead"
-
     def test_a_real_move_alongside_a_timer_still_counts(self) -> None:
         mem = ma.LevelMemory()
         for step, action in enumerate(["UP", "DOWN", "LEFT", "RIGHT"]):
@@ -784,14 +773,6 @@ class TestLevelMemory:
         assert "NOTHING" not in summary
         assert mem.dead_actions == set(), "a real effect clears the dead list"
 
-    def test_one_off_changes_are_never_called_chrome(self) -> None:
-        """Only cells moving under many different actions are chrome."""
-        mem = ma.LevelMemory()
-        mem.record("UP", self.board("00", "00"), self.board("01", "00"))
-        mem.record("DOWN", self.board("01", "00"), self.board("01", "00"))
-        mem.record("LEFT", self.board("01", "00"), self.board("01", "00"))
-        assert mem.hud_cells == set()
-
     def test_reset_forgets_the_previous_level(self) -> None:
         mem, board = ma.LevelMemory(), self.board("01", "10")
         mem.record("UP", board, board)
@@ -800,15 +781,15 @@ class TestLevelMemory:
         assert mem.transitions == 0
         assert "first look" in mem.describe_last()
 
-    def test_notes_list_dead_actions_and_chrome(self) -> None:
+    def test_notes_list_dead_actions(self) -> None:
+        """Chrome notes are gone with the detector; dead actions remain."""
         mem = ma.LevelMemory()
-        for step, action in enumerate(["UP", "DOWN", "LEFT", "RIGHT"]):
-            mem.record(
-                action, self.board(f"0{step}", "00"), self.board(f"0{step + 1}", "00")
-            )
+        board = self.board("01", "10")
+        for action in ("UP", "DOWN", "LEFT"):
+            mem.record(action, board, board)  # nothing changes: all three are dead
         notes = mem.prompt_notes()
         assert "change NOTHING" in notes
-        assert "timer or counter" in notes
+        assert "timer or counter" not in notes
 
     def test_empty_notes_add_nothing_to_the_prompt(self) -> None:
         assert ma.LevelMemory().prompt_notes() == ""
@@ -1283,68 +1264,6 @@ class TestClickSearch:
         assert a.stats["policy_yield"] >= 2, "the streak cap must fire repeatedly"
 
 
-class TestBudgetAwareness:
-    """Some actions spend a finite move budget and lose the level at zero.
-
-    sk48 decrements a life counter inside its arrow-key handler and never in
-    the click handler, so arrows can end the game while clicks are free. The
-    agent infers this from the on-screen meter rather than from any game's
-    source, which is why it carries over to games we have not seen.
-    """
-
-    def spend(
-        self, model: ma.ActionModel, family: str, times: int, *, meter: bool
-    ) -> None:
-        for _ in range(times):
-            model.record(family, changed_gameplay=False, touched_hud=meter)
-
-    def test_an_action_that_moves_the_meter_is_costly(self) -> None:
-        model = ma.ActionModel()
-        self.spend(model, "UP", 4, meter=True)
-        self.spend(model, "MOUSE", 4, meter=False)
-        assert model.costly("UP")
-        assert not model.costly("MOUSE")
-
-    def test_untried_actions_are_not_assumed_costly(self) -> None:
-        assert not ma.ActionModel().costly("LEFT")
-
-    def test_free_actions_are_explored_first(self) -> None:
-        model = ma.ActionModel()
-        self.spend(model, "UP", 4, meter=True)
-        self.spend(model, "MOUSE", 4, meter=False)
-        assert model.free_first(["UP", "MOUSE"])[0] == "MOUSE"
-
-    def test_summary_marks_which_actions_spend(self) -> None:
-        model = ma.ActionModel()
-        self.spend(model, "UP", 4, meter=True)
-        self.spend(model, "MOUSE", 2, meter=False)
-        summary = model.summary(["UP", "MOUSE"])
-        assert "SPENDS the move budget" in summary
-        assert "MOUSE" in summary and "(free)" in summary
-
-    def test_a_stuck_agent_explores_with_the_free_action(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(ma, "PROBE_ACTIONS", True)
-        a = make_agent(tool_calls=tool_call("UP"))
-        a._prev_levels = 0
-        a.actions.tried = {"UP": 4, "SPACE": 4}
-        a.actions.spent = {"UP": 4}  # arrows move the meter
-        still = mk_frame(grid=SMALL_GRID, available=(1, 5))
-        for _ in range(5):
-            a.choose_action([], still)
-        assert a.stats["explore_free"] > 0
-        assert a._last_action_name == "SPACE", "exploring must use the free action"
-
-    def test_the_prompt_warns_which_actions_spend_the_budget(self) -> None:
-        a = make_agent(tool_calls=tool_call("UP"))
-        a._prev_levels = 0
-        a.actions.tried = {"UP": 4}
-        a.actions.spent = {"UP": 4}
-        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 6)))
-        assert "SPEND the limited move budget" in user_text(a._llm.calls[-1])
-
-
 class TestUndoDetection:
     """An action that reverts the board, found by watching rather than by name.
 
@@ -1358,51 +1277,43 @@ class TestUndoDetection:
 
     def test_spots_an_action_that_reverts_the_board(self) -> None:
         undo = ma.UndoDetector()
-        undo.observe("RIGHT", self.A, costly=True)
-        undo.observe("RIGHT", self.B, costly=True)
-        undo.observe("ACTION7", self.A, costly=False)
+        undo.observe("RIGHT", self.A)
+        undo.observe("RIGHT", self.B)
+        undo.observe("ACTION7", self.A)
         assert undo.candidate == "ACTION7"
-
-    def test_a_costly_action_is_never_called_undo(self) -> None:
-        """Reversal is only worth taking because it is free."""
-        undo = ma.UndoDetector()
-        undo.observe("RIGHT", self.A, costly=True)
-        undo.observe("RIGHT", self.B, costly=True)
-        undo.observe("LEFT", self.A, costly=True)
-        assert undo.candidate is None
 
     def test_an_action_that_changes_nothing_is_not_undo(self) -> None:
         undo = ma.UndoDetector()
-        undo.observe("SPACE", self.A, costly=False)
-        undo.observe("SPACE", self.A, costly=False)
-        undo.observe("SPACE", self.A, costly=False)
+        undo.observe("SPACE", self.A)
+        undo.observe("SPACE", self.A)
+        undo.observe("SPACE", self.A)
         assert undo.candidate is None
 
     def test_a_false_positive_can_be_ruled_out(self) -> None:
         undo = ma.UndoDetector()
-        undo.observe("RIGHT", self.A, costly=True)
-        undo.observe("RIGHT", self.B, costly=True)
-        undo.observe("ACTION7", self.A, costly=False)
+        undo.observe("RIGHT", self.A)
+        undo.observe("RIGHT", self.B)
+        undo.observe("ACTION7", self.A)
         undo.rule_out("ACTION7")
         assert undo.candidate is None
-        undo.observe("ACTION7", self.A, costly=False)
+        undo.observe("ACTION7", self.A)
         assert undo.candidate is None, "a ruled-out action must stay ruled out"
 
     def test_history_stays_bounded(self) -> None:
         undo = ma.UndoDetector()
         for i in range(50):
-            undo.observe("UP", ((i % 2, 0), (0, 0)), costly=True)
+            undo.observe("UP", ((i % 2, 0), (0, 0)))
         assert len(undo.history) <= 3
 
     def test_reset_forgets_the_previous_level(self) -> None:
         undo = ma.UndoDetector()
-        undo.observe("RIGHT", self.A, costly=True)
-        undo.observe("RIGHT", self.B, costly=True)
-        undo.observe("ACTION7", self.A, costly=False)
+        undo.observe("RIGHT", self.A)
+        undo.observe("RIGHT", self.B)
+        undo.observe("ACTION7", self.A)
         undo.reset()
         assert undo.candidate is None and undo.history == []
 
-    def test_agent_reverts_a_wasted_costly_action(
+    def test_agent_reverts_a_wasted_action(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(ma, "PROBE_ACTIONS", False)
