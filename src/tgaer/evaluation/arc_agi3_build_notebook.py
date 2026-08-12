@@ -6,7 +6,7 @@ This script creates a notebook that:
 3. Runs the REPL agent against games
 
 Usage:
-    python scripts/build_kaggle_notebook.py
+    python src/tgaer/evaluation/arc_agi3_build_notebook.py
 """
 
 from __future__ import annotations
@@ -18,6 +18,20 @@ from textwrap import dedent
 
 REPO = Path(__file__).resolve().parents[3]
 AGENT_SRC = REPO / "src" / "tgaer" / "agents" / "arc_agi3_kaggle.py"
+# Modules copied into the kernel verbatim, keeping their package path so the
+# imports in the source work unchanged. Copying the *text* rather than
+# re-implementing it is the point: the explorer is under active development
+# (its position-memory semantics changed in #19), and a hand-maintained second
+# copy is the failure mode that produced three features which looked
+# maintained and were never actually the code that ran.
+KERNEL_PKG = "/tmp/kernel_pkg"
+PORTED_MODULES = (
+    "tgaer/core/agent_base.py",
+    "tgaer/envs/arc_agi3/arc_agi3_api.py",
+    "tgaer/agents/arc_agi3_grid.py",
+    "tgaer/agents/arc_agi3_semantics.py",
+    "tgaer/agents/arc_agi3_explorer.py",
+)
 # The notebook and its Kaggle metadata stay in the starter checkout: they are
 # pushed by the Kaggle CLI from that directory, which also holds the offline
 # wheelhouse and model snapshot the kernel needs.
@@ -62,7 +76,10 @@ def code_cell(source: str) -> dict:
         "metadata": {"trusted": True},
         "outputs": [],
         "execution_count": None,
-        "source": source,
+        # Cell bodies are plain (non-f) strings — they are full of braces that
+        # f-string interpolation would eat — so a placeholder is the way to get
+        # a build-time constant into one.
+        "source": source.replace("__KERNEL_PKG__", KERNEL_PKG),
     }
 
 
@@ -171,6 +188,36 @@ def build() -> dict:
         "%%writefile /tmp/my_agent.py\n" + agent_body
     )
 
+    # Cell3b: stage the ported tgaer modules as a real package. %%writefile
+    # cannot create directories and refuses to write into one that does not
+    # exist, so the tree and its __init__.py files are made first, and the
+    # module bodies follow one magic cell each — the magic copies the rest of
+    # the cell verbatim, so no escaping of docstrings or quotes is involved.
+    pkg_dirs = sorted({str(Path(m).parent) for m in PORTED_MODULES})
+    stage_pkg_cell = code_cell(dedent(f"""\
+        import sys
+        from pathlib import Path
+
+        PKG = Path({KERNEL_PKG!r})
+        for rel in {pkg_dirs!r}:
+            d = PKG / rel
+            d.mkdir(parents=True, exist_ok=True)
+        # Every level needs an __init__.py, including the intermediate ones.
+        for rel in {pkg_dirs!r}:
+            part = PKG
+            for name in Path(rel).parts:
+                part = part / name
+                (part / "__init__.py").touch()
+        if str(PKG) not in sys.path:
+            sys.path.insert(0, str(PKG))
+        print(f"[pkg] staged {{PKG}} on sys.path")
+        """))
+    module_cells = [
+        code_cell(f"%%writefile {KERNEL_PKG}/{rel}\n"
+                  + (REPO / "src" / rel).read_text())
+        for rel in PORTED_MODULES
+    ]
+
     # Cell4: preflight (commit mode only). Skipped during the rerun, where
     # main.py loads the model in a subprocess — a second in-kernel copy would
     # hold ~9GB and OOM the P100 (2x9GB > 16GB).
@@ -196,6 +243,20 @@ def build() -> dict:
         else:
             sys.path.insert(0, "/tmp")  # cell 3 wrote the agent here
             import my_agent
+
+            # The ported modules must import here, not merely have been written.
+            # A staged package that cannot be imported in the kernel is the same
+            # failure as a feature that never fires: it looks present and does
+            # nothing. numpy in particular is assumed rather than installed, and
+            # this project has already had a dependency it "obviously had" turn
+            # out to be broken in the kernel.
+            sys.path.insert(0, "__KERNEL_PKG__")
+            import numpy as _np
+            from tgaer.agents.arc_agi3_explorer import ExplorerArcAgi3Agent
+            from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
+            assert EmpiricalSemantics().move_lattice() == {}, "cold lattice must be empty"
+            print(f"Preflight: ported modules OK — numpy {_np.__version__}, "
+                  f"{ExplorerArcAgi3Agent.__name__} importable")
 
             n_ctx = int(os.environ["LLAMA_N_CTX"])
             available = [1, 2, 3, 4, 5, 6]
@@ -239,7 +300,7 @@ def build() -> dict:
             if not has_cuda_driver:
                 print("Preflight: NO GPU in this build (libcuda absent) — skipping the "
                       "inference check. Model load and tool calling are exercised only "
-                      "in the rerun; validate them locally with scripts/score_local.py.")
+                      "in the rerun; validate them locally with arc_agi3_score_local.py.")
             else:
                 from llama_cpp import Llama
 
@@ -504,6 +565,19 @@ def build() -> dict:
         sys.path.insert(0, "/tmp")  # cell 3 wrote the agent here
         import my_agent
 
+        # The ported modules must import here, not merely have been written. A
+        # staged package that cannot be imported is the same failure as a
+        # feature that never fires: present, and doing nothing. numpy is assumed
+        # to be in the kernel rather than installed, and a dependency this
+        # project "obviously had" has already turned out to be broken here.
+        sys.path.insert(0, "__KERNEL_PKG__")
+        import numpy as _np
+        from tgaer.agents.arc_agi3_explorer import ExplorerArcAgi3Agent
+        from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
+        assert EmpiricalSemantics().move_lattice() == {}, "cold lattice must be empty"
+        print(f"Preflight: ported modules OK — numpy {_np.__version__}, "
+              f"{ExplorerArcAgi3Agent.__name__} importable")
+
         # In a real rerun this reports but never raises: a broken tool path
         # still degrades to the raw-text fallback and can score, so killing the
         # run would be strictly worse. In the commit build it must fail loudly.
@@ -732,8 +806,10 @@ def build() -> dict:
             markdown_cell(
                 "# ARC Prize 2026 — ARC-AGI-3 Submission\n\n"
                 f"Agent driven by a local LLM (`{BACKEND}` backend).\n"
-                "Built from `agent/my_agent.py` via `scripts/build_kaggle_notebook.py`."
+                "Built from `src/tgaer/agents/arc_agi3_kaggle.py` via `src/tgaer/evaluation/arc_agi3_build_notebook.py`."
             ),
+            stage_pkg_cell,
+            *module_cells,
             *([vllm_install_cell, write_agent_cell, vllm_serve_cell, vllm_preflight_cell]
               if BACKEND == "vllm"
               else [install_cell, load_model_cell, write_agent_cell, preflight_cell]),
@@ -748,7 +824,7 @@ def build() -> dict:
 def main() -> None:
     NOTEBOOK_PATH.parent.mkdir(parents=True, exist_ok=True)
     NOTEBOOK_PATH.write_text(json.dumps(build(), indent=1))
-    print(f"[build_kaggle_notebook] Wrote {NOTEBOOK_PATH.relative_to(ROOT)}  "
+    print(f"[arc_agi3_build_notebook] Wrote {NOTEBOOK_PATH.relative_to(ROOT)}  "
           f"(backend: {BACKEND}, accelerator: {ACCELERATOR})")
 
     # Sync metadata. machine_shape is the field the CLI actually reads; keep
@@ -760,7 +836,7 @@ def main() -> None:
         if any(meta.get(k) != v for k, v in wanted.items()):
             meta.update(wanted)
             METADATA_PATH.write_text(json.dumps(meta, indent=2) + "\n")
-            print(f"[build_kaggle_notebook] Synced {wanted}")
+            print(f"[arc_agi3_build_notebook] Synced {wanted}")
 
 
 if __name__ == "__main__":

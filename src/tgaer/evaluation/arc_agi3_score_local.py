@@ -1,4 +1,4 @@
-"""Score `agent/my_agent.py` on a local dev set of real ARC-AGI-3 games.
+"""Score `src/tgaer/agents/arc_agi3_kaggle.py` on a local dev set of real ARC-AGI-3 games.
 
 The Kaggle competition allows one submission per day, so comparing agent
 revisions against the leaderboard costs a day per hypothesis and returns a
@@ -9,9 +9,9 @@ Any of the 25 published games can be played; `arc_agi` downloads them into
 `environment_files/` on first use. The six the Kaggle rerun actually uses are
 COMPETITION_GAMES below.
 
-    .venv/bin/python scripts/score_local.py --backend random
-    .venv/bin/python scripts/score_local.py --backend ollama --model qwen3:8b
-    .venv/bin/python scripts/score_local.py --agent-rev ae71cdf --label v31
+    .venv/bin/python src/tgaer/evaluation/arc_agi3_score_local.py --backend random
+    .venv/bin/python src/tgaer/evaluation/arc_agi3_score_local.py --backend ollama --model qwen3:8b
+    .venv/bin/python src/tgaer/evaluation/arc_agi3_score_local.py --agent-rev ae71cdf --label v31
 
 `--agent-rev` scores a committed revision of the agent instead of the working
 tree, which is what makes before/after comparisons possible.
@@ -388,7 +388,7 @@ def main(
     ),
     n_ctx: int = typer.Option(8192, help="Context window; overflow raises, as llama-cpp does."),
     max_steps: int = typer.Option(80, help="Per-game action cap."),
-    agent_rev: str | None = typer.Option(None, help="Git rev of agent/my_agent.py to score."),
+    agent_rev: str | None = typer.Option(None, help="Git rev of src/tgaer/agents/arc_agi3_kaggle.py to score."),
     label: str | None = typer.Option(None, help="Name for this run in the output."),
     out: Path = typer.Option(Path("experiments/score_local.jsonl"), help="JSONL results path."),
     workers: int = typer.Option(

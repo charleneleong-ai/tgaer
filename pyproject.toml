@@ -24,6 +24,11 @@ dependencies = [
   "litellm>=1.78", # ArcAgi3LLMAgent backend (Gemini / local vLLM via one client)
   "wandb>=0.27", # ARC-AGI-3 eval metric + frame-image logging
   "pillow>=10", # render the board to PNG for the vision agent + wandb images
+  # ARC-AGI-3 engine + SDK. Present in the dev venv but undeclared until now, so
+  # they resolved locally and vanished on a clean checkout: the tests for the
+  # Kaggle agent import arcengine and could not have run in CI.
+  "arcengine>=0.9.3", # FrameData / GameAction / GameState
+  "arc-agi>=0.9.9", # Arcade, OperationMode — the local-game harness
 ]
 
 [project.scripts]
