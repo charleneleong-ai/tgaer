@@ -1,0 +1,55 @@
+# Explorer Phase 7 — position memory breaks the ls20 limit cycle (first level cleared)
+
+**Date:** 2026-06-30 · **Branch:** `feat/arc-agi3-position-memory` · Prior: [`2026-06-26-explorer-phase6-affordance-cycle-fix.md`](2026-06-26-explorer-phase6-affordance-cycle-fix.md)
+
+## Hypothesis
+
+Phase 6 landed a strict-path planner fix in a closed-loop sim but was never confirmed live. The Phase 7 live re-sweep settled it: on a fresh 1000-step `ls20-9607627b` capture through the merged agent, the telemetry was **bit-identical to pre-fix** — `{affordance: 995, choose: 1}`, 74% of steps an immediate reversal (87% of those
+down↔up), 0 levels. The strict-path guard never fires on the real board because the salient decoys are *reachable*, so [`Planner.path`](../../../../tree/main/src/tgaer/agents/arc_agi3_grid.py) returns a valid route every step. The cycle is one layer deeper, and signature-space reasoning can't reach it.
+
+## Setup
+
+Two diagnostics localised the real mechanism:
+
+- **Branch-distribution replay** of the live capture: [`_nav_affordance`](../../../../tree/main/src/tgaer/agents/arc_agi3_explorer.py#L375) is a *memoryless greedy* controller — it re-selects the nearest salient target every frame. Two salient cells straddling the avatar flip which is nearest every step (stepping onto one occludes it), so it re-issues the same move forever, starving [`_choose`](../../../../tree/main/src/tgaer/agents/arc_agi3_explorer.py#L413), the cycle-free frontier explorer (995 vs 1 step).
+- **Signature-vs-position counting** on the same capture: the avatar occupies ~30 distinct cells but the board produces **741 distinct frame signatures** (193 signatures for 14 cells in a 200-step window). Incidental per-frame churn fragments one position into many signatures, so *every* signature-keyed memory — `_choose` and a first attempt that gated affordance on the `StateGraph`'s per-signature untested set — is blind to the loop. The cycle lives in avatar-**position** space; the agent's memory lived in fragmented-signature space.
+
+A bench across the sim battery confirmed the dead end: anti-reversal, untested-at-signature, and target-commitment each only enlarge the trap (and target-commitment *regresses* the Phase 6 phantom sim, 2→1). The fix has to be position-keyed.
+
+## Result
+
+[`_nav_affordance`](../../../../tree/main/src/tgaer/agents/arc_agi3_explorer.py#L375) now refuses a move that lands the avatar on a recently-occupied cell (`self._recent`, the last `_RECENT_CELLS=8` positions, updated every step, cleared on a new board —
+both a level-up and a death respawn, since the roster runs with
+`reset_on_game_over=True` and stale pre-death cells would otherwise veto the
+avatar's own approach route); [`_nav_move`](../../../../tree/main/src/tgaer/agents/arc_agi3_explorer.py#L368) (the exploit) is exempt. Live re-sweep on `ls20-9607627b`:
+
+| metric | pre-fix | Phase 7 |
+|---|---|---|
+| immediate reversals (all directions) | 74% | **28%** |
+| frontier `_choose` / affordance | 1 / 995 | **709 / 287** |
+| distinct avatar cells | 30 | **45** |
+| **levels cleared** | **0** | **1** |
+
+The first nonzero ls20 score. Breaking the position cycle unstarved the proven frontier explorer (1→709 steps), which is what actually traversed the board and cleared the level — the fix walks the agent off the cold-start cliff rather than replacing the explorer. Closed-loop [`_StraddleDecoySim`](../../../../tree/main/tests/test_arc_agi3_explorer.py) adds a per-frame blinker so signatures never repeat (faithful to the real churn); position memory solves it (RED 0 → GREEN 2) where every signature-space fix cannot. 192 tests green; ls20 / lock / phantom unregressed.
+
+## Full-roster re-sweep (2026-07-01)
+
+The single-game capture above was reconfirmed on the **whole 25-game roster** — [`experiments/sweep_roster.py`](../../../../tree/main/experiments/sweep_roster.py) `AGENT=explorer MAX_ACTIONS=1000`, one live scorecard (`2bec435a`), clean run (`err=None` on every game). Two games registered level completions:
+
+| game | score | snapshot level | read |
+|---|---|---|---|
+| `lp85-305b61c3` | **16.0** | 1 | **new** — 16 level-completion events across respawns |
+| `ls20-9607627b` | **1.0** | 0 | Phase 7 reconfirmed — one clear, then respawn |
+| other 23 | 0.0 | 0 | 7 `GAME_OVER`, 16 ran to the 1000-action cap |
+
+`score` is the cumulative count of level-completion events, not net levels: [`ArcAgi3Environment.step`](../../../../tree/main/src/tgaer/envs/arc_agi3/arc_agi3_env.py#L47) charges `Δlevels_completed` per step, and the respawn `reset()` runs *after* the delta is booked, so a reset cannot book a negative. One gap remains in that argument: the delta is taken from the `GAME_OVER` frame `transport.act()` returns, so if the server already zeroes `levels_completed` on that frame, a `-1` is booked before the reset is reached. That is not decidable from our side of the transport, and it would make 16.0 an **under**count rather than an over-count, so the reading below is conservative either way. ls20's single clear (snapshot 0) and lp85's 16 (snapshot 1) are both genuine — lp85 repeatedly reaches and clears its first level across lives where ls20 clears once.
+
+**lp85 is new evidence the affordance veto generalises beyond ls20** — the Phase 7 diagnosis was ls20-only, but the same position-space escape lifts a second, unrelated game, and lifts it 16× more repeatably. It is the natural second live test case for Phase 8.
+
+## Verdict
+
+**The limit cycle is broken in the right space.** Three prior fixes (strict-path, anti-reversal, untested-at-signature) all reasoned in signature or reachability space and only enlarged the trap; the position-keyed veto is the first to escape it, validated live, not just in sim. The journey corrected two sim-vs-real gaps that bit Phases 6–7: the live re-sweep is now the gate before any "cycle fixed" claim, and the regression sim carries per-frame churn so it can't be satisfied by a signature trick.
+
+## Next move
+
+**Phase 8 — position-keyed exploration.** Post-bootstrap the agent now spends most steps in `_choose`, which is *still* signature-keyed and churn-blind (TODO flagged at [`frame_signature`](../../../../tree/main/src/tgaer/agents/arc_agi3_explorer.py#L50)). The same 741-signature fragmentation can re-form a cycle there on a longer board; position memory only protects the cold-start window. Re-keying the `StateGraph` on avatar position (or a denoised signature) so the frontier explorer survives churn is the real fix — and the lever that should take ls20 past one level. `lp85-305b61c3` (16 clears at 1000 actions) joins ls20 as the live gate for the phase.

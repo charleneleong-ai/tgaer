@@ -43,7 +43,10 @@ poetiq = [
 where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+# "." as well as src: test_arc_agi3_replay imports the top-level `experiments`
+# package, which is not under src and is not installed. It resolved locally by
+# accident of the dev venv and only failed once CI ran the suite.
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [tool.ruff]

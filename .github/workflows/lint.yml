@@ -14,3 +14,14 @@ jobs:
       # Pinned to the version in pyproject.toml's dev deps; excludes live in [tool.ruff].
       - run: uvx ruff@0.15.13 check .
       - run: uvx ruff@0.15.13 format --check .
+
+  # Lint alone let a revert of the Phase 7 position-memory guard through clean:
+  # only the test catches it, and a regression guard that CI does not run is a
+  # comment. The suite is offline and takes under a second.
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - run: uv run pytest tests/ -q

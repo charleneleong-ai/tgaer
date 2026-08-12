@@ -45,6 +45,14 @@ from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
 Primitive = tuple
 
 _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built from
+# Avatar positions affordance won't step back onto. This is a window over the last 8
+# *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a
+# click re-appends the cell the avatar is standing on. An agent that alternates a
+# successful move with a refused one therefore remembers ~4 distinct cells, which
+# breaks a 2-cycle but not a 5-cell box loop. The step window is deliberate — it lets
+# a corridor-trapped agent self-heal within 8 steps once affordance stalls — so tune
+# this against steps, not against the size of the loop you want broken.
+_RECENT_CELLS = 8
 
 
 def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
@@ -52,7 +60,14 @@ def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
     so HUD / status-bar churn outside it doesn't fragment the state graph.
 
     Field detection (``field_box``) keys on the green floor; a later phase should
-    replace it with a colour-free field detector for games without one."""
+    replace it with a colour-free field detector for games without one.
+
+    TODO (deferred, post-Phase-7): this keys on every in-field pixel, so a board with
+    incidental per-frame churn fragments one avatar position into many signatures
+    (live ls20: 741 signatures for 30 avatar cells), blinding the ``StateGraph``
+    frontier to revisits. ``_nav_affordance`` works around it in position space, but
+    the real fix is a position-keyed or denoised signature so ``_choose`` survives
+    churn too."""
     lo, hi = field_box(arr)
     r0, c0, r1, c1 = int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
     sub = arr[r0 : r1 + 1, c0 : c1 + 1]
@@ -211,6 +226,10 @@ class ExplorerArcAgi3Agent(Agent):
         self._prev_key_n = 0
         # Directional actions already probed once to seed the avatar's move lattice.
         self._probed: set[int] = set()
+        # Recent avatar cells. Affordance won't step back onto one, breaking the
+        # position-space limit cycle that frame-signature memory can't see (on a real
+        # board incidental per-frame churn fragments one cell into many signatures).
+        self._recent: deque[tuple[int, int]] = deque(maxlen=_RECENT_CELLS)
         self.last_reply: str | None = None
         self.trace: dict | None = None
         self._step = 0
@@ -220,6 +239,7 @@ class ExplorerArcAgi3Agent(Agent):
         self._plan.clear()
         self._prev_sig = None
         self._prev_prim = None
+        self._recent.clear()  # a fresh board: stale positions must not block
 
     def act(self, observation: Any) -> ArcAction:
         obs = observation or {}
@@ -245,14 +265,26 @@ class ExplorerArcAgi3Agent(Agent):
         lattice = self._det.move_lattice()  # once per step, after the observe update
         if learning:
             self._learn_blocked(arr, lattice)
+        # Track the avatar cell every step (history must be gap-free); only affordance
+        # consults it, so the exploit may still revisit a cell to reach a known goal.
+        if self._det.avatar is not None and len(here := cells(arr, self._det.avatar)):
+            self._recent.append(tuple(map(int, here.min(0))))
 
         # A respawn after death: the action that led here was fatal. Record the
         # edge so it is never repeated, and drop the cross-death link — the frame
         # is a fresh level start, not a normal successor.
-        if obs.get("terminal") and self._prev_sig is not None and self._prev_prim:
-            self._fatal.add((self._prev_sig, self._prev_prim))
-            self._graph.take(self._prev_sig, self._prev_prim)
-            self._prev_sig = self._prev_prim = None
+        if obs.get("terminal"):
+            # The board is back to its start state, so the cells walked before
+            # dying describe a position the avatar no longer holds. Keeping them
+            # made affordance refuse to route through its own approach route for
+            # the next several steps — the cold-start window it exists to cover.
+            # A level-up clears this via _on_new_level; a respawn drops
+            # levels_completed instead, so it never reached that branch.
+            self._recent.clear()
+            if self._prev_sig is not None and self._prev_prim:
+                self._fatal.add((self._prev_sig, self._prev_prim))
+                self._graph.take(self._prev_sig, self._prev_prim)
+                self._prev_sig = self._prev_prim = None
         if levels > self._levels:  # genuine progress wipes the per-level map; a
             self._induce_goal()  # but first learn what the winning click targeted
             self._on_new_level()  # death respawn (levels drop) must keep the map
@@ -389,9 +421,29 @@ class ExplorerArcAgi3Agent(Agent):
             if arr[t] != avatar and t not in skip
         ]
         for goal in sorted(targets, key=lambda g: int(abs(g - tl).sum())):
-            if move := self._route(arr, available, lattice, av, goal):
+            move = self._route(arr, available, lattice, av, goal)
+            if move is not None and not self._steps_back(move, tl, lattice):
                 return move
         return None
+
+    def _steps_back(
+        self, move: Primitive, tl: np.ndarray, lattice: dict[int, np.ndarray]
+    ) -> bool:
+        """Would ``move`` land the avatar on a recently-occupied cell? Greedy nearest-
+        target seeking otherwise ping-pongs between two salient cells straddling the
+        avatar; refusing the step back breaks that cycle in position space.
+
+        Only ``("act", id)`` primitives carry a lattice key. A click's ``move[1]`` is
+        a row index, which would collide with the directional ids 1-4 and veto against
+        an unrelated cell — unreachable while ``_route`` returns only act primitives,
+        but the annotation is wider than the arithmetic, so guard it here.
+        """
+        if move[0] != "act":
+            return False
+        d = lattice.get(move[1])
+        if d is None:
+            return False
+        return (int(tl[0] + d[0]), int(tl[1] + d[1])) in self._recent
 
     def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
         # Drop a stale route the current frame can no longer execute.
