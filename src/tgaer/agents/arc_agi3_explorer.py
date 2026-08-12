@@ -268,10 +268,18 @@ class ExplorerArcAgi3Agent(Agent):
         # A respawn after death: the action that led here was fatal. Record the
         # edge so it is never repeated, and drop the cross-death link — the frame
         # is a fresh level start, not a normal successor.
-        if obs.get("terminal") and self._prev_sig is not None and self._prev_prim:
-            self._fatal.add((self._prev_sig, self._prev_prim))
-            self._graph.take(self._prev_sig, self._prev_prim)
-            self._prev_sig = self._prev_prim = None
+        if obs.get("terminal"):
+            # The board is back to its start state, so the cells walked before
+            # dying describe a position the avatar no longer holds. Keeping them
+            # made affordance refuse to route through its own approach route for
+            # the next several steps — the cold-start window it exists to cover.
+            # A level-up clears this via _on_new_level; a respawn drops
+            # levels_completed instead, so it never reached that branch.
+            self._recent.clear()
+            if self._prev_sig is not None and self._prev_prim:
+                self._fatal.add((self._prev_sig, self._prev_prim))
+                self._graph.take(self._prev_sig, self._prev_prim)
+                self._prev_sig = self._prev_prim = None
         if levels > self._levels:  # genuine progress wipes the per-level map; a
             self._induce_goal()  # but first learn what the winning click targeted
             self._on_new_level()  # death respawn (levels drop) must keep the map

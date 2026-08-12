@@ -607,6 +607,26 @@ class TestAffordanceEscapesPositionCycle:
                 break
         assert sim.levels == 2  # broke the position cycle and reached the door twice
 
+    def test_a_respawn_forgets_where_the_avatar_walked_before_dying(self):
+        """The board is back to its start state, so pre-death cells describe a
+        position the avatar no longer holds. Keeping them made affordance refuse
+        to route through its own approach route for the next several steps —
+        the cold-start window it exists to cover. A level-up cleared this; a
+        respawn drops levels_completed instead and never reached that branch,
+        and reset_on_game_over makes respawn the common case on the roster."""
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(_board(avatar=(2, 2))))
+        agent._recent.extend([(7, 4), (7, 3), (8, 3), (8, 4)])  # walked before dying
+        agent.act(_obs(_board(avatar=(2, 2)), levels=0, terminal=True))
+        assert not agent._recent, "a respawn must not veto the pre-death route"
+
+    def test_a_level_up_still_forgets_the_previous_board(self):
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(_board(avatar=(2, 2))))
+        agent._recent.extend([(7, 4), (7, 3)])
+        agent.act(_obs(_board(avatar=(2, 2)), levels=1))
+        assert not agent._recent
+
 
 class TestTrace:
     def test_probe_branch_tagged_first(self):

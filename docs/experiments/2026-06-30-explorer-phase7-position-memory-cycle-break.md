@@ -4,7 +4,8 @@
 
 ## Hypothesis
 
-Phase 6 landed a strict-path planner fix in a closed-loop sim but was never confirmed live. The Phase 7 live re-sweep settled it: on a fresh 1000-step `ls20-9607627b` capture through the merged agent, the telemetry was **bit-identical to pre-fix** — `{affordance: 995, choose: 1}`, 87% immediate down↔up reversals, 0 levels. The strict-path guard never fires on the real board because the salient decoys are *reachable*, so [`Planner.path`](../../tree/feat/arc-agi3-position-memory/src/tgaer/agents/arc_agi3_grid.py) returns a valid route every step. The cycle is one layer deeper, and signature-space reasoning can't reach it.
+Phase 6 landed a strict-path planner fix in a closed-loop sim but was never confirmed live. The Phase 7 live re-sweep settled it: on a fresh 1000-step `ls20-9607627b` capture through the merged agent, the telemetry was **bit-identical to pre-fix** — `{affordance: 995, choose: 1}`, 74% of steps an immediate reversal (87% of those
+down↔up), 0 levels. The strict-path guard never fires on the real board because the salient decoys are *reachable*, so [`Planner.path`](../../tree/feat/arc-agi3-position-memory/src/tgaer/agents/arc_agi3_grid.py) returns a valid route every step. The cycle is one layer deeper, and signature-space reasoning can't reach it.
 
 ## Setup
 
@@ -17,11 +18,14 @@ A bench across the sim battery confirmed the dead end: anti-reversal, untested-a
 
 ## Result
 
-[`_nav_affordance`](../../tree/feat/arc-agi3-position-memory/src/tgaer/agents/arc_agi3_explorer.py#L375) now refuses a move that lands the avatar on a recently-occupied cell (`self._recent`, the last `_RECENT_CELLS=8` positions, updated every step, cleared on a new level); [`_nav_move`](../../tree/feat/arc-agi3-position-memory/src/tgaer/agents/arc_agi3_explorer.py#L368) (the exploit) is exempt. Live re-sweep on `ls20-9607627b`:
+[`_nav_affordance`](../../tree/feat/arc-agi3-position-memory/src/tgaer/agents/arc_agi3_explorer.py#L375) now refuses a move that lands the avatar on a recently-occupied cell (`self._recent`, the last `_RECENT_CELLS=8` positions, updated every step, cleared on a new board —
+both a level-up and a death respawn, since the roster runs with
+`reset_on_game_over=True` and stale pre-death cells would otherwise veto the
+avatar's own approach route); [`_nav_move`](../../tree/feat/arc-agi3-position-memory/src/tgaer/agents/arc_agi3_explorer.py#L368) (the exploit) is exempt. Live re-sweep on `ls20-9607627b`:
 
 | metric | pre-fix | Phase 7 |
 |---|---|---|
-| immediate reversals | 87% | **28%** |
+| immediate reversals (all directions) | 74% | **28%** |
 | frontier `_choose` / affordance | 1 / 995 | **709 / 287** |
 | distinct avatar cells | 30 | **45** |
 | **levels cleared** | **0** | **1** |
