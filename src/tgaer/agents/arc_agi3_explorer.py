@@ -45,8 +45,13 @@ from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
 Primitive = tuple
 
 _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built from
-# Recent avatar cells affordance won't step back onto: a 2-cycle plus margin for short
-# box-loops, small enough not to over-forbid revisits on a tight board.
+# Avatar positions affordance won't step back onto. This is a window over the last 8
+# *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a
+# click re-appends the cell the avatar is standing on. An agent that alternates a
+# successful move with a refused one therefore remembers ~4 distinct cells, which
+# breaks a 2-cycle but not a 5-cell box loop. The step window is deliberate — it lets
+# a corridor-trapped agent self-heal within 8 steps once affordance stalls — so tune
+# this against steps, not against the size of the loop you want broken.
 _RECENT_CELLS = 8
 
 
@@ -421,10 +426,20 @@ class ExplorerArcAgi3Agent(Agent):
                 return move
         return None
 
-    def _steps_back(self, move: Primitive, tl: np.ndarray, lattice) -> bool:
+    def _steps_back(
+        self, move: Primitive, tl: np.ndarray, lattice: dict[int, np.ndarray]
+    ) -> bool:
         """Would ``move`` land the avatar on a recently-occupied cell? Greedy nearest-
         target seeking otherwise ping-pongs between two salient cells straddling the
-        avatar; refusing the step back breaks that cycle in position space."""
+        avatar; refusing the step back breaks that cycle in position space.
+
+        Only ``("act", id)`` primitives carry a lattice key. A click's ``move[1]`` is
+        a row index, which would collide with the directional ids 1-4 and veto against
+        an unrelated cell — unreachable while ``_route`` returns only act primitives,
+        but the annotation is wider than the arithmetic, so guard it here.
+        """
+        if move[0] != "act":
+            return False
         d = lattice.get(move[1])
         if d is None:
             return False
