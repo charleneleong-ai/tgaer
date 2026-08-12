@@ -203,25 +203,70 @@ class OllamaBackend:
         return out
 
 
+# Counters that mean something went wrong. Any of them above zero is a defect,
+# not a preference: the agent reached a path it is not supposed to reach.
+# image_unavailable is here because it is the counter that would have caught
+# vision shipping inert — it read 900 on that run and was noticed only by
+# somebody reading the numbers by hand.
+FAULT_COUNTERS = (
+    "image_unavailable",
+    "mouse_without_coords",
+    "tool_path_exception",
+    "choose_action_exception",
+    "repl_error",
+)
+# Counters that are legitimate in ones and twos and alarming in bulk: the agent
+# is limping rather than broken. Compared against the actions actually taken.
+DEGRADED_COUNTERS = (("random_fallback", 0.05), ("raw_text_fallback", 0.50))
+
+
 def inert_features(agent_module: Any, decisions: dict[str, int]) -> list[str]:
     """Enabled features that never once fired during the run.
 
-    Three features shipped this way — vision twice and undo once — each built,
+    Five features shipped this way — vision twice, undo, the mechanic note, and
+    chrome detection with the budget model built on it — each built,
     unit-tested, verified in isolation, and then never executed in the real
     loop. Every time the run still reported a tidy zero, which reads exactly
     like a feature that ran and did not help. A feature that cannot fire is a
     different problem from a feature that does not work, and the two must not
     look the same.
+
+    Chrome detection was the one that made the case for registering everything
+    here: it was never listed, so nothing ever asked whether it fired, and it
+    stayed dead through five agent revisions while its unit tests passed.
     """
     expected = {
         "image_sent": agent_module.SEND_IMAGE,
         "probe": agent_module.PROBE_ACTIONS,
         "repl_call": agent_module.REPL_STEPS > 0,
         "exploit": agent_module.EXPLOIT_REPEATS > 0,
+        # Always on: the forward model observes every transition, so predicting
+        # nothing across a whole run means it is not being fed.
+        "forward_predicted": True,
     }
     return sorted(
         name for name, on in expected.items() if on and not decisions.get(name)
     )
+
+
+def faults(decisions: dict[str, int], actions: int) -> list[str]:
+    """Counters that indicate a broken path rather than an unhelpful feature.
+
+    inert_features asks whether something never happened. This asks the
+    opposite question — whether something happened that never should — because
+    the two failures look identical in a results table and neither is visible
+    in the score.
+    """
+    found = [
+        f"{name}={decisions[name]}" for name in FAULT_COUNTERS if decisions.get(name)
+    ]
+    for name, limit in DEGRADED_COUNTERS:
+        count = decisions.get(name, 0)
+        if actions and count / actions > limit:
+            found.append(
+                f"{name}={count} ({count / actions:.0%} of actions, limit {limit:.0%})"
+            )
+    return found
 
 
 def resolve_games(games: str, available: list[str]) -> list[str]:
@@ -592,11 +637,23 @@ def main(
         if not decisions.get(name):
             console.print(f"[yellow]note: '{name}' never fired this run[/]")
 
+    failures = []
     if inert := inert_features(agent_module, decisions):
+        failures.append(
+            f"enabled but never fired: {', '.join(inert)}\n"
+            "  A feature that cannot fire looks exactly like one that did not help."
+        )
+    if broken := faults(decisions, sum(r.get("actions") or 0 for r in rows)):
+        failures.append(
+            f"fault counters above zero: {', '.join(broken)}\n"
+            "  These count paths the agent should never reach. image_unavailable "
+            "read 900 the run vision shipped inert, and nothing checked it."
+        )
+    if failures:
         console.print(
-            f"[bold red]FAILED: enabled but never fired: {', '.join(inert)}[/]\n"
-            "A feature that cannot fire looks exactly like one that did not help. "
-            "Fix the wiring before reading this run as a result."
+            "[bold red]FAILED:[/] "
+            + "\n[bold red]FAILED:[/] ".join(failures)
+            + "\nFix the wiring before reading this run as a result."
         )
         raise typer.Exit(1)
     tracker.log({"score": score, "levels_total": levels_total})
