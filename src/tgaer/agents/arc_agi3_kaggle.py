@@ -1175,10 +1175,22 @@ class HTTPChatBackend:
     throughput ceiling.
     """
 
-    def __init__(self, base_url: str, model: str, timeout: float = 300.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout: float = 300.0,
+        seed: int | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        # Sent as OpenAI's `seed` so a repeat is a genuine repeat. Without it an
+        # A/B cannot tell a real effect from sampling: three "seeds" that only
+        # differed by label produced byte-identical results in the arm whose
+        # decisions were mostly deterministic, and no variance to compare
+        # against in the arm that was not.
+        self.seed = seed
 
     def create_chat_completion(
         self,
@@ -1193,6 +1205,7 @@ class HTTPChatBackend:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            **({"seed": self.seed} if self.seed is not None else {}),
             # Qwen3.6's chat template gates reasoning on this flag alone; the
             # "/no_think" string that works for Qwen3 is ignored by it. Without
             # this the model spends its whole token budget inside <think> and
