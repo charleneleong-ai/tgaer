@@ -275,3 +275,38 @@ class TestForwardModelIsAsserted:
             )
             == []
         )
+
+
+class TestSeeding:
+    """A run that records a seed must have used it.
+
+    An A/B whose three "seeds" differed only by label produced byte-identical
+    results in the arm whose decisions were mostly deterministic, and no
+    variance at all to compare the other arm against.
+    """
+
+    @pytest.mark.parametrize(("seed", "present"), [(None, False), (0, True), (7, True)])
+    def test_ollama_forwards_the_seed(
+        self, monkeypatch: pytest.MonkeyPatch, seed: int | None, present: bool
+    ) -> None:
+        """0 is falsy and valid: `if self.seed:` would drop it silently."""
+        be = sl.OllamaBackend(model="test", n_ctx=4096, host="http://x", seed=seed)
+        sent = stub_post(
+            monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}}
+        )
+        be.create_chat_completion([{"role": "user", "content": "x"}])
+        assert ("seed" in sent[0]["options"]) is present
+        if present:
+            assert sent[0]["options"]["seed"] == seed
+
+    def test_each_game_gets_its_own_stream(self) -> None:
+        """Seeding every game identically made the concurrent games draw the
+        same numbers at the same index, so a run contributed one correlated
+        draw rather than one per game."""
+        import random as _random
+
+        a = _random.Random("7:sk48").random()
+        b = _random.Random("7:cn04").random()
+        again = _random.Random("7:sk48").random()
+        assert a != b, "different games must not share a stream"
+        assert a == again, "the same game and seed must still reproduce"
