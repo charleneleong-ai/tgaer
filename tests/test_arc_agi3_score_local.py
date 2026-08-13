@@ -7,134 +7,9 @@ need to be right, or every measurement taken with it is suspect.
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from tgaer.evaluation import arc_agi3_score_local as sl
-
-
-def backend(n_ctx: int = 4096) -> sl.OllamaBackend:
-    return sl.OllamaBackend(model="test", n_ctx=n_ctx, host="http://localhost:11434")
-
-
-class FakeResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-
-    def raise_for_status(self) -> None:
-        pass
-
-    def json(self) -> dict[str, Any]:
-        return self._payload
-
-
-def stub_post(
-    monkeypatch: pytest.MonkeyPatch, be: sl.OllamaBackend, payload: dict[str, Any]
-) -> list[dict[str, Any]]:
-    sent: list[dict[str, Any]] = []
-
-    def fake_post(url: str, json: dict[str, Any]) -> FakeResponse:  # noqa: A002
-        sent.append(json)
-        return FakeResponse(payload)
-
-    monkeypatch.setattr(be.client, "post", fake_post)
-    return sent
-
-
-class TestOverflowRule:
-    """Mirrors llama_cpp/llama.py:1336 — `>= n_ctx` raises, below it passes."""
-
-    @pytest.mark.parametrize(
-        ("used", "raises"), [(4095, False), (4096, True), (9000, True)]
-    )
-    def test_boundary(
-        self, monkeypatch: pytest.MonkeyPatch, used: int, raises: bool
-    ) -> None:
-        be = backend(4096)
-        stub_post(
-            monkeypatch, be, {"prompt_eval_count": used, "message": {"content": "hi"}}
-        )
-        if raises:
-            with pytest.raises(sl.ContextOverflow):
-                be.create_chat_completion([{"role": "user", "content": "x"}])
-        else:
-            be.create_chat_completion([{"role": "user", "content": "x"}])
-        assert be.prompt_tokens == [used]
-        assert be.overflows == int(raises)
-        assert be.calls == 1
-
-    def test_missing_token_count_fails_loudly(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Defaulting to 0 here would silently report 'no overflows' forever."""
-        be = backend()
-        stub_post(monkeypatch, be, {"message": {"content": "hi"}})
-        with pytest.raises(KeyError):
-            be.create_chat_completion([{"role": "user", "content": "x"}])
-
-    def test_runs_with_headroom_so_counts_are_untruncated(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """ollama truncates to num_ctx; asking for exactly n_ctx would hide overflows."""
-        be = backend(4096)
-        sent = stub_post(
-            monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}}
-        )
-        be.create_chat_completion([{"role": "user", "content": "x"}])
-        assert sent[0]["options"]["num_ctx"] > be.n_ctx
-
-
-class TestResponseShim:
-    """The agent parses llama-cpp's shape; ollama's differs in two ways."""
-
-    def test_tool_arguments_become_a_json_string(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """ollama returns a dict; the agent calls json.loads on it."""
-        be = backend()
-        stub_post(
-            monkeypatch,
-            be,
-            {
-                "prompt_eval_count": 10,
-                "message": {
-                    "tool_calls": [
-                        {"function": {"name": "MOUSE", "arguments": {"x": 3, "y": 4}}}
-                    ]
-                },
-            },
-        )
-        out = be.create_chat_completion([{"role": "user", "content": "x"}])
-        call = out["choices"][0]["message"]["tool_calls"][0]
-        assert isinstance(call["function"]["arguments"], str)
-        import json
-
-        assert json.loads(call["function"]["arguments"]) == {"x": 3, "y": 4}
-
-    def test_plain_content_has_no_tool_calls_key(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        be = backend()
-        stub_post(
-            monkeypatch,
-            be,
-            {"prompt_eval_count": 10, "message": {"content": "action(['UP'])"}},
-        )
-        message = be.create_chat_completion([{"role": "user", "content": "x"}])[
-            "choices"
-        ][0]["message"]
-        assert message["content"] == "action(['UP'])"
-        assert "tool_calls" not in message
-
-    def test_thinking_is_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """qwen3 reasons by default, which would blow past max_tokens every turn."""
-        be = backend()
-        sent = stub_post(
-            monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}}
-        )
-        be.create_chat_completion([{"role": "user", "content": "x"}])
-        assert sent[0]["think"] is False
 
 
 class TestRender:
@@ -153,15 +28,6 @@ class TestRender:
         line skipped the inert-feature check downstream of it, so a run that
         had silently lost a feature reported nothing at all."""
         sl.render(self.ROWS, "test", 0.0, 0, backend=object())
-
-    def test_a_backend_with_token_stats_still_reports_them(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """The guard must not silently swallow the overflow count it exists to show."""
-        be = backend(4096)
-        be.prompt_tokens = [10, 9000]
-        sl.render(self.ROWS, "test", 0.0, 0, backend=be)
-        assert "context overflows" in capsys.readouterr().out
 
 
 class TestResolveGames:
@@ -284,20 +150,6 @@ class TestSeeding:
     results in the arm whose decisions were mostly deterministic, and no
     variance at all to compare the other arm against.
     """
-
-    @pytest.mark.parametrize(("seed", "present"), [(None, False), (0, True), (7, True)])
-    def test_ollama_forwards_the_seed(
-        self, monkeypatch: pytest.MonkeyPatch, seed: int | None, present: bool
-    ) -> None:
-        """0 is falsy and valid: `if self.seed:` would drop it silently."""
-        be = sl.OllamaBackend(model="test", n_ctx=4096, host="http://x", seed=seed)
-        sent = stub_post(
-            monkeypatch, be, {"prompt_eval_count": 10, "message": {"content": "a"}}
-        )
-        be.create_chat_completion([{"role": "user", "content": "x"}])
-        assert ("seed" in sent[0]["options"]) is present
-        if present:
-            assert sent[0]["options"]["seed"] == seed
 
     def test_each_game_gets_its_own_stream(self) -> None:
         """Seeding every game identically made the concurrent games draw the

@@ -665,6 +665,35 @@ class TestHTTPChatBackend:
         )
         return captured
 
+    @pytest.mark.parametrize(("seed", "present"), [(None, False), (0, True), (7, True)])
+    def test_seed_is_forwarded_when_set(
+        self, monkeypatch: pytest.MonkeyPatch, seed: int | None, present: bool
+    ) -> None:
+        """0 is falsy and valid, so `if self.seed:` would drop it silently and
+        the run would record a seed the model never received."""
+        captured: dict[str, Any] = {}
+
+        class FakeResponse:
+            def __enter__(self) -> FakeResponse:
+                return self
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"choices":[{"message":{"content":"action([\'UP\'])"}}]}'
+
+        def fake_urlopen(request: Any, timeout: float = 0) -> FakeResponse:
+            captured["body"] = json.loads(request.data)
+            return FakeResponse()
+
+        monkeypatch.setattr(ma, "urlopen", fake_urlopen)
+        backend = ma.HTTPChatBackend("http://x/v1", "arc-agent", seed=seed)
+        backend.create_chat_completion(messages=[{"role": "user", "content": "hi"}])
+        assert ("seed" in captured["body"]) is present
+        if present:
+            assert captured["body"]["seed"] == seed
+
     def test_disables_thinking_via_chat_template_kwargs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
