@@ -10,7 +10,6 @@ Any of the 25 published games can be played; `arc_agi` downloads them into
 COMPETITION_GAMES below.
 
     .venv/bin/python src/tgaer/evaluation/arc_agi3_score_local.py --backend random
-    .venv/bin/python src/tgaer/evaluation/arc_agi3_score_local.py --backend ollama --model qwen3:8b
     .venv/bin/python src/tgaer/evaluation/arc_agi3_score_local.py --agent-rev ae71cdf --label v31
 
 `--agent-rev` scores a committed revision of the agent instead of the working
@@ -33,7 +32,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-import httpx
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, Progress, TextColumn, TimeElapsedColumn
@@ -97,120 +95,18 @@ app = typer.Typer(add_completion=False, help=__doc__)
 console = Console()
 
 
-class ContextOverflow(ValueError):
-    """Raised when a prompt exceeds n_ctx, mirroring llama-cpp-python.
-
-    llama_cpp/llama.py:1336 (v0.3.34, the wheel the Kaggle notebook installs)
-    raises ValueError when `len(prompt_tokens) >= n_ctx`. Reproducing that is
-    the whole point of this harness: a backend that silently truncates instead
-    would hide the exact failure that made prompt A/B tests meaningless.
-    """
-
-
-class OllamaBackend:
-    """A `llama_cpp.Llama`-compatible shim backed by a local ollama server.
-
-    Only `create_chat_completion` is implemented, in the OpenAI response shape
-    the agent expects — including tool-call `arguments` as a JSON *string*,
-    which llama-cpp emits but ollama returns pre-parsed.
-    """
-
-    # ollama truncates the prompt to num_ctx and reports the truncated count, so
-    # asking it for exactly n_ctx would hide every overflow. Run with headroom to
-    # get a true token count, then apply llama-cpp's limit ourselves.
-    RUNTIME_CTX_MULTIPLIER = 4
-
-    def __init__(
-        self,
-        model: str,
-        n_ctx: int,
-        host: str,
-        timeout: float = 300.0,
-        seed: int | None = None,
-    ) -> None:
-        self.model = model
-        self.n_ctx = n_ctx
-        self.runtime_ctx = n_ctx * self.RUNTIME_CTX_MULTIPLIER
-        self.host = host.rstrip("/")
-        self.client = httpx.Client(timeout=timeout)
-        self.prompt_tokens: list[int] = []
-        self.seed = seed
-
-    @property
-    def calls(self) -> int:
-        return len(self.prompt_tokens)
-
-    @property
-    def overflows(self) -> int:
-        return sum(1 for t in self.prompt_tokens if t >= self.n_ctx)
-
-    def summary(self) -> str:
-        seen = self.prompt_tokens or [0]
-        colour = "red" if self.overflows else "green"
-        return (
-            f"llm calls: {self.calls}   context overflows: "
-            f"[{colour}]{self.overflows}[/]   prompt tokens min/max: "
-            f"{min(seen)}/{max(seen)} (n_ctx {self.n_ctx})"
-        )
-
-    def create_chat_completion(
-        self,
-        messages: list[dict[str, Any]],
-        temperature: float = 0.6,
-        max_tokens: int = 64,
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,  # noqa: ARG002 - ollama has no equivalent
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "stream": False,
-            "think": False,  # qwen3 reasons by default; the agent wants one action
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-                "num_ctx": self.runtime_ctx,
-                # ollama honours this; dropping it would stamp a seed on the
-                # JSONL row that never reached the model.
-                **({"seed": self.seed} if self.seed is not None else {}),
-            },
-        }
-        if tools:
-            payload["tools"] = tools
-
-        response = self.client.post(f"{self.host}/api/chat", json=payload)
-        response.raise_for_status()
-        body = response.json()
-
-        # ollama truncates silently; llama-cpp raises. Enforce llama-cpp's rule
-        # using the model's own token count so the comparison stays faithful.
-        # No default: if ollama ever stops reporting this, fail loudly rather
-        # than silently treating every prompt as fitting.
-        used = int(body["prompt_eval_count"])
-        self.prompt_tokens.append(used)
-        if used >= self.n_ctx:
-            raise ContextOverflow(
-                f"Requested tokens ({used}) exceed context window of {self.n_ctx}"
-            )
-        return {"choices": [{"message": self._to_openai(body.get("message") or {})}]}
-
-    @staticmethod
-    def _to_openai(message: dict[str, Any]) -> dict[str, Any]:
-        out: dict[str, Any] = {"content": message.get("content") or ""}
-        calls = message.get("tool_calls") or []
-        if calls:
-            out["tool_calls"] = [
-                {
-                    "function": {
-                        "name": (tc.get("function") or {}).get("name", ""),
-                        "arguments": json.dumps(
-                            (tc.get("function") or {}).get("arguments") or {}
-                        ),
-                    }
-                }
-                for tc in calls
-            ]
-        return out
+# The ollama shim and its ContextOverflow rule lived here and are gone: no run
+# ever used them (20 vllm, 2 random, 0 ollama across every recorded run) and no
+# ollama server is installed.
+#
+# Worth keeping the reason they existed. ContextOverflow mirrored
+# llama_cpp/llama.py:1336, which raises when len(prompt_tokens) >= n_ctx, and it
+# is what made the v31 failure visible: the agent carried a full board per turn
+# in its chat history, overflowed n_ctx around step 3, and every call raised, so
+# five days of prompt A/Bs were run against an agent playing randomly. The fix
+# was removing the history rather than detecting the overflow, and HTTPChatBackend
+# counts no tokens, so the detector guarded nothing on the live path. Anyone
+# reintroducing chat history should reintroduce this check with it.
 
 
 # Counters that mean something went wrong. Any of them above zero is a defect,
@@ -292,7 +188,7 @@ def resolve_games(games: str, available: list[str]) -> list[str]:
     return chosen
 
 
-DEFAULT_HOSTS = {"vllm": "http://127.0.0.1:8000/v1", "ollama": "http://localhost:11434"}
+DEFAULT_HOSTS = {"vllm": "http://127.0.0.1:8000/v1"}
 
 
 def make_backend(
@@ -300,7 +196,6 @@ def make_backend(
     agent_module: Any,
     model: str,
     host: str,
-    n_ctx: int,
     seed: int | None = None,
 ) -> Any | None:
     """Pick where inference comes from.
@@ -314,8 +209,6 @@ def make_backend(
         return None
     if backend == "vllm":
         return agent_module.HTTPChatBackend(host, model, seed=seed)
-    if backend == "ollama":
-        return OllamaBackend(model, n_ctx, host, seed=seed)
     raise typer.BadParameter(f"unknown backend {backend!r}")
 
 
@@ -486,7 +379,8 @@ def render(
     console.print(
         f"[bold]levels completed: {levels}[/]   scorecard score: [bold]{score}[/]"
     )
-    # Only the ollama backend counts tokens; the HTTP one has no stats to show.
+    # No backend counts tokens now that the ollama shim is gone, so this is
+    # kept only so a future backend that does can report without a code change.
     # This line is decoration, and it once crashed the run before the inert-feature
     # check downstream of it could report which features had silently died.
     if (summary := getattr(backend, "summary", None)) is not None:
@@ -501,18 +395,14 @@ def main(
     ),
     backend: str = typer.Option(
         "vllm",
-        help="'vllm' (A100 or any OpenAI-compatible server), 'ollama', "
-        "or 'random' (no model: the floor).",
+        help="'vllm' (A100 or any OpenAI-compatible server) or 'random' "
+        "(no model: the floor).",
     ),
-    model: str = typer.Option("arc-agent", help="Served model name / ollama tag."),
+    model: str = typer.Option("arc-agent", help="Served model name."),
     host: str = typer.Option(
         "",
-        help="Server base URL. Defaults per backend: vllm "
-        "http://127.0.0.1:8000/v1 (tunnel the A100 with `make tunnel-a100`), "
-        "ollama http://localhost:11434.",
-    ),
-    n_ctx: int = typer.Option(
-        8192, help="Context window; overflow raises, as llama-cpp does."
+        help="Server base URL. Defaults to http://127.0.0.1:8000/v1 for vllm "
+        "(tunnel the A100 with `make tunnel-a100`).",
     ),
     max_steps: int = typer.Option(80, help="Per-game action cap."),
     seed: int | None = typer.Option(
@@ -558,7 +448,7 @@ def main(
 
     agent_cls = load_agent_class(agent_rev)
     agent_module = sys.modules[agent_cls.__module__]
-    llm = make_backend(backend, agent_module, model, host, n_ctx, seed=seed)
+    llm = make_backend(backend, agent_module, model, host, seed=seed)
 
     # Fail here rather than measure nothing. The agent degrades to random
     # actions when inference fails, so a dead server produces a full run of
@@ -579,7 +469,6 @@ def main(
             "agent_rev": agent_rev,
             "backend": backend,
             "model": model,
-            "n_ctx": n_ctx,
             "max_steps": max_steps,
             "seed": seed,
             "games": len(game_ids),
@@ -646,7 +535,6 @@ def main(
                     "agent_rev": agent_rev,
                     "backend": backend,
                     "model": model if backend != "random" else None,
-                    "n_ctx": n_ctx,
                     "max_steps": max_steps,
                     "score": score,
                     "levels_total": levels_total,
