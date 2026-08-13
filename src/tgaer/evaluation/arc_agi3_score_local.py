@@ -24,6 +24,7 @@ import io
 import json
 import logging
 import os
+import random
 import subprocess
 import sys
 import tempfile
@@ -286,7 +287,12 @@ DEFAULT_HOSTS = {"vllm": "http://127.0.0.1:8000/v1", "ollama": "http://localhost
 
 
 def make_backend(
-    backend: str, agent_module: Any, model: str, host: str, n_ctx: int
+    backend: str,
+    agent_module: Any,
+    model: str,
+    host: str,
+    n_ctx: int,
+    seed: int | None = None,
 ) -> Any | None:
     """Pick where inference comes from.
 
@@ -298,7 +304,7 @@ def make_backend(
     if backend == "random":
         return None
     if backend == "vllm":
-        return agent_module.HTTPChatBackend(host, model)
+        return agent_module.HTTPChatBackend(host, model, seed=seed)
     if backend == "ollama":
         return OllamaBackend(model, n_ctx, host)
     raise typer.BadParameter(f"unknown backend {backend!r}")
@@ -399,8 +405,9 @@ def play(
     agent_cls: type[Any],
     game_id: str,
     arc: Any,
-    backend: OllamaBackend | None,
+    backend: Any | None,
     max_steps: int,
+    seed: int | None = None,
 ) -> dict[str, Any]:
     env = arc.make(game_id)
     if env is None:
@@ -416,6 +423,10 @@ def play(
         tags=["score-local"],
     )
     agent._llm = backend
+    if seed is not None:
+        # The agent's own RNG picks random fallbacks and random click targets;
+        # seeding only the model would leave that source of variation loose.
+        agent._rng = random.Random(seed)
     agent.MAX_ACTIONS = max_steps
 
     started = time.monotonic()
@@ -487,6 +498,13 @@ def main(
         8192, help="Context window; overflow raises, as llama-cpp does."
     ),
     max_steps: int = typer.Option(80, help="Per-game action cap."),
+    seed: int | None = typer.Option(
+        None,
+        help="Seed the model sampler and the agent RNG so a repeat is a real "
+        "repeat. Without it, runs labelled as different seeds are not: an A/B "
+        "whose three 'seeds' differed only by label produced byte-identical "
+        "results in the deterministic arm and no variance to compare against.",
+    ),
     agent_rev: str | None = typer.Option(
         None, help="Git rev of src/tgaer/agents/arc_agi3_kaggle.py to score."
     ),
@@ -516,7 +534,7 @@ def main(
 
     agent_cls = load_agent_class(agent_rev)
     agent_module = sys.modules[agent_cls.__module__]
-    llm = make_backend(backend, agent_module, model, host, n_ctx)
+    llm = make_backend(backend, agent_module, model, host, n_ctx, seed=seed)
 
     # Fail here rather than measure nothing. The agent degrades to random
     # actions when inference fails, so a dead server produces a full run of
@@ -555,7 +573,7 @@ def main(
 
         def run(game_id: str) -> dict[str, Any]:
             try:
-                return play(agent_cls, game_id, arc, llm, max_steps)
+                return play(agent_cls, game_id, arc, llm, max_steps, seed=seed)
             except Exception as exc:  # noqa: BLE001
                 return {"game": game_id, "error": f"{type(exc).__name__}: {exc}"}
 
@@ -609,6 +627,7 @@ def main(
                     "levels_total": levels_total,
                     "overflows": getattr(llm, "overflows", None),
                     "llm_calls": getattr(llm, "calls", None),
+                    "seed": seed,
                     "games": rows,
                 }
             )
