@@ -121,7 +121,12 @@ class OllamaBackend:
     RUNTIME_CTX_MULTIPLIER = 4
 
     def __init__(
-        self, model: str, n_ctx: int, host: str, timeout: float = 300.0
+        self,
+        model: str,
+        n_ctx: int,
+        host: str,
+        timeout: float = 300.0,
+        seed: int | None = None,
     ) -> None:
         self.model = model
         self.n_ctx = n_ctx
@@ -129,6 +134,7 @@ class OllamaBackend:
         self.host = host.rstrip("/")
         self.client = httpx.Client(timeout=timeout)
         self.prompt_tokens: list[int] = []
+        self.seed = seed
 
     @property
     def calls(self) -> int:
@@ -164,6 +170,9 @@ class OllamaBackend:
                 "temperature": temperature,
                 "num_predict": max_tokens,
                 "num_ctx": self.runtime_ctx,
+                # ollama honours this; dropping it would stamp a seed on the
+                # JSONL row that never reached the model.
+                **({"seed": self.seed} if self.seed is not None else {}),
             },
         }
         if tools:
@@ -306,7 +315,7 @@ def make_backend(
     if backend == "vllm":
         return agent_module.HTTPChatBackend(host, model, seed=seed)
     if backend == "ollama":
-        return OllamaBackend(model, n_ctx, host)
+        return OllamaBackend(model, n_ctx, host, seed=seed)
     raise typer.BadParameter(f"unknown backend {backend!r}")
 
 
@@ -426,7 +435,15 @@ def play(
     if seed is not None:
         # The agent's own RNG picks random fallbacks and random click targets;
         # seeding only the model would leave that source of variation loose.
-        agent._rng = random.Random(seed)
+        # Mixed with the game id: seeding every game identically made the
+        # concurrent games draw the same numbers at the same index, so a run
+        # contributed one correlated draw rather than one per game.
+        assert hasattr(agent, "_rng"), (
+            f"{agent_cls.__name__} has no _rng to seed; --agent-rev may have "
+            "loaded a revision that predates it, and the run would record a "
+            "seed it never used"
+        )
+        agent._rng = random.Random(f"{seed}:{game_id}")
     agent.MAX_ACTIONS = max_steps
 
     started = time.monotonic()
@@ -500,10 +517,13 @@ def main(
     max_steps: int = typer.Option(80, help="Per-game action cap."),
     seed: int | None = typer.Option(
         None,
-        help="Seed the model sampler and the agent RNG so a repeat is a real "
-        "repeat. Without it, runs labelled as different seeds are not: an A/B "
-        "whose three 'seeds' differed only by label produced byte-identical "
-        "results in the deterministic arm and no variance to compare against.",
+        help="Seed the model sampler and the agent RNG. Best-effort, not a "
+        "fixture: vLLM's seed fixes the sampler but not the batch-dependent "
+        "float reductions of continuous batching, so two runs at one seed "
+        "still diverge a little (measured on sk48: 1 prediction). Different "
+        "seeds diverge about five times as much, which is what makes three "
+        "seeds three samples — an A/B whose 'seeds' differed only by label "
+        "produced byte-identical results and no variance to compare against.",
     ),
     agent_rev: str | None = typer.Option(
         None, help="Git rev of src/tgaer/agents/arc_agi3_kaggle.py to score."
@@ -526,6 +546,10 @@ def main(
 ) -> None:
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
     run_label = label or f"{agent_rev or 'worktree'}/{backend}"
+    # Without this, three seeded runs share one label in W&B and in the JSONL,
+    # which is why earlier runs hand-encoded the seed into --label.
+    if seed is not None and label is None:
+        run_label = f"{run_label}/seed{seed}"
 
     require_starter()  # the games and the SDK live there, not in this repo
     arc = arc_agi.Arcade(operation_mode=OperationMode.NORMAL)
@@ -557,6 +581,7 @@ def main(
             "model": model,
             "n_ctx": n_ctx,
             "max_steps": max_steps,
+            "seed": seed,
             "games": len(game_ids),
         },
     )
