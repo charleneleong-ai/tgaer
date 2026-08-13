@@ -1,8 +1,9 @@
 """Tests for the local scoring harness.
 
-The harness exists to make agent comparisons trustworthy, so its two pieces of
-real logic — the llama-cpp overflow rule and the ollama→OpenAI response shim —
-need to be right, or every measurement taken with it is suspect.
+The harness exists to make agent comparisons trustworthy, so the checks that
+decide whether a run is readable at all — which features fired, which fault
+counters moved, whether the seed reached the model — need to be right, or
+every measurement taken with it is suspect.
 """
 
 from __future__ import annotations
