@@ -628,25 +628,63 @@ def build() -> dict:
                   "for the whole run.")
             os.environ["ARC_SEND_IMAGE"] = "0"
             my_agent.SEND_IMAGE = False
+            # Every later probe sends this too, so it must be the text payload
+            # rather than the image the server just refused.
+            content = prompt
             out = my_agent.REMOTE_BACKEND.create_chat_completion(
                 messages=[{"role": "system", "content": my_agent.TOOL_SYSTEM},
-                          {"role": "user", "content": prompt}],
+                          {"role": "user", "content": content}],
                 tools=tools, tool_choice="required", temperature=0.4,
                 max_tokens=my_agent.MAX_OUTPUT_TOKENS,
             )
-        message = out["choices"][0]["message"]
-        content = my_agent.strip_thinking(message.get("content") or "")
-        calls = message.get("tool_calls") or my_agent.parse_text_tool_calls(content)
-        print(f"Preflight usage={out.get('usage')} structured={bool(message.get('tool_calls'))}")
-        print(f"Preflight tool_calls={json.dumps(calls)[:300]} content={content[:200]!r}")
-        called = [(c.get("function") or {}).get("name", "").upper() for c in calls]
-        usable = any(my_agent.NAME_TO_ID.get(n) in available for n in called)
+        def report(mode, out):
+            \"\"\"Whether this tool mode yields a usable action, and why not.
+
+            Prints the raw message, not the stripped one. v53 failed here with
+            `content=''` after stripping, which is what an unterminated <think>
+            block and a tool call the server's parser rejected both look like —
+            indistinguishable, so the build could not say which it was.
+            \"\"\"
+            message = out["choices"][0]["message"]
+            raw = message.get("content") or ""
+            content = my_agent.strip_thinking(raw)
+            calls = message.get("tool_calls") or my_agent.parse_text_tool_calls(content)
+            called = [(c.get("function") or {}).get("name", "").upper() for c in calls]
+            usable = any(my_agent.NAME_TO_ID.get(n) in available for n in called)
+            print(f"[{mode}] usage={out.get('usage')} "
+                  f"finish={out['choices'][0].get('finish_reason')!r} "
+                  f"structured={bool(message.get('tool_calls'))} usable={usable}")
+            print(f"[{mode}] called={called} raw={raw[:300]!r}")
+            return usable
+
+        # Probe the runtime path first, then the alternative. The scored kernel
+        # serves vLLM 0.19 from a pinned wheelhouse and local runs are on 0.26,
+        # so which mode returns a call is a property of the server, not the
+        # prompt, and picking it here costs one request instead of a submission.
+        usable = report("required", out)
+        if not usable:
+            for mode in ("auto",):
+                probe_out = my_agent.REMOTE_BACKEND.create_chat_completion(
+                    messages=[{"role": "system", "content": my_agent.TOOL_SYSTEM},
+                              {"role": "user", "content": content}],
+                    tools=tools, tool_choice=mode, temperature=0.4,
+                    max_tokens=my_agent.MAX_OUTPUT_TOKENS,
+                )
+                if report(mode, probe_out):
+                    # The env var as well as the flag: the rerun plays in a
+                    # subprocess that re-imports my_agent, and only the
+                    # environment survives that.
+                    os.environ["ARC_TOOL_CHOICE"] = mode
+                    my_agent.TOOL_CHOICE = mode
+                    print(f"Preflight selected tool_choice={mode!r}")
+                    usable = True
+                    break
         if MUST_PASS:
-            assert calls, f"no tool call, structured or recoverable; content={content[:200]!r}"
-            assert usable, f"tool call names {called} resolve to no available action"
+            assert usable, "no tool mode returned a usable action; see the raw output above"
         elif not usable:
             print("WARNING: tool calling unusable; the agent will use raw-text fallback")
-        print(f"Preflight {'OK' if usable else 'DEGRADED'} — vLLM serving.")
+        print(f"Preflight {'OK' if usable else 'DEGRADED'} — vLLM serving "
+              f"with tool_choice={my_agent.TOOL_CHOICE!r}.")
         """)
     )
 

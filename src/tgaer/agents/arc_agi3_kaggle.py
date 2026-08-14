@@ -94,6 +94,12 @@ GRID_SIZE = 64
 # refusal: a reasoning model burned all 64 tokens on <think> and returned
 # nothing usable at all.
 MAX_OUTPUT_TOKENS = int(os.environ.get("ARC_MAX_OUTPUT_TOKENS", "128"))
+# "required" forces a tool call through guided decoding; "auto" leaves the model
+# to emit a <tool_call> block the server's parser picks up. Which one works is a
+# property of the serving stack, not of us: the scored kernel installs vLLM
+# 0.19 from a fixed wheelhouse while local runs are on 0.26, and the preflight
+# probes both and sets this to whichever actually returns a call.
+TOOL_CHOICE = os.environ.get("ARC_TOOL_CHOICE", "required")
 # Python inspections allowed before an action must be chosen. Measured at 2:
 # throughput fell 163 -> 41 actions/min (168 projected actions per game, down
 # from 668) and levels completed stayed at 0, so the loop cost four turns' worth
@@ -2158,7 +2164,7 @@ Current board (symbols: {ARC_LEGEND}):
                     tools if step < REPL_STEPS else self._build_tools(available)
                 )
                 response = self._complete_messages(
-                    messages, temperature=0.4, tools=turn_tools, tool_choice="required"
+                    messages, temperature=0.4, tools=turn_tools, tool_choice=TOOL_CHOICE
                 )
                 if response is None:
                     return None
