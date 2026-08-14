@@ -1876,3 +1876,113 @@ class TestFrontierClicks:
         options = a._frontier_options(["UP", "DOWN"], clickable=True)
         assert options[:2] == ["UP", "DOWN"]
         assert any(o.startswith("MOUSE@(") for o in options)
+
+
+class RecordingExplorer:
+    """Stands in for ExplorerArcAgi3Agent, recording the observation it is given."""
+
+    def __init__(self, action: Any = None) -> None:
+        self.observations: list[dict[str, Any]] = []
+        self.action = action if action is not None else ma.ArcAction(id=1)
+
+    def act(self, observation: Any) -> Any:
+        self.observations.append(observation)
+        return self.action
+
+
+class TestExplorerAdapter:
+    """The model-free explorer, driven through the framework's Agent interface."""
+
+    def test_a_simple_action_reaches_the_framework_as_its_game_action(self) -> None:
+        """The only case with no stub in it: with no frame yet the real explorer
+        takes the first available action, so this pins the whole path."""
+        a = ma.ExplorerAgent()
+        act = a.choose_action([], mk_frame(grid=None, available=(3,)))
+        assert act is GameAction.ACTION3
+
+    def test_the_observation_carries_what_the_explorer_needs(self) -> None:
+        """act() reads these four keys; a missing one silently degrades it to
+        first-action-forever."""
+        a = ma.ExplorerAgent()
+        a._explorer = RecordingExplorer()
+        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(2, 6), levels=4))
+        assert a._explorer.observations[-1] == {
+            "frame": [SMALL_GRID],
+            "available_actions": [2, 6],
+            "levels_completed": 4,
+            "terminal": False,
+        }
+
+    @pytest.mark.parametrize(
+        ("state", "terminal"),
+        [(GameState.NOT_FINISHED, False), (GameState.GAME_OVER, True)],
+    )
+    def test_a_death_is_reported_as_terminal(
+        self, state: GameState, terminal: bool
+    ) -> None:
+        """The explorer records the edge that killed it and refuses to repeat it,
+        but only when it is told the frame was a death."""
+        a = ma.ExplorerAgent()
+        a._explorer = RecordingExplorer()
+        a._last_action_id = 3
+        a.choose_action([], mk_frame(state=state, grid=SMALL_GRID))
+        assert a._explorer.observations[-1]["terminal"] is terminal
+
+    def test_a_click_is_staged_per_agent_not_on_the_shared_enum(self) -> None:
+        """GameAction members are process-wide singletons and the kernel plays
+        games concurrently, so coordinates must ride on the agent."""
+        a = ma.ExplorerAgent()
+        a._explorer = RecordingExplorer(ma.ArcAction(id=6, x=11, y=7))
+        act = a.choose_action([], mk_frame(grid=SMALL_GRID, available=(6,)))
+        assert act is GameAction.ACTION6
+        assert a._pending_data == {"x": 11, "y": 7}
+
+    def test_an_explorer_error_does_not_stall_the_gateway(self) -> None:
+        """A raising agent empties the scorecard for the whole game; the LLM path
+        already falls back to random for this reason."""
+        a = ma.ExplorerAgent()
+
+        def boom(_obs: Any) -> Any:
+            raise RuntimeError("induction blew up")
+
+        a._explorer.act = boom
+        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2)))
+        assert a.stats["choose_action_exception"] == 1
+
+    @pytest.mark.parametrize(
+        ("state", "last_id", "expected"),
+        [
+            (GameState.GAME_OVER, 3, GameAction.RESET),
+            (GameState.NOT_PLAYED, 3, GameAction.RESET),
+            # A RESET that did not take: play a real input rather than spin.
+            (GameState.GAME_OVER, 0, GameAction.ACTION2),
+        ],
+    )
+    def test_an_unplayable_board_is_restarted(
+        self, state: GameState, last_id: int, expected: GameAction
+    ) -> None:
+        """The gateway serves an empty board before the first RESET and a dead
+        one after GAME_OVER. Acting on either burns the budget: lp85 and ls20
+        both ran 201 actions to GAME_OVER and cleared nothing."""
+        a = ma.ExplorerAgent()
+        a._explorer = RecordingExplorer(ma.ArcAction(id=2))
+        a._last_action_id = last_id
+        assert a.choose_action([], mk_frame(state=state, grid=SMALL_GRID)) is expected
+
+    def test_every_death_resets_not_just_the_first(self) -> None:
+        """_make_reset pins _last_action_id to 0, so an agent that never records
+        its own actions keeps the 'a RESET did not take' escape hatch open for
+        the rest of the game and plays every later death out on a dead board."""
+        a = ma.ExplorerAgent()
+        a._explorer = RecordingExplorer(ma.ArcAction(id=2))
+        a._last_action_id = 3
+
+        assert a.choose_action([], mk_frame(state=GameState.GAME_OVER)) is (
+            GameAction.RESET
+        )
+        # The restart lands and the explorer plays a real action.
+        a.choose_action([], mk_frame(grid=SMALL_GRID))
+        # Dying again must restart again.
+        assert a.choose_action([], mk_frame(state=GameState.GAME_OVER)) is (
+            GameAction.RESET
+        )

@@ -59,6 +59,30 @@ ACCELERATOR = "rtx6000"
 #              pool slot. Validated end to end as kernel v38.
 BACKEND = os.environ.get("ARC_BACKEND", "vllm")
 
+# Which agent plays: "myagent" is the 27B LLM agent, "explorer" the model-free
+# one. Read at build time, not in the kernel: the explorer calls no model, so
+# selecting it also drops the vLLM install, the 36GB weight load and the
+# preflight — 10-15 minutes of startup billed against a wall-clock-scored run.
+KERNEL_AGENT = os.environ.get("ARC_KERNEL_AGENT", "myagent")
+# Registry name -> class name in the agent module. The mock rewrites the
+# framework's agents/__init__.py to a one-line stub so importing it does not
+# drag in langgraph, so the registry it would otherwise read does not exist
+# when the mock runs; the class name is substituted into both cells instead.
+KERNEL_AGENTS = {"myagent": "MyAgent", "explorer": "ExplorerAgent"}
+KERNEL_AGENT_CLASS = KERNEL_AGENTS.get(KERNEL_AGENT, "")
+NEEDS_MODEL = KERNEL_AGENT != "explorer"
+# Mock breadth. Six threads is what the LLM agent can serve without the shared
+# model becoming the bottleneck; the explorer calls no model and runs ~3x
+# faster, so it covers the whole roster. That matters more than it sounds: the
+# first six games alphabetically exclude ls20 and lp85, the only two where any
+# agent scores, so a six-game mock cannot see the difference it is run to find.
+MOCK_THREADS = 6 if NEEDS_MODEL else 25
+# Actions per game in the mock. The LLM agent is throughput-bound so its budget
+# stays small; the explorer runs ~3x faster and the rerun's projected budget is
+# ~12.5k actions per game, so 150 was testing a fraction of what it will get —
+# ls20 clears locally at 200 and did not clear in-kernel at 150.
+MOCK_ACTIONS = 150 if NEEDS_MODEL else 600
+
 # Values accepted by the API (kagglesdk kernels_api_service.py). Exact casing
 # matters: "nvidiaTeslaP100" is silently not a valid machine shape.
 ACCELERATORS = {
@@ -80,7 +104,11 @@ def code_cell(source: str) -> dict:
         # Cell bodies are plain (non-f) strings — they are full of braces that
         # f-string interpolation would eat — so a placeholder is the way to get
         # a build-time constant into one.
-        "source": source.replace("__KERNEL_PKG__", KERNEL_PKG),
+        "source": source.replace("__MOCK_ACTIONS__", str(MOCK_ACTIONS))
+        .replace("__MOCK_THREADS__", str(MOCK_THREADS))
+        .replace("__KERNEL_PKG__", KERNEL_PKG)
+        .replace("__KERNEL_AGENT_CLASS__", KERNEL_AGENT_CLASS)
+        .replace("__KERNEL_AGENT__", KERNEL_AGENT),
     }
 
 
@@ -381,20 +409,21 @@ def build() -> dict:
             )
             print('[Cell5] agent template installed')
 
-            # Register MyAgent in the framework's agent registry.
+            # Register both agents; ARC_KERNEL_AGENT below picks which one plays.
             with open(f'{AGENTS_WD}/agents/__init__.py', 'w') as f:
                 f.write(\"\"\"from typing import Type
         from dotenv import load_dotenv
         from .agent import Agent, Playback
         from .swarm import Swarm
         from .templates.random_agent import Random
-        from .templates.my_agent import MyAgent
+        from .templates.my_agent import MyAgent, ExplorerAgent
 
         load_dotenv()
 
         AVAILABLE_AGENTS: dict[str, Type[Agent]] = {
             'random': Random,
             'myagent': MyAgent,
+            'explorer': ExplorerAgent,
         }
         \"\"\")
 
@@ -415,8 +444,14 @@ def build() -> dict:
             # Explicit env passthrough so LLAMA_MODEL_PATH etc. from Cell 2 survive.
             env = os.environ.copy()
             env['MPLBACKEND'] = 'agg'
+            # main.py is a subprocess, so the staged package's sys.path insert
+            # does not reach it. Without this the explorer import fails there
+            # and every game dies on the first action.
+            env['PYTHONPATH'] = os.pathsep.join(
+                p for p in ('__KERNEL_PKG__', env.get('PYTHONPATH', '')) if p)
+            print('[Cell5] playing as --agent __KERNEL_AGENT__')
             result = subprocess.run(
-                [sys.executable, 'main.py', '--agent', 'myagent'],
+                [sys.executable, 'main.py', '--agent', '__KERNEL_AGENT__'],
                 cwd=AGENTS_WD,
                 env=env,
             )
@@ -457,6 +492,48 @@ def build() -> dict:
     # Qwen3.6-27B-FP8 snapshot (see notebooks/kernel-metadata.json). vLLM batches
     # concurrent requests, so the ~110 game threads stop queueing behind one
     # model — the structural difference between us and the leading solutions.
+    # Split from the vLLM install so a model-free build still gets the SDK:
+    # dropping the vLLM cells once took arc-agi with it and every game died on
+    # "No module named 'arc_agi'".
+    arc_install_cell = code_cell(
+        dedent("""\
+        import glob, os, subprocess, sys
+
+        print("=== /kaggle/input ===")
+        for item in sorted(os.listdir("/kaggle/input")):
+            print(" ", item)
+
+        def find_input(*names):
+            \"\"\"Kaggle mounts a dataset at /kaggle/input/<slug> or
+            /kaggle/input/datasets/<owner>/<slug>; probe both.\"\"\"
+            for name in names:
+                for candidate in (f"/kaggle/input/{name}",
+                                  *glob.glob(f"/kaggle/input/**/{name}", recursive=True)):
+                    if os.path.isdir(candidate):
+                        return candidate
+            raise FileNotFoundError(f"none of {names} found under /kaggle/input")
+
+        ARC_WHEELS = "/kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels"
+
+        def pip_install(*args):
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet", "--no-index",
+                 "--no-warn-conflicts", "--disable-pip-version-check", *args],
+                stdout=subprocess.DEVNULL,
+            )
+
+        # Do NOT install pillow. The image already ships a working one, and
+        # installing the wheelhouse copy over it left ImageDraw broken
+        # ("cannot import name '_Ink' from 'PIL._typing'"), which silently
+        # disabled every board image in kernels v50 and v51.
+        pip_install("--find-links", ARC_WHEELS, "arc-agi", "python-dotenv")
+        from PIL import Image  # noqa: F401  - fail here, not mid-game
+        print(f"pillow {__import__('PIL').__version__} (stock)")
+        import arc_agi  # noqa: F401  - the SDK every runner needs
+        print("arc-agi installed")
+        """)
+    )
+
     vllm_install_cell = code_cell(
         dedent("""\
         import glob, os, subprocess, sys
@@ -488,13 +565,6 @@ def build() -> dict:
                 stdout=subprocess.DEVNULL,
             )
 
-        # Do NOT install pillow. The image already ships a working one, and
-        # installing the wheelhouse copy over it left ImageDraw broken
-        # ("cannot import name '_Ink' from 'PIL._typing'"), which silently
-        # disabled every board image in kernels v50 and v51.
-        pip_install("--find-links", ARC_WHEELS, "arc-agi", "python-dotenv")
-        from PIL import Image  # noqa: F401  - fail here, not mid-game
-        print(f"pillow {__import__('PIL').__version__} (stock)")
         pip_install("--find-links", VLLM_WHEELS, "vllm")
         import vllm
         print(f"vllm {vllm.__version__} installed")
@@ -727,8 +797,8 @@ def build() -> dict:
             # each game enough actions for level 1 to be reachable, so the mock
             # reports the thing that actually scores. Concurrency was measured
             # separately; raise ARC_MOCK_THREADS to re-test contention.
-            MOCK_THREADS = int(os.environ.get('ARC_MOCK_THREADS', '6'))
-            MOCK_ACTIONS = int(os.environ.get('ARC_MOCK_ACTIONS', '150'))
+            MOCK_THREADS = int(os.environ.get('ARC_MOCK_THREADS', '__MOCK_THREADS__'))
+            MOCK_ACTIONS = int(os.environ.get('ARC_MOCK_ACTIONS', '__MOCK_ACTIONS__'))
 
             shutil.rmtree(AGENTS_WD, ignore_errors=True)
             shutil.copytree(f'{COMP}/ARC-AGI-3-Agents', AGENTS_WD)
@@ -750,6 +820,9 @@ def build() -> dict:
             assert hasattr(my_agent.MyAgent, 'main'), (
                 'MyAgent still has the stub base; the framework is not importable'
             )
+            # The same agent the rerun plays, so the mock measures what ships.
+            AGENT_CLASS = my_agent.__KERNEL_AGENT_CLASS__
+            print(f'Mock agent: {AGENT_CLASS.__name__}')
 
             # OFFLINE: read the bundled games straight off disk, no gateway and
             # no scorecard API (the kernel has no internet).
@@ -773,7 +846,7 @@ def build() -> dict:
                     if env is None:
                         results[slot] = ('no-env', 0, 0)
                         return
-                    agent = my_agent.MyAgent(
+                    agent = AGENT_CLASS(
                         card_id='mock', game_id=game_id, agent_name=f'mock.{slot}',
                         ROOT_URL='http://localhost', record=False, arc_env=env,
                         tags=['mock'])
@@ -803,8 +876,17 @@ def build() -> dict:
             actions = sum(r[2] for r in results.values())
             levels = sum(r[1] or 0 for r in results.values())
             errors = {s: r[0] for s, r in results.items() if str(r[0]).startswith('ERROR')}
-            for slot, (state, lvl, acts) in sorted(results.items())[:8]:
+            # Every game that scored, then a sample of the rest. The cap used
+            # to be a flat [:8] on an alphabetical sort, which hid ls20 and
+            # lp85 — the only two games any agent clears — and reported the
+            # run as all zeroes.
+            rows = sorted(results.items())
+            scored = [r for r in rows if (r[1][1] or 0) > 0]
+            rest = [r for r in rows if (r[1][1] or 0) == 0]
+            for slot, (state, lvl, acts) in scored + rest[:8]:
                 print(f'  {slot}: levels={lvl} actions={acts} state={state}')
+            if len(rest) > 8:
+                print(f'  ... {len(rest) - 8} more games, all 0 levels')
             if errors:
                 print(f'  ERRORS in {len(errors)}/{len(results)} threads: '
                       f'{list(errors.values())[:2]}')
@@ -831,7 +913,27 @@ def build() -> dict:
         raise SystemExit(
             f"Unknown ACCELERATOR={ACCELERATOR!r}. Pick one of: {sorted(ACCELERATORS)}"
         )
+    if KERNEL_AGENT not in KERNEL_AGENTS:
+        raise SystemExit(
+            f"Unknown ARC_KERNEL_AGENT={KERNEL_AGENT!r}. "
+            f"Pick one of: {sorted(KERNEL_AGENTS)}"
+        )
     accel = ACCELERATORS[ACCELERATOR]
+
+    # The explorer calls no model, so it skips the install, the weight load and
+    # the preflight entirely — that startup is billed against the run's clock.
+    if not NEEDS_MODEL:
+        model_cells = [arc_install_cell, write_agent_cell]
+    elif BACKEND == "vllm":
+        model_cells = [
+            arc_install_cell,
+            vllm_install_cell,
+            write_agent_cell,
+            vllm_serve_cell,
+            vllm_preflight_cell,
+        ]
+    else:
+        model_cells = [install_cell, load_model_cell, write_agent_cell, preflight_cell]
 
     notebook = {
         "metadata": {
@@ -859,21 +961,17 @@ def build() -> dict:
         "cells": [
             markdown_cell(
                 "# ARC Prize 2026 — ARC-AGI-3 Submission\n\n"
-                f"Agent driven by a local LLM (`{BACKEND}` backend).\n"
-                "Built from `src/tgaer/agents/arc_agi3_kaggle.py` via `src/tgaer/evaluation/arc_agi3_build_notebook.py`."
+                f"Agent `{KERNEL_AGENT}`"
+                + (
+                    f", driven by a local LLM (`{BACKEND}` backend).\n"
+                    if NEEDS_MODEL
+                    else " — model-free, so no inference server is started.\n"
+                )
+                + "Built from `src/tgaer/agents/arc_agi3_kaggle.py` via `src/tgaer/evaluation/arc_agi3_build_notebook.py`."
             ),
             stage_pkg_cell,
             *module_cells,
-            *(
-                [
-                    vllm_install_cell,
-                    write_agent_cell,
-                    vllm_serve_cell,
-                    vllm_preflight_cell,
-                ]
-                if BACKEND == "vllm"
-                else [install_cell, load_model_cell, write_agent_cell, preflight_cell]
-            ),
+            *model_cells,
             mock_submission_cell,
             run_cell,
             dummy_submission_cell,

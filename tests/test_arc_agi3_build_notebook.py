@@ -144,3 +144,123 @@ class TestNotebookShape:
         header = notebook["cells"][0]["source"]
         assert "src/tgaer/agents/arc_agi3_kaggle.py" in header
         assert "agent/my_agent.py" not in header
+
+
+class TestAgentSelection:
+    """Which agent plays is chosen at build time and must reach both runners."""
+
+    def test_the_explorer_is_registered_so_main_py_can_be_pointed_at_it(
+        self, code_cells: list[str]
+    ) -> None:
+        registry = [c for c in code_cells if "AVAILABLE_AGENTS: dict" in c]
+        assert registry, "could not find the cell that writes the registry"
+        assert "'explorer': ExplorerAgent" in registry[0]
+
+    def test_the_rerun_subprocess_can_import_the_staged_package(
+        self, code_cells: list[str]
+    ) -> None:
+        """main.py runs in a subprocess, where the in-process sys.path insert
+        does not apply; without PYTHONPATH the explorer import fails there and
+        every game dies on its first action."""
+        run = [c for c in code_cells if "'main.py', '--agent'" in c]
+        assert run, "could not find the cell that launches main.py"
+        assert "PYTHONPATH" in run[0] and bnb.KERNEL_PKG in run[0]
+
+    def test_both_runners_play_the_agent_the_build_selected(
+        self, code_cells: list[str]
+    ) -> None:
+        """The mock is the only free signal before a submission, so it has to
+        exercise the same agent the rerun will play."""
+        joined = "\n".join(code_cells)
+        assert f"'--agent', '{bnb.KERNEL_AGENT}'" in joined
+        assert f"AGENT_CLASS = my_agent.{bnb.KERNEL_AGENT_CLASS}" in joined
+
+    def test_the_placeholder_is_always_substituted(self, code_cells: list[str]) -> None:
+        """An unsubstituted placeholder reaches the kernel as a literal and
+        fails there — the selector is a build-time constant and nothing in the
+        kernel sets it."""
+        assert not any(
+            "__KERNEL_AGENT__" in c or "__KERNEL_AGENT_CLASS__" in c for c in code_cells
+        )
+
+    def test_a_model_free_agent_does_not_start_an_inference_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The explorer calls no model, and the vLLM install plus weight load is
+        ~10 minutes billed against a wall-clock-scored run."""
+        monkeypatch.setattr(bnb, "KERNEL_AGENT", "explorer")
+        monkeypatch.setattr(bnb, "NEEDS_MODEL", False)
+        cells = [
+            "".join(c["source"])
+            for c in bnb.build()["cells"]
+            if c["cell_type"] == "code"
+        ]
+        assert not any("api_server" in c for c in cells)
+        assert any("'--agent', 'explorer'" in c for c in cells)
+
+    def test_an_unknown_agent_fails_the_build(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(bnb, "KERNEL_AGENT", "nope")
+        with pytest.raises(SystemExit, match="ARC_KERNEL_AGENT"):
+            bnb.build()
+
+    @pytest.mark.parametrize("agent", ["myagent", "explorer"])
+    def test_every_build_installs_the_competition_sdk(
+        self, agent: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """arc-agi used to be installed by the vLLM cell, so selecting the
+        model-free agent dropped the SDK with it and every runner died on
+        "No module named 'arc_agi'"."""
+        monkeypatch.setattr(bnb, "KERNEL_AGENT", agent)
+        monkeypatch.setattr(bnb, "KERNEL_AGENT_CLASS", bnb.KERNEL_AGENTS[agent])
+        monkeypatch.setattr(bnb, "NEEDS_MODEL", agent != "explorer")
+        cells = [
+            "".join(c["source"])
+            for c in bnb.build()["cells"]
+            if c["cell_type"] == "code"
+        ]
+        assert any('"arc-agi", "python-dotenv"' in c for c in cells)
+
+    def test_the_model_free_mock_covers_the_games_that_separate_the_agents(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ls20 and lp85 are the only games any agent clears and they are not in
+        the first six alphabetically, so a six-game mock reports 0 for both
+        agents and looks like a tie."""
+        monkeypatch.setattr(bnb, "KERNEL_AGENT", "explorer")
+        monkeypatch.setattr(bnb, "KERNEL_AGENT_CLASS", "ExplorerAgent")
+        monkeypatch.setattr(bnb, "NEEDS_MODEL", False)
+        monkeypatch.setattr(bnb, "MOCK_THREADS", 25)
+        cells = [
+            "".join(c["source"])
+            for c in bnb.build()["cells"]
+            if c["cell_type"] == "code"
+        ]
+        assert any("'ARC_MOCK_THREADS', '25'" in c for c in cells)
+
+    def test_a_game_that_scored_is_never_hidden_by_the_print_cap(
+        self, code_cells: list[str]
+    ) -> None:
+        """The mock printed the first 8 games alphabetically, which excludes
+        ls20 and lp85 — so a run that cleared a level reported all zeroes."""
+        mock = [c for c in code_cells if "Mock submission:" in c]
+        assert mock, "could not find the mock cell"
+        assert "sorted(results.items())[:8]" not in mock[0]
+        assert "scored + rest[:8]" in mock[0]
+
+    def test_the_model_free_mock_gets_a_budget_worth_testing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The rerun projects ~12.5k actions per game for this agent, so a
+        150-action mock measures a fraction of what it will actually get."""
+        monkeypatch.setattr(bnb, "KERNEL_AGENT", "explorer")
+        monkeypatch.setattr(bnb, "KERNEL_AGENT_CLASS", "ExplorerAgent")
+        monkeypatch.setattr(bnb, "NEEDS_MODEL", False)
+        monkeypatch.setattr(bnb, "MOCK_ACTIONS", 600)
+        cells = [
+            "".join(c["source"])
+            for c in bnb.build()["cells"]
+            if c["cell_type"] == "code"
+        ]
+        assert any("'ARC_MOCK_ACTIONS', '600'" in c for c in cells)
