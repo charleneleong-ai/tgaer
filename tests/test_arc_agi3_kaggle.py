@@ -8,6 +8,7 @@ actually carries the action payload to the gateway.
 
 from __future__ import annotations
 
+import inspect
 import io
 import json
 import random
@@ -256,6 +257,15 @@ class TestTemplateQuirks:
     """
 
     QWEN_TOOL_TEXT = '<think>\n\n<tool_call>\n{"name": "MOUSE", "arguments": {"x": 32, "y": 32}}\n</tool_call>'
+
+    def test_the_turn_honours_the_selected_tool_mode(self) -> None:
+        """The preflight probes tool modes and sets TOOL_CHOICE to one that
+        works, which only reaches the game if the turn reads the constant.
+        Hard-coding "required" here cost a build: the scored kernel serves vLLM
+        0.19, where it returned 128 tokens and no call."""
+        source = inspect.getsource(ma.MyAgent._call_tool)
+        assert "tool_choice=TOOL_CHOICE" in source
+        assert '"required"' not in source
 
     def test_tool_call_left_as_text_is_recovered(self) -> None:
         a = make_agent(self.QWEN_TOOL_TEXT)
