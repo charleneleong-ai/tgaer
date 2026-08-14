@@ -1457,7 +1457,7 @@ class MyAgent(Agent):
         # NOT_PLAYED and a dead board after GAME_OVER; RESET yields the real
         # initial board so the model never acts blind. If a RESET didn't take
         # effect, fall back to a real input rather than spinning.
-        if latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER):
+        if self._unplayable(latest_frame):
             if self._last_action_id == 0:
                 return self._random_action(
                     latest_frame.available_actions or [1, 2, 3, 4, 5]
@@ -1716,6 +1716,12 @@ class MyAgent(Agent):
                 y=self._rng.randrange(GRID_SIZE),
             )
         return ArcAction(id=choice)
+
+    @staticmethod
+    def _unplayable(latest_frame: FrameData) -> bool:
+        """Whether the board cannot be acted on: empty before the first RESET,
+        dead after GAME_OVER. What to do about it is the caller's policy."""
+        return latest_frame.state in (GameState.NOT_PLAYED, GameState.GAME_OVER)
 
     def _make_reset(self) -> GameAction:
         """Return a RESET GameAction, recording it as the last action."""
@@ -2412,3 +2418,48 @@ Current board (symbols: {ARC_LEGEND}):
         if self._pending_reasoning is None or isinstance(self._pending_reasoning, dict):
             return self._pending_reasoning
         return {"text": str(self._pending_reasoning)}
+
+
+class ExplorerAgent(MyAgent):
+    """Drive the model-free explorer through the framework's Agent interface.
+
+    Only the seam lives here; action conversion, the random fallback and the
+    run budget are MyAgent's. The observation keys mirror
+    `ArcAgi3Environment._obs`, which is what feeds the explorer locally — the
+    two are assembled from different frame types and must stay in step.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        # Local import: my_agent.py is inlined standalone into the kernel, so a
+        # top-level one would kill every game when the package is not staged.
+        from tgaer.agents.arc_agi3_explorer import ExplorerArcAgi3Agent
+
+        self._explorer = ExplorerArcAgi3Agent()
+
+    def _choose_action_inner(
+        self, frames: list[FrameData], latest_frame: FrameData
+    ) -> GameAction:
+        observation = {
+            "frame": latest_frame.frame or [],
+            "available_actions": latest_frame.available_actions or [1],
+            "levels_completed": latest_frame.levels_completed,
+            "terminal": latest_frame.state is GameState.GAME_OVER,
+        }
+        # Asked even when the board is dead: this is the frame that teaches the
+        # explorer which edge killed it, and it refuses to repeat a recorded
+        # one. On a dead board the answer is then dropped for the restart.
+        arc_action = self._explorer.act(observation)
+
+        # An empty board before the first RESET and a dead one after GAME_OVER
+        # can only be restarted. _last_action_id == 0 means the last thing sent
+        # was a RESET that did not take, so play a real input rather than spin.
+        if self._unplayable(latest_frame) and self._last_action_id != 0:
+            return self._make_reset()
+
+        # MyAgent keeps this truthful via _record_action, which also feeds a
+        # world model the explorer does not have. Without the write the id
+        # stays 0 after the first restart and every later death is played out
+        # on a dead board — the exact budget burn the check above prevents.
+        self._last_action_id = arc_action.id
+        return self._arc_to_game_action(arc_action)
