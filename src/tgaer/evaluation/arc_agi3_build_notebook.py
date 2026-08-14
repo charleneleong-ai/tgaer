@@ -661,7 +661,22 @@ def build() -> dict:
         # serves vLLM 0.19 from a pinned wheelhouse and local runs are on 0.26,
         # so which mode returns a call is a property of the server, not the
         # prompt, and picking it here costs one request instead of a submission.
+        # Retry the runtime mode before blaming it. This is one sample from a
+        # temperature-0.4 model: v53 drew 128 tokens and no call, failed the
+        # build, and v54 drew a clean call from a byte-identical request. A
+        # single miss says nothing about whether tool calling works.
         usable = report("required", out)
+        for attempt in range(2):
+            if usable:
+                break
+            print(f"[required] miss; resampling ({attempt + 1}/2)")
+            out = my_agent.REMOTE_BACKEND.create_chat_completion(
+                messages=[{"role": "system", "content": my_agent.TOOL_SYSTEM},
+                          {"role": "user", "content": content}],
+                tools=tools, tool_choice="required", temperature=0.4,
+                max_tokens=my_agent.MAX_OUTPUT_TOKENS,
+            )
+            usable = report("required", out)
         if not usable:
             for mode in ("auto",):
                 probe_out = my_agent.REMOTE_BACKEND.create_chat_completion(
