@@ -132,12 +132,19 @@ PROBE_ACTIONS = os.environ.get("ARC_PROBE", "1") not in {"0", "false", ""}
 # induction — lp85 cleared at step 19 with the avatar unpinned and an empty
 # move lattice. Random play with five seeds clears neither game, so the
 # coverage is doing work that undirected sampling does not.
-# Default off pending an A/B. With a position-sensitive signature almost every
-# state is new, so the frontier has something untried on nearly every turn and
-# would take all but one action in ten. That is how the explorer runs and it is
-# what wins there, but it is too large a change to adopt on inference from
-# another agent — the same reasoning that made the mechanic note look obvious.
-FRONTIER = os.environ.get("ARC_FRONTIER", "0") not in {"0", "false", ""}
+# On, decided by a 3-seed A/B over all 25 games. With the frontier the agent
+# cleared lp85 on 3 of 3 runs, deterministically (172 frontier actions, 18 model
+# calls, identical across seeds); without it, 1 of 2 valid runs — the third
+# control is excluded because 20% of its actions hit choose_action_exception
+# when the backend degraded.
+#
+# Read that at its real strength. Only one game was cleared by either arm in six
+# runs, it is the game whose click targets were tuned against, and the 16 games
+# never inspected during development produced 0 levels from 6782 frontier
+# actions. So this buys reliability on one known game, not a general capability,
+# and the honest expectation on unseen games is no contribution at all. It is
+# still the only configuration measured to beat the alternative on anything.
+FRONTIER = os.environ.get("ARC_FRONTIER", "1") not in {"0", "false", ""}
 # Let the model carry one sentence of its own understanding across turns. Every
 # other note in the prompt is harness bookkeeping — dead actions, budget, chrome
 # — so the model re-derives the mechanic ("arrows push tiles") from scratch on
