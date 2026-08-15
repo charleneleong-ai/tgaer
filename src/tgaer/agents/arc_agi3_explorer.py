@@ -86,25 +86,26 @@ def _centroid(comp: np.ndarray) -> tuple[int, int]:
 
 
 def click_targets(
-    arr: np.ndarray, k: int = 12, max_field_frac: float = 0.25
+    arr: np.ndarray, k: int = 12, max_grid_frac: float = 0.25
 ) -> list[tuple[int, int]]:
     """Salience-ranked click points: centroids of in-field, single-colour,
     non-background components, largest compact object first, capped at ``k``.
-    Components spanning more than ``max_field_frac`` of the field are treated as
-    structure (walls / floor), not buttons, and dropped.
+    Components spanning more than ``max_grid_frac`` of the grid are treated as
+    structure (walls / floor), not buttons, and dropped. Measured against the
+    grid rather than the field box, which moves with the modal colour and so
+    silently slid this cutoff between frames.
 
     The size cutoff is a Phase-1 heuristic; Phase 2 (action-effect classification)
     replaces it with empirical "does clicking here change the frame?" filtering."""
     box = field_box(arr)
-    lo, hi = box
-    field_area = max(1.0, float((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1)))
+    max_cells = max_grid_frac * arr.size
     bg = _background(arr, box)
     scored: list[tuple[int, int, int]] = []
     for v in (int(x) for x in np.unique(arr)):
         if v == bg:
             continue
         for c in components(arr, (v,)):  # one colour at a time — never merge objects
-            if not in_field(c.mean(0), box) or len(c) > max_field_frac * field_area:
+            if not in_field(c.mean(0), box) or len(c) > max_cells:
                 continue
             cr, cc = _centroid(c)
             if arr[cr, cc] != v:  # centroid off the component → a hollow frame/ring
