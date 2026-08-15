@@ -66,6 +66,10 @@ dmypy.json
 
 ## Logs
 **/.logs/*
+# Run logs: sweep output, submission monitors, roster measurements. Runtime
+# artefacts, regenerated per run. The pattern above only ever matched a dotted
+# ".logs" directory, so 24 of these were showing up as untracked.
+logs/
 
 ## Github Act Runner Secrets
 *.secrets
@@ -107,6 +111,7 @@ experiments/*/
 # ls20 induction-telemetry replay captures (regenerable; top-level so not covered above)
 experiments/ls20_capture.jsonl
 experiments/ls20_telemetry.jsonl
+experiments/score_local.jsonl
 
 # ARC-AGI-3 game sources the SDK downloads on first use, under <game>/<hash>/.
 # The hand-authored fixtures (environment_files/custom_*) stay tracked.
