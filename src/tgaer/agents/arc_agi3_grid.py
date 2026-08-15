@@ -116,20 +116,21 @@ def find_role(arr: np.ndarray, values: tuple[int, ...], box: Box) -> list[np.nda
     return [c.mean(0) for c in components(arr, values) if in_field(c.mean(0), box)]
 
 
-def avatar_is_sprite(
-    arr: np.ndarray, avatar: int, max_field_frac: float = 0.03
-) -> bool:
-    """True when `avatar` is a single in-field component small relative to the field.
+def avatar_is_sprite(arr: np.ndarray, avatar: int, max_grid_frac: float = 0.03) -> bool:
+    """True when `avatar` is a single in-field component small relative to the grid.
 
     A player sprite is one compact piece; wall/floor structure is multi-part or large.
+
+    Sized against the grid, not the field box. The box is the modal colour's
+    extent and moves with the board — on ls20 alone it varies 2255 -> 4096, which
+    slid this threshold from 68 cells to 123 without anything about the sprite
+    changing. The grid is the one stable denominator available per frame.
     """
     box = field_box(arr)
     comps = [c for c in components(arr, (avatar,)) if in_field(c.mean(0), box)]
     if len(comps) != 1:
         return False
-    lo, hi = box
-    field_area = float((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1))
-    return len(comps[0]) <= max_field_frac * field_area
+    return len(comps[0]) <= max_grid_frac * arr.size
 
 
 _MOVES = (1, 2, 3, 4)  # directional action ids — constant across LS20 games

@@ -7,6 +7,7 @@ from tgaer.agents.arc_agi3_grid import (
     LS20_DEFAULT,
     KeyDoorController,
     Semantics,
+    avatar_is_sprite,
     field_box,
     find_role,
 )
@@ -146,3 +147,24 @@ class TestClickVerb:
         g = np.full((8, 8), 3, dtype=int)  # no key, no door
         act = KeyDoorController().step(g, self._sem(), [6])
         assert isinstance(act, ArcAction)  # never crashes; centre/keyboard fallback
+
+
+def test_sprite_size_is_judged_against_the_grid_not_the_field_box():
+    """The box moves; the meaning of "small" must not move with it.
+
+    field_box now takes the modal colour's extent, which varied 2255 -> 4096
+    on ls20 alone, so a threshold scaled by it silently loosened from 68 cells
+    to 123. Scaling by the grid keeps one verdict per board.
+    """
+    arr = np.full((40, 40), 5, dtype=int)
+    arr[26:, :] = 1  # 560 cells
+    arr[0:26, 25:] = 2  # 390 cells; colour 5 keeps 630 and stays modal
+    arr[2:6, 2:7] = 12  # a 20-cell sprite, 3.1% of the 650-cell box, 1.3% of grid
+
+    lo, hi = field_box(arr)
+    box_area = (int(hi[0]) - int(lo[0]) + 1) * (int(hi[1]) - int(lo[1]) + 1)
+    assert box_area < arr.size, "the box must be a sub-region for this to bite"
+    assert avatar_is_sprite(arr, 12), (
+        f"20 cells is 1.3% of the grid but {20 / box_area:.1%} of the box; "
+        "judging against the box rejects a sprite for where the box happens to fall"
+    )
