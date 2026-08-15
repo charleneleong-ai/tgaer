@@ -233,6 +233,9 @@ class ExplorerArcAgi3Agent(Agent):
         self.last_reply: str | None = None
         self.trace: dict | None = None
         self._step = 0
+        # Counts only last-resort choices, so the rotation advances per stall
+        # rather than per step and a stalled state cycles its whole safe set.
+        self._stalls = 0
 
     def _on_new_level(self) -> None:
         self._graph = StateGraph()
@@ -462,5 +465,12 @@ class ExplorerArcAgi3Agent(Agent):
             return self._plan.popleft()
         safe = [p for p in prims if (sig, p) not in self._fatal]
         if safe:
-            return safe[0]
+            # Rotate rather than replay. This is reached only once nothing is
+            # untested and no frontier is reachable, and returning safe[0] there
+            # is a fixed point: tn36 played 2 distinct primitives in 601 steps
+            # and ft09 one of them 98% of the time. Across 25 games at 600
+            # actions, 3763 of them — 27% of the budget on games that never
+            # cleared — went into repeating a single move.
+            self._stalls += 1
+            return safe[self._stalls % len(safe)]
         return prims[0] if prims else ("act", 1)
