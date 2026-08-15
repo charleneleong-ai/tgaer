@@ -644,3 +644,50 @@ class TestTrace:
         agent.act(_obs(board, actions=(6,)))
         assert agent.trace["branch"] == "choose"
         assert agent.trace["lattice_size"] == 0
+
+
+class TestStallBreaking:
+    """The last resort must not replay one primitive for the rest of the run.
+
+    Measured over 25 games at 600 actions each: 10 games played a single action
+    more than half the time, tn36 played 2 distinct actions in 601 steps, and
+    3763 actions — 27% of the budget on games that never cleared — went into
+    repeating one move after the frontier was exhausted.
+    """
+
+    PRIMS = [("act", 1), ("act", 2), ("act", 3), ("act", 4)]
+
+    def test_an_exhausted_frontier_rotates_instead_of_repeating(self):
+        """Nothing untested and no route to a frontier: every prim has been
+        taken, which is exactly when _choose fell through to safe[0]."""
+        agent = ExplorerArcAgi3Agent()
+        sig = "stuck"
+        agent._graph.register(sig, self.PRIMS)
+        for prim in self.PRIMS:
+            agent._graph.take(sig, prim)
+
+        played = [agent._choose(sig, self.PRIMS) for _ in range(len(self.PRIMS) * 2)]
+        assert len(set(played)) == len(self.PRIMS), (
+            f"stalled on {set(played)} instead of cycling {self.PRIMS}"
+        )
+
+    def test_a_fatal_primitive_is_still_never_played(self):
+        """Rotating must not reintroduce an edge already known to end the game."""
+        agent = ExplorerArcAgi3Agent()
+        sig = "stuck"
+        agent._graph.register(sig, self.PRIMS)
+        for prim in self.PRIMS:
+            agent._graph.take(sig, prim)
+        agent._fatal.add((sig, ("act", 2)))
+
+        played = {agent._choose(sig, self.PRIMS) for _ in range(20)}
+        assert ("act", 2) not in played
+        assert len(played) == len(self.PRIMS) - 1
+
+    def test_an_untested_primitive_still_wins(self):
+        """Rotation is the last resort; it must not pre-empt real exploration."""
+        agent = ExplorerArcAgi3Agent()
+        sig = "fresh"
+        agent._graph.register(sig, self.PRIMS)
+        agent._graph.take(sig, ("act", 1))
+        assert agent._choose(sig, self.PRIMS) == ("act", 2)
