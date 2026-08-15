@@ -56,11 +56,11 @@ _RECENT_CELLS = 8
 
 
 def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
-    """Hashable identity of the *play-field* — the region inside the green box,
+    """Hashable identity of the *play-field* — the region inside the field box,
     so HUD / status-bar churn outside it doesn't fragment the state graph.
 
-    Field detection (``field_box``) keys on the green floor; a later phase should
-    replace it with a colour-free field detector for games without one.
+    ``field_box`` takes the modal colour's extent, so a board whose modal colour
+    is a static panel rather than the floor hashes identically every frame.
 
     TODO (deferred, post-Phase-7): this keys on every in-field pixel, so a board with
     incidental per-frame churn fragments one avatar position into many signatures
