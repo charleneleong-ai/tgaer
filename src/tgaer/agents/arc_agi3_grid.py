@@ -17,7 +17,6 @@ import numpy as np
 
 from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, GRID_SIZE, ArcAction
 
-GREEN = 3
 NBRS = ((1, 0), (-1, 0), (0, 1), (0, -1))
 Box = tuple[np.ndarray, np.ndarray]  # (top-left, bottom-right) of the play-field
 
@@ -77,8 +76,34 @@ def components(arr: np.ndarray, values: tuple[int, ...]) -> list[np.ndarray]:
 
 
 def field_box(arr: np.ndarray) -> Box:
-    g = cells(arr, GREEN)
-    return (g.min(0), g.max(0)) if len(g) else (np.zeros(2), np.array(arr.shape))
+    """Bounding box of the play field, taken as the most common colour's extent.
+
+    Keyed on GREEN until 2026-08-15, which is a hardcoded colour prior in an
+    agent whose point is inducing structure from pixels. It holds for ls20 and
+    lp85 and fails elsewhere: a game whose field is another colour but which has
+    any green decoration got a field box around the decoration, and everything
+    real fell outside it. tn36 lost all 88 of its components that way, leaving
+    click_targets empty on a MOUSE-only game — no primitive to try at all.
+
+    The modal colour is usually the floor, but not always: on tr87 a status
+    panel (1570 cells) outnumbers the floor (1370) and spans only rows 0-33,
+    while the board changes exclusively in rows 48-63, so the crop discards
+    every changing pixel and 231 distinct frames hash to one signature. Known
+    and unguarded: coverage does not separate the cases (that panel is 53% of
+    the grid, a legitimate sub-field can be 44%), nor does largest-bbox (a
+    border ring spans everything) or density (the panel is denser than the
+    floor). Telling a panel from a floor needs cross-frame change, not one
+    frame.
+
+    Ties go to the lowest colour value: deterministic, though a near-tie can
+    still swing the box between frames (lp85 alternates two shapes, which alone
+    guarantees a fresh signature for identical content).
+    """
+    values, counts = np.unique(arr, return_counts=True)
+    if not values.size:
+        return (np.zeros(2), np.array(arr.shape))
+    floor = np.argwhere(arr == values[counts.argmax()])
+    return (floor.min(0), floor.max(0))
 
 
 def in_field(centroid: np.ndarray, box: Box, pad: int = 4) -> bool:

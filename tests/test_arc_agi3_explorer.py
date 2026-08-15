@@ -691,3 +691,35 @@ class TestStallBreaking:
         agent._graph.register(sig, self.PRIMS)
         agent._graph.take(sig, ("act", 1))
         assert agent._choose(sig, self.PRIMS) == ("act", 2)
+
+
+class TestFieldDetection:
+    """The play field must not be assumed to be one particular colour.
+
+    field_box keyed on GREEN, so a game whose field is another colour but which
+    has any green decoration got a field box around the decoration. Measured on
+    the 25-game roster: tn36 lost all 88 of its components to the resulting
+    out-of-field test and click_targets returned nothing, leaving proposals()
+    empty and the agent replaying a hardcoded ("act", 1) for 601 steps.
+    """
+
+    @staticmethod
+    def _blue_field_with_green_speck() -> np.ndarray:
+        g = np.full((20, 20), 8, dtype=int)  # field is blue, not green
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = 4
+        g[2:4, 2:4] = 3  # a small green decoration in one corner
+        g[15, 15] = 12  # objects far from it
+        g[16, 10] = 5
+        return g
+
+    def test_objects_are_found_when_the_field_is_not_green(self):
+        board = self._blue_field_with_green_speck()
+        targets = click_targets(board)
+        assert (15, 15) in targets, f"lost the object; got {targets}"
+        assert (16, 10) in targets, f"lost the object; got {targets}"
+
+    def test_a_green_field_still_works(self):
+        """The games that already clear are green-field, so this must not move."""
+        board = _board(avatar=(2, 2), extra={5: [(6, 6)]})
+        targets = click_targets(board)
+        assert (2, 2) in targets and (6, 6) in targets

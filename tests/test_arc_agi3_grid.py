@@ -23,14 +23,23 @@ def test_find_role_filters_to_field_box():
 
 
 def test_find_role_excludes_centroid_outside_field():
-    arr = np.zeros((12, 12), dtype=int)  # background 0, NOT green
-    arr[5:8, 5:8] = 3  # small green play-field
-    arr[6, 6] = 9  # door inside the field
-    arr[0, 0] = 9  # stray door cell far outside (pad=4 won't reach)
+    """The field is the modal colour's extent, not a fixed colour.
+
+    This previously used a 3x3 green blob in a field of 0 and relied on
+    field_box keying on GREEN. That prior is what blinded tn36, where all 88
+    components fell outside a box drawn around an unrelated green decoration,
+    so the scenario is rebuilt to identify the field the way the code now does:
+    the surround is split across two colours so neither outnumbers the field.
+    """
+    arr = np.full((30, 30), 1, dtype=int)
+    arr[20:, :] = 2  # surround split so the field stays the modal colour
+    arr[0:20, 0:20] = 8  # 399 field cells against 299 + 200 of surround
+    arr[10, 10] = 9  # door inside the field
+    arr[29, 29] = 9  # stray door cell far outside (pad=4 will not reach)
     box = field_box(arr)
     found = find_role(arr, (9,), box)
-    assert any(abs(c[0] - 6) < 1 and abs(c[1] - 6) < 1 for c in found)  # inside found
-    assert not any(c[0] < 1 and c[1] < 1 for c in found)  # (0,0) excluded
+    assert any(abs(c[0] - 10) < 1 and abs(c[1] - 10) < 1 for c in found)
+    assert not any(c[0] > 25 and c[1] > 25 for c in found)
 
 
 def _ld_board():
