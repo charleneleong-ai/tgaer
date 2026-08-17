@@ -140,6 +140,11 @@ def proposals(arr: np.ndarray, available: list[int], goal_values=()) -> list[Pri
     return [p for p in prims if not (p in seen or seen.add(p))]
 
 
+def _action_id(prim: Primitive) -> int:
+    """The action id a primitive sends, so every click shares one budget."""
+    return COMPLEX_ACTION_ID if prim[0] == "click" else int(prim[1])
+
+
 def to_arc(prim: Primitive) -> ArcAction:
     if prim[0] == "click":
         return ArcAction(id=COMPLEX_ACTION_ID, x=prim[2], y=prim[1])  # x=col, y=row
@@ -169,6 +174,14 @@ class StateGraph:
         edges = self._adj.setdefault(src, [])
         if (prim, dst) not in edges:
             edges.append((prim, dst))
+
+    def seen(self, sig: Any) -> bool:
+        """Whether this signature has ever been registered.
+
+        Not the same as ``untested_at(sig)`` being empty, which is also true of
+        a state that was registered and then exhausted.
+        """
+        return sig in self._untested
 
     def untested_at(self, sig: Any) -> list[Primitive]:
         return self._untested.get(sig, [])
@@ -206,6 +219,26 @@ class ExplorerArcAgi3Agent(Agent):
     """Frontier-directed explorer. Per level: take an untested primitive at the
     current state, else follow known edges to the nearest state that has one."""
 
+    # A discovery rate below this counts as "not getting anywhere".
+    MIN_NOVELTY = 0.1
+    # Navigation runs before exploration, so a pinned avatar can spend a whole
+    # game walking. Rather than cap the walk at a constant — which gained tu93
+    # and cost ls20 and sc25, because walking pays off very differently per
+    # game — the walk is judged on what it discovers. Measured over 600
+    # actions: ls20 finds ~0.5 new states per walk, sp80 ~0.04.
+    #
+    # One-shot, not rolling: a diverted step is not a walk, so it appends no
+    # evidence, and once the gate trips it stays tripped for states that still
+    # have something untested. That is the behaviour the 4-game measurement
+    # validated; treat WALK_WINDOW as "the first 24 walks decide".
+    WALK_WINDOW = 24
+    # A game with no level that has stopped finding states has nothing left to
+    # lose by reordering how it explores. Least-tried-action ordering finds
+    # sp80's ACTION5 and tu93's win but costs ls20 and sc25 as a permanent
+    # policy, so it is applied only here. Across 25 games no fixed policy
+    # cleared more than 3, while the union of policies reaches 5.
+    STUCK_WINDOW = 48
+
     def __init__(self, seed: int = 0, **_: Any) -> None:
         self._graph = StateGraph()
         self._plan: deque[Primitive] = deque()
@@ -237,10 +270,23 @@ class ExplorerArcAgi3Agent(Agent):
         # Counts only last-resort choices, so the rotation advances per stall
         # rather than per step and a stalled state cycles its whole safe set.
         self._stalls = 0
+        # Whether recent navigation steps reached states not seen before.
+        self._walk_novelty: deque[int] = deque(maxlen=self.WALK_WINDOW)
+        # Novelty of every step, not just navigation, for the stuck test.
+        self._novelty: deque[int] = deque(maxlen=self.STUCK_WINDOW)
+        self._last_branch = ""
+        # How often each action id has been taken. proposals() orders simple
+        # actions by id and _choose takes an untested one, so without this the
+        # low ids crowd out the rest before a state changes.
+        self._taken: Counter[int] = Counter()
 
     def _on_new_level(self) -> None:
+        # _walk_novelty is cleared with the rest: a fresh board is fresh
+        # evidence, and without this the first barren level turns navigation
+        # off for every level after it.
         self._graph = StateGraph()
         self._plan.clear()
+        self._walk_novelty.clear()
         self._prev_sig = None
         self._prev_prim = None
         self._recent.clear()  # a fresh board: stale positions must not block
@@ -295,6 +341,11 @@ class ExplorerArcAgi3Agent(Agent):
         self._levels = levels
 
         sig = frame_signature(arr)
+        # Before register(), so "seen before" still means what it says.
+        fresh = int(not self._graph.seen(sig))
+        self._novelty.append(fresh)
+        if self._last_branch == "affordance":
+            self._walk_novelty.append(fresh)
         prims = proposals(arr, available, self._goal_values)
         self._graph.register(sig, prims)
         if self._prev_sig is not None and self._prev_prim is not None:
@@ -303,6 +354,9 @@ class ExplorerArcAgi3Agent(Agent):
         branch = "choose"
         if prim := self._probe_moves(available, lattice):
             branch = "probe"
+        elif self._explore_due(sig):
+            branch = "explore"  # the walk has stopped paying
+            prim = self._choose(sig, prims)
         elif prim := self._nav_affordance(arr, available, lattice):
             branch = "affordance"
         elif prim := self._nav_move(arr, available, lattice):
@@ -319,6 +373,8 @@ class ExplorerArcAgi3Agent(Agent):
             "levels": int(levels),
         }
         self._graph.take(sig, prim)
+        self._taken[_action_id(prim)] += 1
+        self._last_branch = branch
         self._prev_sig, self._prev_prim = sig, prim
         self._prev_arr = arr
         self.last_reply = f"[explorer] {prim}"
@@ -449,6 +505,24 @@ class ExplorerArcAgi3Agent(Agent):
             return False
         return (int(tl[0] + d[0]), int(tl[1] + d[1])) in self._recent
 
+    def _is_stuck(self) -> bool:
+        """No level yet, and the board has stopped yielding unseen states."""
+        if self._levels > 0 or len(self._novelty) < self.STUCK_WINDOW:
+            return False
+        return sum(self._novelty) / len(self._novelty) < self.MIN_NOVELTY
+
+    def _explore_due(self, sig: Any) -> bool:
+        """Whether walking has stopped discovering and owes this state a try.
+
+        Waits for a full window before judging, so a productive walk is never
+        interrupted on a couple of unlucky steps. See WALK_WINDOW: the verdict
+        is effectively one-shot, since diverted steps add no walk evidence.
+        """
+        if len(self._walk_novelty) < self.WALK_WINDOW:
+            return False
+        rate = sum(self._walk_novelty) / len(self._walk_novelty)
+        return rate < self.MIN_NOVELTY and bool(self._graph.untested_at(sig))
+
     def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
         # Drop a stale route the current frame can no longer execute.
         if self._plan and self._plan[0] not in set(prims):
@@ -459,7 +533,9 @@ class ExplorerArcAgi3Agent(Agent):
         # of untested when recorded), so only this last-resort reuse needs to screen
         # them: prefer a primitive not known to end the game.
         if untested := self._graph.untested_at(sig):
-            return untested[0]
+            if not self._is_stuck():
+                return untested[0]
+            return min(untested, key=lambda p: self._taken[_action_id(p)])
         path = self._graph.path_to_frontier(sig)
         if path:
             self._plan = deque(path)
