@@ -723,3 +723,96 @@ class TestFieldDetection:
         board = _board(avatar=(2, 2), extra={5: [(6, 6)]})
         targets = click_targets(board)
         assert (2, 2) in targets and (6, 6) in targets
+
+
+class TestWalkProductivity:
+    """Navigation yields to exploration once it stops discovering anything.
+
+    _nav_affordance runs before _choose, so a pinned avatar can spend the whole
+    budget walking: on sp80 it fired 556 of 601 turns and _choose ran 41 times,
+    and the agent never reached the phase its only win lives in. A fixed cap is
+    the wrong instrument — capping at 12 gained tu93 and lost ls20 and sc25,
+    because walking pays off very differently per game. Measured over 600
+    actions: ls20 discovers ~0.5 new states per walk, sp80 ~0.04. So the agent
+    measures its own walk instead of assuming a ratio.
+    """
+
+    @staticmethod
+    def _agent_with_walk(novelty: list[int]) -> ExplorerArcAgi3Agent:
+        agent = ExplorerArcAgi3Agent()
+        agent._walk_novelty.extend(novelty)
+        agent._graph.register("s", [("act", 5)])
+        return agent
+
+    def test_a_barren_walk_yields(self):
+        agent = self._agent_with_walk([0] * ExplorerArcAgi3Agent.WALK_WINDOW)
+        assert agent._explore_due("s")
+
+    def test_a_productive_walk_keeps_going(self):
+        agent = self._agent_with_walk([1] * ExplorerArcAgi3Agent.WALK_WINDOW)
+        assert not agent._explore_due("s")
+
+    def test_it_waits_for_evidence_before_judging(self):
+        """Too few steps to tell: keep walking rather than thrash."""
+        agent = self._agent_with_walk([0, 0])
+        assert not agent._explore_due("s")
+
+    def test_nothing_untested_means_nothing_to_yield_to(self):
+        agent = self._agent_with_walk([0] * ExplorerArcAgi3Agent.WALK_WINDOW)
+        agent._graph.take("s", ("act", 5))
+        assert not agent._explore_due("s")
+
+
+class TestStuckPolicySwitch:
+    """Exploration order changes only once a game has stopped getting anywhere.
+
+    Least-tried-action ordering finds sp80's ACTION5 and tu93's win, but as a
+    permanent policy it costs ls20 and sc25 — measured over 25 games, it trades
+    two clears for two. Gating it on "no level yet, and nothing new lately"
+    keeps both: 4 games clear where no fixed policy managed more than 3.
+    """
+
+    PRIMS = [("act", 1), ("act", 2), ("act", 3), ("act", 4), ("act", 5)]
+
+    def _agent(self, novelty: list[int], levels: int = 0) -> ExplorerArcAgi3Agent:
+        agent = ExplorerArcAgi3Agent()
+        agent._novelty.extend(novelty)
+        agent._levels = levels
+        agent._taken.update({1: 40, 2: 500, 3: 9, 4: 12, 5: 2})
+        agent._graph.register("s", self.PRIMS)
+        return agent
+
+    def test_a_stuck_game_reorders_by_least_tried(self):
+        agent = self._agent([0] * ExplorerArcAgi3Agent.STUCK_WINDOW)
+        assert agent._is_stuck()
+        assert agent._choose("s", self.PRIMS) == ("act", 5)
+
+    def test_a_discovering_game_keeps_proposal_order(self):
+        agent = self._agent([1] * ExplorerArcAgi3Agent.STUCK_WINDOW)
+        assert not agent._is_stuck()
+        assert agent._choose("s", self.PRIMS) == ("act", 1)
+
+    def test_a_game_that_has_scored_is_not_stuck(self):
+        """Not a latch: a death respawn drops levels_completed, so this reads
+        "has no level right now", not "never had one"."""
+        agent = self._agent([0] * ExplorerArcAgi3Agent.STUCK_WINDOW, levels=1)
+        assert not agent._is_stuck()
+        assert agent._choose("s", self.PRIMS) == ("act", 1)
+
+    def test_a_transient_minus_one_is_not_a_level(self):
+        """The gateway emits levels_completed = -1 while booting; truthiness
+        would read that as "this game has scored" and disable the gate."""
+        agent = self._agent([0] * ExplorerArcAgi3Agent.STUCK_WINDOW, levels=-1)
+        assert agent._is_stuck()
+
+    def test_it_waits_for_evidence(self):
+        assert not self._agent([0, 0, 0])._is_stuck()
+
+    def test_clicks_all_count_as_one_action(self):
+        """Every click sends ACTION6, so they share a budget rather than each
+        looking untried."""
+        agent = self._agent([0] * ExplorerArcAgi3Agent.STUCK_WINDOW)
+        agent._taken.update({6: 30})
+        prims = [("click", 1, 1), ("act", 3)]
+        agent._graph.register("t", prims)
+        assert agent._choose("t", prims) == ("act", 3)
