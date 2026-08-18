@@ -1321,6 +1321,10 @@ except ImportError:
 
 
 class MyAgent(Agent):
+    # Whether this agent reaches for the model. Read by the scoring harness:
+    # the model-path features below are only meaningful when it does.
+    USES_MODEL = True
+
     """Agent for ARC-AGI-3, choosing one action per turn via function calling.
 
     Inference is whatever `_model()` yields: a vLLM server, a pooled llama-cpp
@@ -2428,6 +2432,8 @@ class ExplorerAgent(MyAgent):
     `ArcAgi3Environment._obs`, which is what feeds the explorer locally — the
     two are assembled from different frame types and must stay in step.
     """
+
+    USES_MODEL = False  # induction only; it never calls the model
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

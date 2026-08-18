@@ -126,7 +126,9 @@ FAULT_COUNTERS = (
 DEGRADED_COUNTERS = (("random_fallback", 0.05), ("raw_text_fallback", 0.50))
 
 
-def inert_features(agent_module: Any, decisions: dict[str, int]) -> list[str]:
+def inert_features(
+    agent_module: Any, decisions: dict[str, int], agent_cls: Any | None = None
+) -> list[str]:
     """Enabled features that never once fired during the run.
 
     Five features shipped this way — vision twice, undo, the mechanic note, and
@@ -140,7 +142,16 @@ def inert_features(agent_module: Any, decisions: dict[str, int]) -> list[str]:
     Chrome detection was the one that made the case for registering everything
     here: it was never listed, so nothing ever asked whether it fired, and it
     stayed dead through five agent revisions while its unit tests passed.
+
+    Every feature here belongs to the model path. The explorer inherits the
+    flags that enable them but never calls a model, so on that agent all five
+    are correctly dead and the check has nothing to say — a guard that fails on
+    a healthy run teaches people to ignore it.
     """
+    # The flag is per agent class, not per module: both agents live in the same
+    # module, so asking the module cannot tell them apart.
+    if not getattr(agent_cls or agent_module, "USES_MODEL", True):
+        return []
     expected = {
         "image_sent": agent_module.SEND_IMAGE,
         "probe": agent_module.PROBE_ACTIONS,
@@ -215,8 +226,17 @@ def make_backend(
 AGENT_PATH = Path("src/tgaer/agents/arc_agi3_kaggle.py")
 
 
-def load_agent_class(rev: str | None) -> type[Any]:
-    """Import MyAgent from the working tree, or from a committed revision."""
+AGENT_CLASSES = {"myagent": "MyAgent", "explorer": "ExplorerAgent"}
+
+
+def load_agent_class(rev: str | None, agent: str = "myagent") -> type[Any]:
+    """Import the chosen agent from the working tree, or a committed revision.
+
+    Both live in the same module: `myagent` is the LLM agent, `explorer` the
+    model-free one. The explorer is the one that scores — 4 games and 5 levels
+    on the roster against 0 for the LLM agent — so it has to be measurable here
+    rather than only through the Kaggle kernel.
+    """
     path = REPO / AGENT_PATH
     if rev:
         source = subprocess.run(
@@ -239,15 +259,20 @@ def load_agent_class(rev: str | None) -> type[Any]:
     # sys.modules[cls.__module__], which is None for an unregistered module.
     sys.modules[name] = module
     spec.loader.exec_module(module)
-    if not hasattr(module, "MyAgent"):
-        raise SystemExit(f"{path} must define a class named `MyAgent`")
+    if agent not in AGENT_CLASSES:
+        raise SystemExit(
+            f"Unknown --agent {agent!r}; pick one of {sorted(AGENT_CLASSES)}"
+        )
+    class_name = AGENT_CLASSES[agent]
+    if not hasattr(module, class_name):
+        raise SystemExit(f"{path} must define a class named `{class_name}`")
     # This harness injects a backend per game, so neutralise both production
     # sources. _get_shared_model no longer exists; without these, --backend
     # random silently routes to a real model (or to whatever ARC_LLM_BASE_URL
     # points at) and stops being the random floor it is used as.
     module.REMOTE_BACKEND = None
     module.load_llama = lambda: None
-    return module.MyAgent
+    return getattr(module, class_name)
 
 
 class WandbRun:
@@ -288,8 +313,17 @@ class WandbRun:
                 continue
             png = agent_module.render_board_png(tuple(tuple(r) for r in grid))
             if png:
+                # Decoded first: wandb.Image cannot read a raw stream, and hands
+                # back "'_io.BytesIO' object has no attribute 'ndim'" from deep
+                # inside its normaliser, which killed the whole scoring run.
+                # Pillow is imported here because W&B logging is optional.
+                from PIL import Image as PillowImage
+
                 images.append(
-                    self.wandb.Image(io.BytesIO(png), caption=f"{game} step {index}")
+                    self.wandb.Image(
+                        PillowImage.open(io.BytesIO(png)),
+                        caption=f"{game} step {index}",
+                    )
                 )
         if images:
             self.run.log({f"frames/{game}": images})
@@ -418,6 +452,10 @@ def main(
     agent_rev: str | None = typer.Option(
         None, help="Git rev of src/tgaer/agents/arc_agi3_kaggle.py to score."
     ),
+    agent: str = typer.Option(
+        "myagent",
+        help="Which agent to score: 'myagent' (LLM) or 'explorer' (model-free).",
+    ),
     label: str | None = typer.Option(None, help="Name for this run in the output."),
     out: Path = typer.Option(
         Path("experiments/score_local.jsonl"), help="JSONL results path."
@@ -446,7 +484,7 @@ def main(
     available = [e.game_id.split("-")[0] for e in arc.get_environments()]
     game_ids = resolve_games(games, available)
 
-    agent_cls = load_agent_class(agent_rev)
+    agent_cls = load_agent_class(agent_rev, agent)
     agent_module = sys.modules[agent_cls.__module__]
     llm = make_backend(backend, agent_module, model, host, seed=seed)
 
@@ -570,7 +608,7 @@ def main(
             console.print(f"[yellow]note: '{name}' never fired this run[/]")
 
     failures = []
-    if inert := inert_features(agent_module, decisions):
+    if inert := inert_features(agent_module, decisions, agent_cls):
         failures.append(
             f"enabled but never fired: {', '.join(inert)}\n"
             "  A feature that cannot fire looks exactly like one that did not help."
