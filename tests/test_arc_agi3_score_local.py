@@ -163,3 +163,45 @@ class TestSeeding:
         again = _random.Random("7:sk48").random()
         assert a != b, "different games must not share a stream"
         assert a == again, "the same game and seed must still reproduce"
+
+
+class TestAgentSelection:
+    """The harness has to be able to score the agent that actually scores.
+
+    It loaded `MyAgent` unconditionally, so the explorer — 4 games and 5 levels
+    on the roster against 0 for the LLM agent — could only be measured through
+    a Kaggle kernel build. With the public score no longer tracking local
+    results, this harness is the instrument, so it must reach both.
+    """
+
+    def test_both_agents_are_selectable(self) -> None:
+        assert set(sl.AGENT_CLASSES) == {"myagent", "explorer"}
+
+    def test_the_explorer_loads_from_the_working_tree(self) -> None:
+        assert sl.load_agent_class(None, "explorer").__name__ == "ExplorerAgent"
+
+    def test_the_llm_agent_stays_the_default(self) -> None:
+        assert sl.load_agent_class(None).__name__ == "MyAgent"
+
+    def test_an_unknown_agent_is_rejected(self) -> None:
+        with pytest.raises(SystemExit, match="Unknown --agent"):
+            sl.load_agent_class(None, "nope")
+
+    def test_model_features_are_not_expected_of_a_model_free_agent(self) -> None:
+        """The explorer inherits SEND_IMAGE and friends but never calls a model,
+        so demanding they fire fails every healthy run."""
+
+        class Explorer:
+            USES_MODEL = False
+            SEND_IMAGE = True
+            PROBE_ACTIONS = True
+            REPL_STEPS = 0
+            EXPLOIT_REPEATS = 8
+
+        assert sl.inert_features(Explorer, {}) == []
+
+    def test_the_llm_agent_is_still_checked(self) -> None:
+        assert "image_sent" in sl.inert_features(
+            TestFeatureAssertions.Agent,
+            {"probe": 1, "exploit": 1, "forward_predicted": 1},
+        )
