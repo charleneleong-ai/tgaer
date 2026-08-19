@@ -257,10 +257,10 @@ class TestAgentSelection:
         monkeypatch.setattr(bnb, "KERNEL_AGENT", "explorer")
         monkeypatch.setattr(bnb, "KERNEL_AGENT_CLASS", "ExplorerAgent")
         monkeypatch.setattr(bnb, "NEEDS_MODEL", False)
-        monkeypatch.setattr(bnb, "MOCK_ACTIONS", 600)
+        monkeypatch.setattr(bnb, "MOCK_ACTIONS", 2400)
         cells = [
             "".join(c["source"])
             for c in bnb.build()["cells"]
             if c["cell_type"] == "code"
         ]
-        assert any("'ARC_MOCK_ACTIONS', '600'" in c for c in cells)
+        assert any("'ARC_MOCK_ACTIONS', '2400'" in c for c in cells)

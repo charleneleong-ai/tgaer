@@ -81,7 +81,13 @@ MOCK_THREADS = 6 if NEEDS_MODEL else 25
 # stays small; the explorer runs ~3x faster and the rerun's projected budget is
 # ~12.5k actions per game, so 150 was testing a fraction of what it will get —
 # ls20 clears locally at 200 and did not clear in-kernel at 150.
-MOCK_ACTIONS = 150 if NEEDS_MODEL else 600
+# The rerun budgets ~15k actions per game, so a 600-action mock measured a
+# twenty-fifth of the real horizon. Raised for the model-free agent after
+# measuring that levels keep coming: over the five clearing games, 600 -> 2400
+# actions took tu93 from 2 levels to 4 and sc25 from 1 to 2, with no game
+# regressing (wandb run un90yn9s). The LLM agent stays low: it is
+# throughput-bound, not budget-bound.
+MOCK_ACTIONS = 150 if NEEDS_MODEL else 2400
 
 # Values accepted by the API (kagglesdk kernels_api_service.py). Exact casing
 # matters: "nvidiaTeslaP100" is silently not a valid machine shape.
