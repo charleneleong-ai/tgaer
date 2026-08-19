@@ -6,7 +6,6 @@ import numpy as np
 
 from tgaer.agents.arc_agi3_grid import (
     Semantics,
-    avatar_is_sprite,
     cells,
     components,
     field_box,
@@ -98,10 +97,12 @@ class EmpiricalSemantics:
         ]
         if not candidates:
             return
-        # Prefer the most sprite-like candidate; fall back to smallest footprint.
-        sprites = [v for v in candidates if avatar_is_sprite(cur, v)]
-        pool = sprites if sprites else candidates
-        self._avatar = min(pool, key=lambda v: len(cells(cur, v)))
+        # Smallest footprint among the controllable values. A sprite tiebreak
+        # used to sit in front of this, meant to stop a wall being chosen, but
+        # _is_controllable has already excluded anything that does not respond
+        # to actions: measured over all 25 games it split the candidates 0
+        # times and changed the pick 0 times.
+        self._avatar = min(candidates, key=lambda v: len(cells(cur, v)))
 
     def _is_controllable(self, v: int) -> bool:
         per_action = self._deltas[v]

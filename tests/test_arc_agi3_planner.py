@@ -1,6 +1,8 @@
 # tests/test_arc_agi3_planner.py
 from __future__ import annotations
 
+from collections import Counter
+
 import numpy as np
 
 from tgaer.agents.arc_agi3_grid import (
@@ -11,6 +13,7 @@ from tgaer.agents.arc_agi3_grid import (
     find_role,
 )
 from tgaer.agents.arc_agi3_planner import PlannerArcAgi3Agent
+from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
 
 
 # A small synthetic LS20-style board: green floor (3), a 1x1 darkred avatar (12)
@@ -73,3 +76,56 @@ class TestPlannerNavigates:
         a.act(_obs(_board(), levels=1))  # level changed 0->1
         assert a._ctl.phase == "key"
         assert a._levels == 1
+
+
+class TestAvatarSelection:
+    """What actually picks the avatar, once controllability has filtered.
+
+    `_observe_motion` screens candidates with `_is_controllable` first, so the
+    sprite tiebreak only ever sees values that already respond to actions.
+    Measured across all 25 games: it split that set 0 times and changed the
+    pick 0 times — every avatar was decided by smallest footprint. The guard
+    reads as a safeguard against picking a wall, and there is no run in which
+    it does that.
+    """
+
+    @staticmethod
+    def _detector(deltas: dict[int, dict[int, object]]):
+        det = EmpiricalSemantics()
+        for value, per_action in deltas.items():
+            slot = det._deltas.setdefault(value, {})
+            for action, counts in per_action.items():
+                slot.setdefault(action, Counter()).update(counts)
+        return det
+
+    def test_the_smallest_controllable_value_wins(self):
+        """Two values both controllable and both compact: size decides."""
+        det = self._detector(
+            {
+                5: {1: {(1, 0): 3}, 2: {(-1, 0): 3}},
+                7: {1: {(1, 0): 3}, 2: {(-1, 0): 3}},
+            }
+        )
+        arr = np.full((20, 20), 3, dtype=int)
+        arr[2, 2] = 5  # 1 cell
+        arr[5:7, 5:7] = 7  # 4 cells
+        prev = arr.copy()
+        prev[2, 2], prev[1, 2] = 3, 5
+        det._observe_motion(prev, 1, arr)
+        assert det.avatar == 5
+
+    def test_an_uncontrollable_value_is_never_the_avatar(self):
+        """A wall is excluded before size or shape is consulted at all."""
+        det = self._detector(
+            {
+                5: {1: {(1, 0): 3}, 2: {(-1, 0): 3}},  # controllable
+                11: {1: {(0, 0): 5}},  # never moves
+            }
+        )
+        arr = np.full((20, 20), 3, dtype=int)
+        arr[2, 2] = 5
+        arr[0, :] = 11
+        prev = arr.copy()
+        prev[2, 2], prev[1, 2] = 3, 5
+        det._observe_motion(prev, 1, arr)
+        assert det.avatar == 5
