@@ -816,3 +816,40 @@ class TestStuckPolicySwitch:
         prims = [("click", 1, 1), ("act", 3)]
         agent._graph.register("t", prims)
         assert agent._choose("t", prims) == ("act", 3)
+
+
+class TestFieldStability:
+    """A near-tie for modal colour must not swing the field box.
+
+    field_box takes the modal colour's extent, so two colours close in count
+    swap the box between frames — and the signature is the crop's bytes, so
+    identical boards then hash differently and the map fragments. Measured on
+    lp85 over 301 frames: colour 3 is modal on 291 and colour 4 on 10,
+    producing two distinct box shapes.
+    """
+
+    @staticmethod
+    def _board(fill: int, extra: int, n: int) -> np.ndarray:
+        g = np.full((20, 20), fill, dtype=int)
+        flat = g.reshape(-1)
+        flat[:n] = extra
+        return flat.reshape(20, 20)
+
+    def test_a_narrow_challenger_does_not_take_the_field(self):
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(self._board(3, 4, 150), actions=(1,)))
+        first = agent._field_colour
+        # 4 now edges ahead 205-195, inside the hysteresis margin.
+        agent.act(_obs(self._board(3, 4, 205), actions=(1,)))
+        assert agent._field_colour == first
+
+    def test_a_decisive_challenger_does_take_it(self):
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(self._board(3, 4, 150), actions=(1,)))
+        agent.act(_obs(self._board(3, 4, 380), actions=(1,)))
+        assert agent._field_colour == 4
+
+    def test_the_first_frame_just_takes_the_modal_colour(self):
+        agent = ExplorerArcAgi3Agent()
+        agent.act(_obs(self._board(3, 4, 10), actions=(1,)))
+        assert agent._field_colour == 3

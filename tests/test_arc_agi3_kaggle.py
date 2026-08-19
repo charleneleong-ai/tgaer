@@ -1986,3 +1986,20 @@ class TestExplorerAdapter:
         assert a.choose_action([], mk_frame(state=GameState.GAME_OVER)) is (
             GameAction.RESET
         )
+
+    def test_the_branch_that_chose_is_counted(self):
+        """The explorer filled no stats, so a run that had degraded to stall
+        rotation looked identical to a healthy one in the kernel — the same
+        blindness the fault counters exist to prevent."""
+        a = ma.ExplorerAgent()
+        a.choose_action([], mk_frame(grid=SMALL_GRID, available=(1, 2)))
+        assert sum(v for k, v in a.stats.items() if k.startswith("branch_")) == 1
+
+    def test_each_branch_gets_its_own_counter(self):
+        a = ma.ExplorerAgent()
+        a._explorer.trace = {"branch": "affordance"}
+        a._record_branch()
+        a._explorer.trace = {"branch": "choose"}
+        a._record_branch()
+        assert a.stats["branch_affordance"] == 1
+        assert a.stats["branch_choose"] == 1
