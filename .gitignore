@@ -107,6 +107,9 @@ results/
 
 # autoresearch sweep artifacts (per-tag subdirs under experiments/)
 experiments/*/
+# ...except the committed progress charts, which are linked from PR bodies
+!experiments/progress/
+!experiments/progress/**
 
 # ls20 induction-telemetry replay captures (regenerable; top-level so not covered above)
 experiments/ls20_capture.jsonl
