@@ -2443,6 +2443,18 @@ class ExplorerAgent(MyAgent):
 
         self._explorer = ExplorerArcAgi3Agent()
 
+    def _record_branch(self) -> None:
+        """Count which policy chose this action.
+
+        The scorer's fault counters are what separate a healthy run from one
+        that has silently degraded, and the explorer filled none of them: a run
+        stuck in stall rotation reported the same empty dict as one navigating
+        and clearing levels.
+        """
+        trace = getattr(self._explorer, "trace", None)
+        if trace and trace.get("branch"):
+            self.stats[f"branch_{trace['branch']}"] += 1
+
     def _choose_action_inner(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
@@ -2456,6 +2468,7 @@ class ExplorerAgent(MyAgent):
         # explorer which edge killed it, and it refuses to repeat a recorded
         # one. On a dead board the answer is then dropped for the restart.
         arc_action = self._explorer.act(observation)
+        self._record_branch()
 
         # An empty board before the first RESET and a dead one after GAME_OVER
         # can only be restarted. _last_action_id == 0 means the last thing sent

@@ -36,7 +36,14 @@ from typing import Any
 
 import numpy as np
 
-from tgaer.agents.arc_agi3_grid import Planner, cells, components, field_box, in_field
+from tgaer.agents.arc_agi3_grid import (
+    Box,
+    Planner,
+    cells,
+    components,
+    field_box,
+    in_field,
+)
 from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
 from tgaer.core.agent_base import Agent
 from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
@@ -55,7 +62,9 @@ _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built
 _RECENT_CELLS = 8
 
 
-def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
+def frame_signature(
+    arr: np.ndarray, box: Box | None = None
+) -> tuple[tuple[int, int], bytes]:
     """Hashable identity of the *play-field* — the region inside the field box,
     so HUD / status-bar churn outside it doesn't fragment the state graph.
 
@@ -68,7 +77,7 @@ def frame_signature(arr: np.ndarray) -> tuple[tuple[int, int], bytes]:
     frontier to revisits. ``_nav_affordance`` works around it in position space, but
     the real fix is a position-keyed or denoised signature so ``_choose`` survives
     churn too."""
-    lo, hi = field_box(arr)
+    lo, hi = field_box(arr) if box is None else box
     r0, c0, r1, c1 = int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
     sub = arr[r0 : r1 + 1, c0 : c1 + 1]
     return sub.shape, sub.tobytes()
@@ -86,7 +95,10 @@ def _centroid(comp: np.ndarray) -> tuple[int, int]:
 
 
 def click_targets(
-    arr: np.ndarray, k: int = 12, max_grid_frac: float = 0.25
+    arr: np.ndarray,
+    k: int = 12,
+    max_grid_frac: float = 0.25,
+    box: Box | None = None,
 ) -> list[tuple[int, int]]:
     """Salience-ranked click points: centroids of in-field, single-colour,
     non-background components, largest compact object first, capped at ``k``.
@@ -97,7 +109,7 @@ def click_targets(
 
     The size cutoff is a Phase-1 heuristic; Phase 2 (action-effect classification)
     replaces it with empirical "does clicking here change the frame?" filtering."""
-    box = field_box(arr)
+    box = field_box(arr) if box is None else box
     max_cells = max_grid_frac * arr.size
     bg = _background(arr, box)
     scored: list[tuple[int, int, int]] = []
@@ -124,7 +136,9 @@ def goal_targets(arr: np.ndarray, goal_values) -> list[tuple[int, int]]:
     return out
 
 
-def proposals(arr: np.ndarray, available: list[int], goal_values=()) -> list[Primitive]:
+def proposals(
+    arr: np.ndarray, available: list[int], goal_values=(), box: Box | None = None
+) -> list[Primitive]:
     """Ordered action primitives to try at the current frame. Clicks on learned
     goal values come first; then ACTION6 fans out into salience-ranked click
     targets; every other id is a simple ``act``. Duplicates are dropped."""
@@ -133,7 +147,7 @@ def proposals(arr: np.ndarray, available: list[int], goal_values=()) -> list[Pri
         prims.extend(("click", r, c) for r, c in goal_targets(arr, goal_values))
     for a in available:
         if a == COMPLEX_ACTION_ID:
-            prims.extend(("click", r, c) for r, c in click_targets(arr))
+            prims.extend(("click", r, c) for r, c in click_targets(arr, box=box))
         else:
             prims.append(("act", a))
     seen: set[Primitive] = set()
@@ -257,6 +271,12 @@ class ExplorerArcAgi3Agent(Agent):
     # lands around step 140-190 and does not when it lands later, so window and
     # threshold trade against each other and were chosen together.
     STUCK_WINDOW = 96
+    # A challenger must beat the held field colour by this factor to take it.
+    # field_box keys on the modal colour and the signature is the crop's bytes,
+    # so a near-tie swaps the box between frames and identical boards hash
+    # differently. Measured on lp85 over 301 frames: colour 3 modal on 291,
+    # colour 4 on 10, two distinct box shapes.
+    FIELD_SWITCH_MARGIN = 1.25
 
     def __init__(self, seed: int = 0, **_: Any) -> None:
         self._graph = StateGraph()
@@ -298,6 +318,9 @@ class ExplorerArcAgi3Agent(Agent):
         # actions by id and _choose takes an untested one, so without this the
         # low ids crowd out the rest before a state changes.
         self._taken: Counter[int] = Counter()
+        # The colour whose extent is the play field, held across frames so a
+        # near-tie cannot re-key the map.
+        self._field_colour: int | None = None
 
     def _on_new_level(self) -> None:
         # _walk_novelty is cleared with the rest: a fresh board is fresh
@@ -359,13 +382,14 @@ class ExplorerArcAgi3Agent(Agent):
             self._on_new_level()  # death respawn (levels drop) must keep the map
         self._levels = levels
 
-        sig = frame_signature(arr)
+        field = self._field(arr)
+        sig = frame_signature(arr, field)
         # Before register(), so "seen before" still means what it says.
         fresh = int(not self._graph.seen(sig))
         self._novelty.append(fresh)
         if self._last_branch == "affordance":
             self._walk_novelty.append(fresh)
-        prims = proposals(arr, available, self._goal_values)
+        prims = proposals(arr, available, self._goal_values, box=field)
         self._graph.register(sig, prims)
         if self._prev_sig is not None and self._prev_prim is not None:
             self._graph.connect(self._prev_sig, self._prev_prim, sig)
@@ -523,6 +547,25 @@ class ExplorerArcAgi3Agent(Agent):
         if d is None:
             return False
         return (int(tl[0] + d[0]), int(tl[1] + d[1])) in self._recent
+
+    def _field(self, arr: np.ndarray) -> Box:
+        """The play field, held stable against a near-tie for modal colour."""
+        values, counts = np.unique(arr, return_counts=True)
+        if not values.size:
+            return field_box(arr)
+        order = counts.argsort()[::-1]
+        leader = int(values[order[0]])
+        if self._field_colour is None:
+            self._field_colour = leader
+        elif leader != self._field_colour:
+            held = counts[values == self._field_colour]
+            held_n = int(held[0]) if held.size else 0
+            if int(counts[order[0]]) > held_n * self.FIELD_SWITCH_MARGIN:
+                self._field_colour = leader  # decisive, not a flicker
+        cells_of = np.argwhere(arr == self._field_colour)
+        if not len(cells_of):
+            return field_box(arr)
+        return (cells_of.min(0), cells_of.max(0))
 
     def _is_stuck(self) -> bool:
         """No level yet, and the board has stopped yielding unseen states."""
