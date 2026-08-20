@@ -30,6 +30,7 @@ import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 import typer
@@ -387,6 +388,106 @@ def play(
     }
 
 
+def game_key(env_id: str) -> str:
+    """The game id without the version suffix: "lp85-abc123" -> "lp85"."""
+    return env_id.split("-", 1)[0]
+
+
+def level_breakdown(card: Any) -> list[dict[str, Any]]:
+    """Per-level actions against the human baseline, for every cleared level.
+
+    The aggregate score hides which term is losing. A level scores
+    `min((baseline / actions_on_that_level)^2 * 100, 115)` and a game averages
+    those weighted by level index over *all* its levels, so a run can clear
+    plenty and still score nothing by taking 20x the baseline actions on each.
+    The ratio is the number to optimise; levels cleared is not.
+    """
+    out: list[dict[str, Any]] = []
+    for env in getattr(card, "environments", None) or []:
+        best = max(env.runs, key=lambda r: r.score)
+        for index, (level_score, level_actions, baseline) in enumerate(
+            zip(
+                best.level_scores or [],
+                best.level_actions or [],
+                best.level_baseline_actions or [],
+            ),
+            start=1,
+        ):
+            # A cleared level has a positive score, which the formula can only
+            # produce from a positive baseline — so the ratio below is safe.
+            if level_score <= 0 or not baseline:
+                continue
+            out.append(
+                {
+                    "game": game_key(env.id),
+                    "level": index,
+                    "baseline": baseline,
+                    "actions": level_actions,
+                    "level_score": round(level_score, 2),
+                    "game_score": round(env.score, 3),
+                }
+            )
+    return sorted(out, key=lambda r: (-r["game_score"], r["game"], r["level"]))
+
+
+def level_metrics(breakdown: list[dict[str, Any]]) -> dict[str, float]:
+    """Headline scalars for the per-level ratios, plus the per-level detail.
+
+    Without a scalar, comparing two runs falls back to `score` or the level
+    count, and the level count is the proxy this whole breakdown exists to
+    replace: a run clearing 5 levels at 20x baseline scores below one clearing
+    2 at 1.2x.
+    """
+    if not breakdown:
+        return {}
+    ratios = sorted(row["actions"] / row["baseline"] for row in breakdown)
+    metrics: dict[str, float] = {
+        "level_ratio/median": round(median(ratios), 2),
+        "level_ratio/worst": round(ratios[-1], 2),
+        "level_ratio/best": round(ratios[0], 2),
+    }
+    for row in breakdown:
+        stem = f"level/{row['game']}/{row['level']}"
+        metrics[f"{stem}/ratio"] = round(row["actions"] / row["baseline"], 2)
+        metrics[f"{stem}/score"] = row["level_score"]
+    return metrics
+
+
+def render_levels(breakdown: list[dict[str, Any]]) -> None:
+    if not breakdown:
+        console.print("[yellow]no level cleared, so no per-level breakdown[/]")
+        return
+    table = Table(title="Score by level", title_style="bold")
+    for col in (
+        "game",
+        "level",
+        "baseline",
+        "actions",
+        "ratio",
+        "level score",
+        "game score",
+    ):
+        table.add_column(col, justify="right")
+    for row in breakdown:
+        table.add_row(
+            row["game"],
+            str(row["level"]),
+            str(row["baseline"]),
+            str(row["actions"]),
+            f"{row['actions'] / row['baseline']:.1f}x",
+            f"{row['level_score']:.2f}",
+            f"{row['game_score']:.3f}",
+        )
+    console.print(table)
+    metrics = level_metrics(breakdown)
+    console.print(
+        f"actions per level vs human baseline — median "
+        f"[bold]{metrics['level_ratio/median']}x[/], "
+        f"best {metrics['level_ratio/best']}x, "
+        f"worst {metrics['level_ratio/worst']}x"
+    )
+
+
 def render(
     rows: list[dict[str, Any]],
     label: str,
@@ -481,7 +582,7 @@ def main(
 
     require_starter()  # the games and the SDK live there, not in this repo
     arc = arc_agi.Arcade(operation_mode=OperationMode.NORMAL)
-    available = [e.game_id.split("-")[0] for e in arc.get_environments()]
+    available = [game_key(e.game_id) for e in arc.get_environments()]
     game_ids = resolve_games(games, available)
 
     agent_cls = load_agent_class(agent_rev, agent)
@@ -558,6 +659,7 @@ def main(
     )
     card = arc.get_scorecard()
     score = float(getattr(card, "score", 0.0) or 0.0)
+    breakdown = level_breakdown(card)
     levels_total = sum(r.get("levels_completed") or 0 for r in rows)
 
     # Persist before rendering. A formatting bug in the summary discarded a
@@ -576,6 +678,7 @@ def main(
                     "max_steps": max_steps,
                     "score": score,
                     "levels_total": levels_total,
+                    "levels": breakdown,
                     "overflows": getattr(llm, "overflows", None),
                     "llm_calls": getattr(llm, "calls", None),
                     "seed": seed,
@@ -584,17 +687,31 @@ def main(
             )
             + "\n"
         )
+    # Logged here rather than after the wiring checks below, which exit(1): a
+    # run that played every game still has results worth comparing, and W&B is
+    # the surface they get compared on. The JSONL write above follows the same
+    # rule for the same reason.
+    tracker.log(
+        {"score": score, "levels_total": levels_total, **level_metrics(breakdown)}
+    )
     decisions: dict[str, int] = {}
     for row in rows:
         for key, count in (row.get("decisions") or {}).items():
             decisions[key] = decisions.get(key, 0) + count
     # Rendering is decoration and the checks below it are not: a formatting bug
     # here once aborted the run before the inert-feature diagnostic could say
-    # which features had silently died.
-    try:
-        render(rows, run_label, score, levels_total, llm)
-    except Exception as exc:
-        console.print(f"[yellow]render failed ({exc!r}); results are in {out}[/]")
+    # which features had silently died. One try per renderer, so a crash in the
+    # older table cannot swallow the per-level one it was added to surface.
+    for renderer, args in (
+        (render, (rows, run_label, score, levels_total, llm)),
+        (render_levels, (breakdown,)),
+    ):
+        try:
+            renderer(*args)
+        except Exception as exc:
+            console.print(
+                f"[yellow]{renderer.__name__} failed ({exc!r}); results are in {out}[/]"
+            )
     if decisions:
         console.print(f"decisions: {dict(sorted(decisions.items()))}")
 
@@ -626,7 +743,6 @@ def main(
             + "\nFix the wiring before reading this run as a result."
         )
         raise typer.Exit(1)
-    tracker.log({"score": score, "levels_total": levels_total})
     tracker.finish()
     console.print(f"[dim]appended to {out}[/]")
 

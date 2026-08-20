@@ -8,7 +8,11 @@ every measurement taken with it is suspect.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest import mock
+
 import pytest
+from rich.table import Table
 
 from tgaer.evaluation import arc_agi3_score_local as sl
 
@@ -205,3 +209,91 @@ class TestAgentSelection:
             TestFeatureAssertions.Agent,
             {"probe": 1, "exploit": 1, "forward_predicted": 1},
         )
+
+
+class TestLevelBreakdown:
+    """The per-level ratio is the number the metric actually rewards."""
+
+    @staticmethod
+    def run(score: float, actions: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            score=score,
+            level_scores=[115.0, 0.0],
+            level_actions=[actions, 900],
+            level_baseline_actions=[17, 40],
+        )
+
+    @classmethod
+    def card(cls, *runs: SimpleNamespace) -> SimpleNamespace:
+        runs = runs or (cls.run(2.778, 10),)
+        env = SimpleNamespace(
+            id="lp85-abc123", score=max(r.score for r in runs), runs=list(runs)
+        )
+        return SimpleNamespace(environments=[env])
+
+    def test_only_cleared_levels_are_reported_with_their_baseline_ratio(self) -> None:
+        """Level 2 scored zero, and listing it would bury the levels whose
+        action count can still be improved."""
+        (row,) = sl.level_breakdown(self.card())
+        assert (row["game"], row["level"], row["baseline"], row["actions"]) == (
+            "lp85",
+            1,
+            17,
+            10,
+        )
+
+    def test_the_best_play_of_a_game_is_the_one_reported(self) -> None:
+        """The scorecard scores a game as max() over its plays, so a weaker
+        play must not be the one whose ratios get optimised."""
+        (row,) = sl.level_breakdown(self.card(self.run(0.1, 100), self.run(2.778, 10)))
+        assert row["actions"] == 10
+
+    @pytest.mark.parametrize("card", [SimpleNamespace(environments=[]), object()])
+    def test_a_run_that_cleared_nothing_is_not_an_error(self, card: object) -> None:
+        assert sl.level_breakdown(card) == []
+
+    def test_every_rendered_column_has_its_own_header(self) -> None:
+        """The headers were `(..., "score", "game")` over a level score and a
+        game score, so the one table this reporting exists to print was
+        unreadable while the suite stayed green."""
+        rendered: list[str] = []
+        with mock.patch.object(sl.console, "print", rendered.append):
+            sl.render_levels(sl.level_breakdown(self.card()))
+        table = next(r for r in rendered if isinstance(r, Table))
+        headers = [str(col.header) for col in table.columns]
+        assert len(set(headers)) == len(headers) == 7
+
+
+class TestLevelMetrics:
+    """W&B is where runs get compared, so the real objective has to reach it."""
+
+    BREAKDOWN = [
+        {
+            "game": "lp85",
+            "level": 1,
+            "baseline": 17,
+            "actions": 10,
+            "level_score": 115.0,
+        },
+        {
+            "game": "tu93",
+            "level": 3,
+            "baseline": 34,
+            "actions": 886,
+            "level_score": 0.15,
+        },
+    ]
+
+    def test_the_ratio_spread_is_reported_as_scalars(self) -> None:
+        metrics = sl.level_metrics(self.BREAKDOWN)
+        assert (metrics["level_ratio/best"], metrics["level_ratio/worst"]) == (
+            0.59,
+            26.06,
+        )
+
+    def test_each_level_is_addressable_on_its_own(self) -> None:
+        assert sl.level_metrics(self.BREAKDOWN)["level/tu93/3/ratio"] == 26.06
+
+    def test_a_run_that_cleared_nothing_logs_no_ratios(self) -> None:
+        """An empty dict still lets the caller splat it into tracker.log."""
+        assert sl.level_metrics([]) == {}
