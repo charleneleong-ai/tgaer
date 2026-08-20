@@ -2435,6 +2435,19 @@ class ExplorerAgent(MyAgent):
 
     USES_MODEL = False  # induction only; it never calls the model
 
+    # The scored rerun uses the class default: it launches `main.py --agent
+    # explorer`, and the mock's `agent.MAX_ACTIONS = MOCK_ACTIONS` override
+    # runs only in the mock. At MyAgent's 400 the explorer finished 110 games
+    # in ~12 minutes of a 7.5h budget — 2.7% of the wall clock — while levels
+    # were still arriving: on the local roster 600 -> 6000 actions took 6
+    # levels to 14, over 5 games to 8.
+    #
+    # 6000 x 110 games at the measured 3811 actions/min is ~2.9h, leaving
+    # margin for slower hidden games; is_done()'s global deadline remains the
+    # real safety valve. The LLM agent keeps 400: at 1051 actions/min the same
+    # budget would need 10.5h and blow the deadline.
+    MAX_ACTIONS = 6000
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         # Local import: my_agent.py is inlined standalone into the kernel, so a

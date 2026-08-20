@@ -56,8 +56,17 @@ uv run python src/tgaer/evaluation/arc_agi3_score_local.py \
 uv run python src/tgaer/evaluation/arc_agi3_build_notebook.py
 ```
 
-Scoring appends a row per run to `experiments/score_local.jsonl`, including the
-per-decision counters. Read those as well as the score: they measure the
-mechanism, which reproduces, rather than the level count, which at current
-performance is mostly sampling noise — a single completed level failed to
-reproduce across three targeted repeats and six full runs.
+Scoring appends a row per run to `experiments/score_local.jsonl` with the
+per-decision counters, the scorecard `score`, and a `levels` breakdown giving
+every cleared level's actions against the human baseline.
+
+**Read the ratio, not the level count.** A level scores
+`min((baseline / actions_on_that_level)^2 * 100, 115)`, and a game averages
+those weighted by level index over *all* its levels, so clearing more levels
+slowly loses to clearing fewer quickly: measured on the 25-game roster at 2400
+actions, the 12 levels cleared scored 0.174 against the 2.349 the same levels
+would be worth at baseline speed — 7.4%. The run prints a `Score by level`
+table and a median/best/worst ratio line, and logs both to W&B, so two runs can
+be compared on the thing that scores. The level count is also noisy in its own
+right: a single completed level failed to reproduce across three targeted
+repeats and six full runs.
