@@ -76,7 +76,9 @@ def frame_signature(
     (live ls20: 741 signatures for 30 avatar cells), blinding the ``StateGraph``
     frontier to revisits. ``_nav_affordance`` works around it in position space, but
     the real fix is a position-keyed or denoised signature so ``_choose`` survives
-    churn too."""
+    churn too. ``ExplorerArcAgi3Agent._inert`` compensates for the same defect from
+    the other side — it is deliberately state-key-free because this key is not
+    trustworthy — so re-measure whether it still pays if this is ever fixed."""
     lo, hi = field_box(arr) if box is None else box
     r0, c0, r1, c1 = int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
     sub = arr[r0 : r1 + 1, c0 : c1 + 1]
@@ -321,6 +323,15 @@ class ExplorerArcAgi3Agent(Agent):
         # The colour whose extent is the play field, held across frames so a
         # near-tie cannot re-key the map.
         self._field_colour: int | None = None
+        # Primitives observed to leave the board byte-identical. Measured over
+        # the 25-game roster at 600 actions, 18.6% of every action taken changed
+        # nothing at all (clicks 30%, ft09 100% of its 600) — pure cost under a
+        # metric that squares actions-per-level. A count, not a set: an effect
+        # drops the entry (so a door that opens once a key is held is not
+        # written off), and among primitives that are all dead the least-often-
+        # confirmed one is tried first. Collapsing that tiebreak to membership
+        # is not free — it cost sc25 and 0.1364 -> 0.1354 on the roster.
+        self._inert: Counter[Primitive] = Counter()
 
     def _on_new_level(self) -> None:
         # _walk_novelty is cleared with the rest: a fresh board is fresh
@@ -329,6 +340,7 @@ class ExplorerArcAgi3Agent(Agent):
         self._graph = StateGraph()
         self._plan.clear()
         self._walk_novelty.clear()
+        self._inert.clear()
         self._prev_sig = None
         self._prev_prim = None
         self._recent.clear()  # a fresh board: stale positions must not block
@@ -353,10 +365,12 @@ class ExplorerArcAgi3Agent(Agent):
             self._det.observe(self._prev_arr, to_arc(self._prev_prim).id, arr, levels)
             if len(self._det.keys) > self._prev_key_n:  # a pickup may unlock a door
                 self._blocked.clear()
+                self._inert.clear()
         self._prev_key_n = len(self._det.keys)
         lattice = self._det.move_lattice()  # once per step, after the observe update
         if learning:
             self._learn_blocked(arr, lattice)
+            self._learn_inert(arr)
         # Track the avatar cell every step (history must be gap-free); only affordance
         # consults it, so the exploit may still revisit a cell to reach a known goal.
         if self._det.avatar is not None and len(here := cells(arr, self._det.avatar)):
@@ -433,6 +447,43 @@ class ExplorerArcAgi3Agent(Agent):
         ):
             _, r, c = self._prev_prim
             self._goal_values.add(int(self._prev_arr[r, c]))
+
+    def _learn_inert(self, arr: np.ndarray) -> None:
+        """The previous primitive left the board untouched, so it is dead here.
+
+        Two narrower forms already exist and both need a pinned avatar, so both
+        are silent on click games and through cold start — where the budget
+        actually goes: ``_learn_blocked`` records a refused directional move as
+        a wall cell, and ``move_lattice`` drops an action whose majority delta
+        is (0, 0). Byte-identity needs neither.
+
+        Counting per primitive rather than per (state, primitive) is what makes
+        it pay: a cell that does nothing here almost never does something two
+        states later, and the per-state form cannot generalise past the state it
+        was learned in — which matters because ``frame_signature`` fragments one
+        position into many states.
+
+        Comparing the whole grid, not the field-box crop, is deliberate and
+        measured. The crop is the principled region — it excludes HUD churn —
+        but scoring it that way marks primitives dead far more readily and cost
+        a level pair on the roster (0.1335 against 0.1364). Byte-identity over
+        everything is the conservative test, and conservative wins here."""
+        if np.array_equal(self._prev_arr, arr):
+            self._inert[self._prev_prim] += 1
+        else:
+            self._inert.pop(self._prev_prim, None)
+
+    def _live(self, prims: list[Primitive]) -> list[Primitive]:
+        """``prims`` with the ones known to do nothing moved to the back.
+
+        A reordering, not a filter: an action is inert only until the board
+        changes around it, and dropping it outright would strand a level whose
+        every remaining option reads dead. Demoting them any earlier — before
+        ``click_targets`` takes its top ``k`` — measured worse (0.1268, four
+        levels against six): it pulls in low-salience targets and re-orders the
+        proposal list between visits to one signature, which desynchronises the
+        graph's per-signature untested set."""
+        return sorted(prims, key=self._inert.__getitem__)
 
     def _learn_blocked(self, arr: np.ndarray, lattice: dict[int, np.ndarray]) -> None:
         """A directional move the lattice expected to shift the avatar, but which
@@ -595,6 +646,7 @@ class ExplorerArcAgi3Agent(Agent):
         # of untested when recorded), so only this last-resort reuse needs to screen
         # them: prefer a primitive not known to end the game.
         if untested := self._graph.untested_at(sig):
+            untested = self._live(untested)
             if not self._is_stuck():
                 return untested[0]
             return min(untested, key=lambda p: self._taken[_action_id(p)])
@@ -611,5 +663,6 @@ class ExplorerArcAgi3Agent(Agent):
             # actions, 3763 of them — 27% of the budget on games that never
             # cleared — went into repeating a single move.
             self._stalls += 1
+            safe = self._live(safe)
             return safe[self._stalls % len(safe)]
         return prims[0] if prims else ("act", 1)

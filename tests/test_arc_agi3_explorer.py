@@ -433,32 +433,54 @@ class _Ls20LockSim:
             self.levels += 1
 
 
+def _disabled(*_args: object, **_kwargs: object) -> None:
+    """Module-level so it stays picklable; the repo bans lambda predicates."""
+    return None
+
+
 class TestDirectedLockBootstrap:
     """The cold-start fix: a fresh explorer with NO hardcoded semantics manufactures
-    its first win by seeking the key→door affordance, then exploits on later levels.
-    Sized so blind exploration (cost ∝ area) cannot finish in budget but directed
-    seeking (cost ∝ path length) can — the fix is load-bearing, not incidental."""
+    its first win by seeking the key→door affordance, then exploits on later levels."""
 
-    def _solve(self, blind: bool, budget: int):
+    def _solve(
+        self, blind: bool, budget: int, inert: bool = True
+    ) -> tuple[int | None, ExplorerArcAgi3Agent]:
         size, m = 20, 18
         sim = _Ls20LockSim([((1, 2), (1, m)), ((m, 2), (m, m))], size=size)
         agent = ExplorerArcAgi3Agent()
         if blind:
-            agent._nav_affordance = lambda *a, **k: None  # disable the bootstrap
+            agent._nav_affordance = _disabled  # disable the bootstrap
+        if not inert:
+            agent._learn_inert = _disabled  # the mechanism under test
         for s in range(budget):
             sim.step(agent.act(sim.obs()).id)
             if sim.levels == 2:
                 return s + 1, agent
         return None, agent
 
-    def test_directed_bootstrap_solves_a_large_locked_game_blind_cannot(self):
-        budget = 250  # directed solves in ~58 steps; blind needs ~668
-        steps, agent = self._solve(blind=False, budget=budget)
-        blind_steps, _ = self._solve(blind=True, budget=budget)
-        assert steps is not None  # both locked levels solved by directed bootstrap
-        assert blind_steps is None  # blind exploration cannot, in the same budget
+    def test_directed_bootstrap_beats_blind_exploration_on_a_large_locked_game(
+        self,
+    ) -> None:
+        """Directed 58 steps against blind 92, both locked levels solved.
+
+        The margin is the claim. This asserted `blind is None` at a 250 budget
+        back when blind needed ~668 steps; inert detection closing that to 92
+        would otherwise leave an assertion a regression to 91 steps still
+        passes, so the ratio is written down instead."""
+        steps, agent = self._solve(blind=False, budget=250)
+        blind_steps, _ = self._solve(blind=True, budget=250)
+        assert steps is not None and blind_steps is not None
+        assert steps * 1.4 < blind_steps
         assert agent._det.door == 9  # door induced from the first directed win
         assert 5 in agent._det.keys  # key affordance learned while seeking
+
+    def test_refusing_dead_actions_speeds_up_blind_exploration(self) -> None:
+        """92 steps against 668 — the roster's 18.6% dead-action rate, on a
+        board whose walls make every refused move repeatable forever."""
+        fast, _ = self._solve(blind=True, budget=800)
+        slow, _ = self._solve(blind=True, budget=800, inert=False)
+        assert fast is not None and slow is not None
+        assert fast * 4 < slow
 
 
 class _StridePhantomSim:
