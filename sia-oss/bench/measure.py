@@ -37,6 +37,7 @@ from dotenv import load_dotenv
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from gate import report as gate_report  # noqa: E402
 from scorecard import GAME_STATE_COLUMNS, game_state_rows  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
@@ -219,6 +220,12 @@ def main(
     focus: str | None = typer.Option(
         None, "--focus", help="Also log a video of this one game's run."
     ),
+    gate_against: str | None = typer.Option(
+        None,
+        "--gate-against",
+        help="Label of a previous run to gate this one against. Exits non-zero "
+        "unless RHAE improves AND no game regresses.",
+    ),
 ) -> None:
     """Play the suite with one explorer variant and print its RHAE."""
     run_dir = BENCH / "runs" / label
@@ -265,6 +272,11 @@ def main(
     if graded.returncode != 0:
         raise SystemExit(graded.returncode)
 
+    if gate_against and not gate_report(run_dir, BENCH / "runs" / gate_against):
+        gate_failed = True
+    else:
+        gate_failed = False
+
     if wandb_log:
         log_to_wandb(
             label=label,
@@ -277,6 +289,8 @@ def main(
             focus=focus,
             run_dir=run_dir,
         )
+    if gate_failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

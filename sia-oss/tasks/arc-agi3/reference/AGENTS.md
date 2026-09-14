@@ -39,6 +39,44 @@ the directive below and implement it.**
 scorecards, so a seed sweep cannot separate a real effect from a lucky one.
 Robustness has to be argued from mechanism or from a parameter sweep instead.
 
+## How to test a change (use both — one is not enough)
+
+```bash
+python sia-oss/bench/measure.py --label mine --gate-against final   # no game may regress
+python sia-oss/bench/sweep.py --constant MY_KNOB --values 16,32,64,128
+```
+
+`gate.py` rejects a change that trades one game's level for another's — the
+`affordance-first` run raised `sc25` while costing `sp80` its only level, and
+nets positive on the headline. **But the gate alone is not sufficient: it passes
+the chrome mask (0.5860), which we know is luck.** Only the sweep caught that,
+so a change with a tunable constant needs both. Two independent competitors
+report per-game SD of 2.15-4.88 and byte-identical code drawing 1.70 then 1.32
+on the hidden set — single runs cannot rank designs here.
+
+## External landscape (audited 2026-09-14, sources in the session log)
+
+- **Nobody wins this model-free.** No model-free agent placed in Milestone #1,
+  and none appears on the verified leaderboard. The model-free frontier is
+  Go-Explore-style state-graph BFS — three independent repos converged on
+  roughly what this explorer already does.
+- **The winners run an LLM that writes Python, not one that picks actions.**
+  Tufa Labs' "The Duck" (1st) drives a live REPL; Tycho (100.0 RHAE) and
+  Executable World Models (58.1%) build and verify programmatic world models.
+  Our own 27B kernel agent lost to this explorer, but it was an LLM-*as-policy*,
+  the configuration nobody wins with — that result does not close the question.
+- **Two cheap, well-evidenced model-free wins we do not have:** *win-path
+  caching* (replay the cached winning sequence on re-entry to a solved level;
+  reported as one team's single biggest jump, 0.23 -> 0.33) and *per-object
+  cycle watch* (mark a **class** of element that has stopped paying, not a
+  global novelty bonus — generic thrash detection was built and deleted as inert
+  elsewhere, matching our own three reverts).
+- **Depth beats breadth**: weight is the level index and there is a completion
+  cap, so a late level in one game is worth several first levels spread around.
+- **The Kaggle kernel is an RTX Pro 6000, not a P100**, and already stages 27B
+  FP8 weights — verified in our own `kernel-metadata.json`. Model-free is a
+  choice here, not a constraint. Public->hidden scores shrink 2.4-2.9x.
+
 ## Do this — the directive for this generation
 
 **Make the levels we already clear faster. Do not chase new level unlocks.**
