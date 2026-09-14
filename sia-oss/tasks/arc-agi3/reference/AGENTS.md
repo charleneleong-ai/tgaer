@@ -32,6 +32,7 @@ the directive below and implement it.**
 | Clearing `_blocked` on level change | Exactly baseline. 7 of 8 games never finish level 1, so `_on_new_level` fires once in the whole suite — every cross-level state fix is near-untestable here |
 | Repeat count folded into `_live`'s sort key | 0.3516 (-0.075). Cost `ls20`/`sp80`/`sc25` their first level: re-ordering between visits to one signature desynchronises the per-signature untested set, exactly as `_live`'s docstring warns |
 | Per-level click-repeat filter (`_unspent`, swept 16→256) | Knife-edge, not an improvement. Exactly baseline at every threshold except 64/68, where `lp85` clears level 2 (0.5089). A width-8 window in a range of 250 is a lucky perturbation of one deterministic rollout — do not ship a tuned constant |
+| Learned chrome mask for `_learn_inert` (per-cell volatility, excluded cells changing >50% of steps) | Exactly baseline. The mask *works* — 104 chrome cells correctly identified on `lp85`, active 562 of 591 steps — but it buys nothing, for the reason in the note below. Do not retry masking, cropping, or denoising to fix `lp85` |
 
 **`--seed` does not perturb this agent.** Seeds 0-3 give byte-identical
 scorecards, so a seed sweep cannot separate a real effect from a lucky one.
@@ -50,13 +51,23 @@ A trace of the budget says why it fails, and it is not a tuning problem:
 `lp85` clears level 1 in 10 actions, then spends 591 on level 2 without
 finishing. On that board `_det.avatar` is never induced — so there is no
 lattice, no goal value, no navigation, and every one of the 591 actions is a
-click. 542 of them land on the *same cell*, because the board animates: every
-frame is byte-novel, so `frame_signature` mints a fresh state each step,
-`untested_at(sig)` always returns a full list, and `_choose` returns the same
-top-salience target forever. `_inert` cannot see it (the board *did* change)
-and `_stalls` rotation never runs (nothing is ever exhausted). Breaking that
-fixed point by hand does clear level 2 — see the closed row above — which
-proves the level is winnable; it just cannot be won by a tuned constant.
+click. 542 of them land on the *same cell* (`grid[18,20]`), because
+`frame_signature` mints a fresh state every step, so `untested_at(sig)` always
+returns a full list and `_choose` returns the same top-salience target forever.
+`_stalls` rotation never runs, because nothing is ever exhausted.
+
+**Why that cell keeps looking worth clicking — measured, not inferred.**
+Rendering the frames (`measure.py --frames --focus lp85`) shows a rectangular
+ring of cells that recolours every frame, *inside* the play field, which is why
+the field-box crop cannot exclude it. But masking that chrome out and
+re-testing showed the clicked cell is **not inert**: with chrome excluded, the
+click still changes the board every time, and its `_inert` count stays 0.
+
+So the action is *effective but unproductive* — a cycle, not a no-op. That is
+the whole lesson: `_inert` asks "did anything change?", and on this board the
+answer is honestly yes. **Novelty is not progress, and no amount of change
+detection will separate them.** Only a notion of progress can — distance to a
+goal, or a state abstraction under which the cycle is visibly a cycle.
 
 So the fix is a real goal signal on a click-only, avatar-less board.
 

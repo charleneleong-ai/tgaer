@@ -33,6 +33,8 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+import numpy as np
+
 
 def _repo_root(working_dir: Path) -> Path:
     """The tgaer checkout: env override, else walk up from working_dir looking
@@ -95,12 +97,68 @@ def _level_summary(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def key_frames(agent: Any, game: str, every: int | None) -> list[dict[str, Any]]:
+    """The frames worth looking at, as ``{game, idx, tag, level, grid}`` rows.
+
+    Start, end, and both sides of every level transition — the moments that
+    explain a run. Whole trajectories are not kept: 8 games at 600 steps is 4800
+    grids, which is noise to scroll through rather than evidence. ``every``
+    additionally samples one frame in N for a single focus game, which is what
+    makes a video of that game possible.
+    """
+    frames = list(getattr(agent, "frames", []) or [])
+    if not frames:
+        return []
+    levels = [getattr(f, "levels_completed", 0) for f in frames]
+    wanted: dict[int, str] = {0: "start", len(frames) - 1: "end"}
+    for i in range(1, len(frames)):
+        if levels[i] > levels[i - 1]:
+            wanted.setdefault(i - 1, f"before-L{levels[i]}")
+            wanted[i] = f"after-L{levels[i]}"
+    if every:
+        for i in range(0, len(frames), every):
+            wanted.setdefault(i, "step")
+    rows: list[dict[str, Any]] = []
+    for i in sorted(wanted):
+        grid = getattr(frames[i], "frame", None)
+        if not grid:
+            continue
+        rows.append(
+            {
+                "game": game,
+                "idx": i,
+                "tag": wanted[i],
+                "level": levels[i],
+                "grid": np.asarray(grid[-1], dtype=np.int16),
+            }
+        )
+    return rows
+
+
+def save_frames(rows: list[dict[str, Any]], out: Path) -> None:
+    """Grids to a compressed ``.npz`` plus a JSON index of their metadata.
+
+    Raw grids, not images: rendering and W&B are `measure.py`'s business, and
+    keeping them out of here leaves this module a pure play harness.
+    """
+    out.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out, **{str(i): r["grid"] for i, r in enumerate(rows)})
+    out.with_suffix(".json").write_text(
+        json.dumps(
+            [{k: v for k, v in r.items() if k != "grid"} for r in rows], indent=2
+        )
+    )
+
+
 def run_suite(
     explorer_path: Path,
     games: list[str],
     repo_root: Path,
     max_steps: int,
     seed: int,
+    frames_out: Path | None = None,
+    focus: str | None = None,
+    focus_every: int = 4,
 ) -> list[dict[str, Any]]:
     """Play every game and return per-game scorecard dicts. Isolated here so the
     only things that can import the local explorer are the harness internals."""
@@ -128,11 +186,16 @@ def run_suite(
     agent_cls = load_agent_class(None, "explorer")
 
     scorecards: list[dict[str, Any]] = []
+    frame_rows: list[dict[str, Any]] = []
     for game in games:
         t0 = time.monotonic()
         try:
             row = play(agent_cls, game, arc, None, max_steps, seed=seed)
-            row.pop("_agent", None)
+            agent = row.pop("_agent", None)
+            if frames_out is not None and agent is not None:
+                frame_rows += key_frames(
+                    agent, game, focus_every if game == focus else None
+                )
             if row.get("error"):
                 scorecards.append({"game": game, "error": row["error"]})
                 print(f"[{game}] ERROR {row['error']} in {time.monotonic() - t0:.1f}s", flush=True)
@@ -156,6 +219,9 @@ def run_suite(
         except Exception as exc:  # noqa: BLE001 — one bad game must not sink the rest
             scorecards.append({"game": game, "error": f"{type(exc).__name__}: {exc}"})
             print(f"[{game}] EXC {type(exc).__name__}: {exc}", flush=True)
+    if frames_out is not None and frame_rows:
+        save_frames(frame_rows, frames_out)
+        print(f"[frames] wrote {len(frame_rows)} grids to {frames_out}", flush=True)
     return scorecards
 
 
@@ -169,11 +235,21 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--repo_root", type=Path, default=None)
+    ap.add_argument("--frames_out", type=Path, default=None)
+    ap.add_argument("--focus", default=None)
+    ap.add_argument("--focus_every", type=int, default=4)
     args = ap.parse_args()
 
     repo = args.repo_root if args.repo_root else _repo_root(args.working_dir)
     scorecards = run_suite(
-        args.explorer_path, json.loads(args.games), repo, args.max_steps, args.seed
+        args.explorer_path,
+        json.loads(args.games),
+        repo,
+        args.max_steps,
+        args.seed,
+        frames_out=args.frames_out,
+        focus=args.focus,
+        focus_every=args.focus_every,
     )
     total = sum(lv["level_score"] for c in scorecards for lv in c.get("levels", []))
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -31,8 +31,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import typer
 from dotenv import load_dotenv
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from scorecard import GAME_STATE_COLUMNS, game_state_rows  # noqa: E402
@@ -64,6 +66,79 @@ load_dotenv(REPO / ".env")
 app = typer.Typer(add_completion=False)
 
 
+# ARC grids are small integer palettes, so a fixed colour table keeps a cell's
+# colour stable across games and runs — a per-image autoscale would recolour the
+# same board between frames and make a diff impossible to read by eye.
+ARC_PALETTE = np.array(
+    [
+        (0, 0, 0), (0, 116, 217), (255, 65, 54), (46, 204, 64),
+        (255, 220, 0), (170, 170, 170), (240, 18, 190), (255, 133, 27),
+        (127, 219, 255), (135, 12, 37), (255, 255, 255), (96, 96, 96),
+        (0, 255, 200), (140, 90, 200), (60, 60, 60), (200, 200, 120),
+    ],
+    dtype=np.uint8,
+)
+
+
+def render(grid: np.ndarray, scale: int = 6) -> np.ndarray:
+    """One ARC grid as an upscaled RGB image.
+
+    Nearest-neighbour upscaling, not interpolation: these are discrete cell
+    values, and a smoothed edge invents colours that no cell holds.
+    """
+    rgb = ARC_PALETTE[np.clip(grid, 0, len(ARC_PALETTE) - 1)]
+    return np.repeat(np.repeat(rgb, scale, axis=0), scale, axis=1)
+
+
+def load_frames(npz_path: Path) -> list[dict[str, Any]]:
+    """The runner's saved grids re-joined to their JSON metadata index."""
+    index_path = npz_path.with_suffix(".json")
+    if not (npz_path.is_file() and index_path.is_file()):
+        return []
+    with np.load(npz_path) as bundle:
+        meta = json.loads(index_path.read_text())
+        return [{**row, "grid": bundle[str(i)]} for i, row in enumerate(meta)]
+
+
+def frame_payload(
+    frames: list[dict[str, Any]], focus: str | None, gif_dir: Path
+) -> dict[str, Any]:
+    """Key frames as per-game `wandb.Image` lists, plus a video for `focus`.
+
+    Keyed per game rather than as one flat list so a game's start/end sit beside
+    each other in the UI instead of being interleaved with seven other boards.
+    """
+    import wandb
+
+    payload: dict[str, Any] = {}
+    by_game: dict[str, list[dict[str, Any]]] = {}
+    for row in frames:
+        by_game.setdefault(row["game"], []).append(row)
+    for game, rows in by_game.items():
+        keyed = [r for r in rows if r["tag"] != "step"]
+        payload[f"frames/{game}"] = [
+            wandb.Image(
+                render(r["grid"]), caption=f"{r['tag']} @ step {r['idx']} (L{r['level']})"
+            )
+            for r in keyed
+        ]
+        if game == focus and (steps := [r for r in rows if r["tag"] == "step"]):
+            # Written with PIL and handed to wandb as a path: passing raw arrays
+            # to wandb.Video needs moviepy, a dependency this repo does not have
+            # and does not need for an 8fps GIF of a 64x64 board.
+            gif = gif_dir / f"{game}.gif"
+            images = [Image.fromarray(render(r["grid"], scale=3)) for r in steps]
+            images[0].save(
+                gif,
+                save_all=True,
+                append_images=images[1:],
+                duration=125,
+                loop=0,
+            )
+            payload[f"video/{game}"] = wandb.Video(str(gif), format="gif")
+    return payload
+
+
 def log_to_wandb(
     *,
     label: str,
@@ -72,6 +147,9 @@ def log_to_wandb(
     explorer: Path,
     results: dict[str, Any],
     submission: dict[str, Any],
+    frames: list[dict[str, Any]],
+    focus: str | None,
+    run_dir: Path,
 ) -> None:
     if not os.getenv("WANDB_API_KEY"):
         print("WANDB_API_KEY unset; skipping W&B logging")
@@ -112,6 +190,7 @@ def log_to_wandb(
                 columns=GAME_STATE_COLUMNS,
                 data=game_state_rows(results, submission),
             ),
+            **frame_payload(frames, focus, run_dir),
         }
     )
     run.finish()
@@ -132,11 +211,20 @@ def main(
     wandb_log: bool = typer.Option(
         True, "--wandb/--no-wandb", help="Log this run to W&B."
     ),
+    frames: bool = typer.Option(
+        False,
+        "--frames/--no-frames",
+        help="Capture and log board images (start, end, level transitions).",
+    ),
+    focus: str | None = typer.Option(
+        None, "--focus", help="Also log a video of this one game's run."
+    ),
 ) -> None:
     """Play the suite with one explorer variant and print its RHAE."""
     run_dir = BENCH / "runs" / label
     out = run_dir / "results" / "submission.json"
     out.parent.mkdir(parents=True, exist_ok=True)
+    frames_npz = run_dir / "frames.npz"
 
     runner = subprocess.run(
         [
@@ -158,6 +246,8 @@ def main(
             str(out),
             "--repo_root",
             str(REPO),
+            *(["--frames_out", str(frames_npz)] if frames or focus else []),
+            *(["--focus", focus] if focus else []),
         ],
         cwd=str(REPO),
         text=True,
@@ -183,6 +273,9 @@ def main(
             explorer=explorer.resolve(),
             results=json.loads((run_dir / "results.json").read_text()),
             submission=json.loads(out.read_text()),
+            frames=load_frames(frames_npz) if frames or focus else [],
+            focus=focus,
+            run_dir=run_dir,
         )
 
 
