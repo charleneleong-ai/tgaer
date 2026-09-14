@@ -133,6 +133,12 @@ class TestRequestPolicy:
         )
         assert policy is None and "backend failed" in reason
 
+    def test_empty_content_names_the_reasoning_trap_specifically(self) -> None:
+        """A reasoning model burns the budget thinking and returns "" — which
+        must not be misread as a bad prompt. Measured on Qwen3.8-27B."""
+        policy, reason = cg.request_policy(self._Backend("   "), _evidence([_t(1)]))
+        assert policy is None and "thinking" in reason
+
     def test_prose_only_is_reported(self) -> None:
         policy, reason = cg.request_policy(self._Backend("no code here"), _evidence([_t(1)]))
         assert policy is None and "no python block" in reason

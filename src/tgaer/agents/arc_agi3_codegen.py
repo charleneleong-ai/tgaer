@@ -24,6 +24,14 @@ Two invariants, both load-bearing:
 The backend is any OpenAI-compatible ``/chat/completions`` — the same seam
 `arc_agi3_kaggle.HTTPChatBackend` uses — so this runs unchanged against a local
 vLLM during development and against the in-kernel vLLM on the competition GPU.
+
+**Backends must disable thinking.** Measured on Qwen3.8-27B with this exact
+prompt: thinking on spent 6229 completion tokens and 229.5s; thinking off spent
+173 tokens and 6.8s and produced the same usable policy. Worse, a reasoning
+model asked for 2048 tokens burns every one of them reasoning and returns
+`finish_reason="length"` with **empty content** — which looks exactly like a
+model that had nothing to say. `request_policy` names that case specifically so
+it is never mistaken for a bad prompt.
 """
 
 from __future__ import annotations
@@ -204,7 +212,17 @@ def agreement(policy: Callable[..., Any], held_out: Sequence[Transition]) -> flo
 
 
 def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, str]:
-    """``(usable, reason)`` — whether this policy may drive real actions."""
+    """``(usable, reason)`` — whether this policy may drive real actions.
+
+    **Known weak spot, do not read a high score here as understanding.**
+    Agreement compares action *ids*, and on a click-only game like `lp85` there
+    is exactly one id available, so any policy returning it scores 1.00 without
+    having decided anything — the real choice on that board is *where* to click,
+    which this does not check at all. A click-aware agreement (does the policy
+    pick a cell whose click we saw change the board?) is the obvious next step;
+    until then treat validation as a filter against broken code rather than
+    evidence of a good policy, and let the suite score be the judge.
+    """
     if not evidence.transitions:
         return False, "no warmup transitions to validate against"
     split = max(1, len(evidence.transitions) // 2)
@@ -232,7 +250,13 @@ def request_policy(
         reply = backend.chat(messages, max_tokens=max_tokens)
     except Exception as exc:  # noqa: BLE001 — a dead model must not sink the run
         return None, f"backend failed: {type(exc).__name__}: {exc}"
-    code = extract_code(reply or "")
+    if not (reply or "").strip():
+        return None, (
+            "model returned empty content — a reasoning model will spend the "
+            "whole token budget thinking and finish with nothing; disable "
+            "thinking on the backend rather than raising max_tokens"
+        )
+    code = extract_code(reply)
     if code is None:
         return None, "model returned no python block"
     policy = compile_policy(code)
