@@ -436,10 +436,11 @@ class _Ls20LockSim:
 class TestDirectedLockBootstrap:
     """The cold-start fix: a fresh explorer with NO hardcoded semantics manufactures
     its first win by seeking the key→door affordance, then exploits on later levels.
-    Sized so blind exploration (cost ∝ area) cannot finish in budget but directed
-    seeking (cost ∝ path length) can — the fix is load-bearing, not incidental."""
+    Directed seeking costs path length where blind exploration costs area, so the
+    bootstrap is load-bearing rather than incidental — measured as the margin
+    between the two, since RHAE scores actions spent, not levels reached."""
 
-    def _solve(self, blind: bool, budget: int):
+    def _solve(self, blind: bool, budget: int) -> tuple[int | None, Any]:
         size, m = 20, 18
         sim = _Ls20LockSim([((1, 2), (1, m)), ((m, 2), (m, m))], size=size)
         agent = ExplorerArcAgi3Agent()
@@ -451,12 +452,22 @@ class TestDirectedLockBootstrap:
                 return s + 1, agent
         return None, agent
 
-    def test_directed_bootstrap_solves_a_large_locked_game_blind_cannot(self):
-        budget = 250  # directed solves in ~58 steps; blind needs ~668
+    def test_directed_bootstrap_clears_the_locked_game_well_inside_blind_cost(self):
+        """Directed solves in 58 steps against blind's 92.
+
+        This asserted `blind_steps is None` until inert-action detection landed:
+        demoting primitives that leave the board untouched cut blind's cost from
+        beyond a 250 budget to 92, so "blind cannot finish" stopped being true of
+        the agent rather than of the bootstrap. The margin is the real claim, and
+        it is the one that matters — RHAE scores actions spent, so a bootstrap
+        that merely ties on levels while costing 1.6x the actions is worthless.
+        """
+        budget = 250
         steps, agent = self._solve(blind=False, budget=budget)
         blind_steps, _ = self._solve(blind=True, budget=budget)
         assert steps is not None  # both locked levels solved by directed bootstrap
-        assert blind_steps is None  # blind exploration cannot, in the same budget
+        assert blind_steps is not None  # the sim is solvable either way now
+        assert steps < 0.75 * blind_steps  # directed wins on actions, not just levels
         assert agent._det.door == 9  # door induced from the first directed win
         assert 5 in agent._det.keys  # key affordance learned while seeking
 
