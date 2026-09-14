@@ -65,12 +65,17 @@ on the hidden set — single runs cannot rank designs here.
   Executable World Models (58.1%) build and verify programmatic world models.
   Our own 27B kernel agent lost to this explorer, but it was an LLM-*as-policy*,
   the configuration nobody wins with — that result does not close the question.
-- **Two cheap, well-evidenced model-free wins we do not have:** *win-path
-  caching* (replay the cached winning sequence on re-entry to a solved level;
-  reported as one team's single biggest jump, 0.23 -> 0.33) and *per-object
-  cycle watch* (mark a **class** of element that has stopped paying, not a
-  global novelty bonus — generic thrash detection was built and deleted as inert
-  elsewhere, matching our own three reverts).
+- **Win-path caching does not apply here — measured, do not build it.** It is
+  another team's single biggest reported jump (0.23 -> 0.33), but it only pays
+  on re-entry to an already-solved level, and `levels_completed` is **strictly
+  monotonic in all 8 games**: zero resets, zero actions spent re-solving. There
+  is nothing to cache. (It may still pay on the hidden set if those games reset;
+  unmeasurable from here.)
+- **Per-object cycle watch** is the one that survives: mark a **class** of
+  element that has stopped paying, not a global novelty bonus. Generic thrash
+  detection was built and deleted as inert elsewhere, matching our own three
+  reverts, while the per-object form is what finally broke an 864-action loop
+  for that team.
 - **Depth beats breadth**: weight is the level index and there is a completion
   cap, so a late level in one game is worth several first levels spread around.
 - **The Kaggle kernel is an RTX Pro 6000, not a P100**, and already stages 27B
