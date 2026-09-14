@@ -41,8 +41,49 @@ Robustness has to be argued from mechanism or from a parameter sweep instead.
 
 ## Do this — the directive for this generation
 
-**Target `lp85` level 2. It is 81.5% of the whole metric and it is reachable.**
-Under RHAE, `lp85` alone contributes 2.778 of the 3.41 total env-score, and it
+**Make the levels we already clear faster. Do not chase new level unlocks.**
+
+RHAE squares efficiency, so a level cleared slowly is worth almost nothing.
+Scenarios computed directly from the metric and this suite's baselines:
+
+| scenario | RHAE | vs today |
+|---|---|---|
+| today (6 of 59 levels) | 0.4263% | 1.0x |
+| **3x faster on the levels we already clear** | **1.0585%** | **2.5x** |
+| 5x faster on the levels we already clear | 1.5824% | 3.7x |
+| every game clears 3 levels, at our current ~8x human pace | 0.3265% | **0.8x — worse than today** |
+| every game clears 3 levels at human pace | 20.89% | 49x |
+
+Read the fourth row twice. Tripling our cleared-level count while staying this
+slow *loses* score. Speed is not a secondary polish on top of solving; under
+this metric it is most of the score.
+
+A 3x speedup is worth as much as unlocking `lp85` level 2 (~1.12%), and unlike
+a level unlock it is continuous, attributable, and cannot be faked by a lucky
+rollout — which matters enormously given the chaos warning below. We are at
+3.1x-20.2x human on every level we clear except `lp85` L1 (0.6x, our only
+human-competitive result). Reaching human pace is the target, not superhuman.
+
+**Where the actions actually go** (via `measure.py --frames`, branch counts):
+
+- `ls20` L1 — 68 actions vs 22 human. `avatar=True`, 53 of 68 in `affordance`.
+  Already directed; it steers at *salient objects* because `goals=0`.
+- `sp80` L1 — 192 vs 39. **63% (121 actions) in undirected `explore`**, despite
+  a known avatar and lattice.
+
+The common root is `goals=0`: no goal value is induced before the first win, so
+every game plays level 1 steering at proxies. Better proxy selection, or a
+cheaper route to the first win, converts directly into score on five games.
+
+**Closed already — do not retry:** reordering `_nav_affordance` ahead of
+`_explore_due` scores 0.4025 and costs `sp80` its only level. The explore
+fallback is load-bearing; affordance alone gets stuck.
+
+### Secondary: `lp85` level 2
+
+Worth +0.69pp on its own, but it is a *binary unlock* and every attempt so far
+has been chaos rather than mechanism — read the closed rows before touching it.
+`lp85` alone contributes 2.778 of the 3.41 total env-score, and it
 is **cap**-limited at 1/8 levels — its efficiency is already pinned at the 1.15
 ceiling, so no efficiency work on it can ever pay. Only a second level can, and
 that one level is worth +0.69pp RHAE: the benchmark goes 0.4263% → ~1.12%, more
