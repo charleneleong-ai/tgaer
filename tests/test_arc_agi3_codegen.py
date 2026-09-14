@@ -20,11 +20,18 @@ GRID = np.array([[0, 1], [2, 3]])
 OTHER = np.array([[9, 9], [9, 9]])
 
 
-def _t(action: int, *, changed: bool = True, level: int = 0, after: int | None = None) -> cg.Transition:
+def _t(
+    action: int,
+    *,
+    changed: bool = True,
+    level: int = 0,
+    after: int | None = None,
+    click: tuple[int, int] | None = None,
+) -> cg.Transition:
     return cg.Transition(
         grid=GRID,
         action=action,
-        click=None,
+        click=click,
         next_grid=OTHER if changed else GRID,
         level=level,
         level_after=level if after is None else after,
@@ -75,39 +82,130 @@ class TestCompilePolicy:
         assert policy(GRID, [1], {}) == 3
 
 
-class TestAgreement:
-    def test_a_policy_that_reproduces_observed_actions_scores_high(self) -> None:
-        policy = cg.compile_policy("def policy(g, a, m):\n    return a[0]\n")
-        assert cg.agreement(policy, [_t(1), _t(2)]) == 1.0
+class TestAsClick:
+    @pytest.mark.parametrize(
+        ("choice", "expected"),
+        [
+            (("click", 3, 4), (3, 4)),
+            (["click", 3, 4], (3, 4)),
+            (6, None),
+            (("click", 3), None),
+            (("move", 3, 4), None),
+            (("click", "x", 4), None),
+        ],
+    )
+    def test_recognises_only_well_formed_clicks(self, choice: Any, expected: Any) -> None:
+        assert cg.as_click(choice) == expected
 
-    def test_a_throwing_policy_scores_zero_rather_than_propagating(self) -> None:
-        policy = cg.compile_policy("def policy(g, a, m):\n    raise ValueError('x')\n")
-        assert cg.agreement(policy, [_t(1)]) == 0.0
 
-    def test_an_all_none_policy_earns_nothing(self) -> None:
-        """Deferring is allowed but must not be a way to pass validation."""
+class TestDeadEvidence:
+    def test_a_cell_clicked_repeatedly_to_no_effect_is_dead(self) -> None:
+        """The lp85 failure, made checkable: 542 clicks on one unchanging cell."""
+        ev = _evidence([_t(6, changed=False, click=(18, 20)) for _ in range(5)])
+        assert ev.dead_clicks() == {(18, 20)}
+
+    def test_one_no_op_is_not_enough_to_call_a_cell_dead(self) -> None:
+        assert _evidence([_t(6, changed=False, click=(1, 1))]).dead_clicks() == set()
+
+    def test_a_cell_that_ever_worked_is_never_dead(self) -> None:
+        ev = _evidence(
+            [_t(6, changed=False, click=(1, 1)), _t(6, changed=False, click=(1, 1)),
+             _t(6, changed=True, click=(1, 1))]
+        )
+        assert ev.dead_clicks() == set() and ev.live_clicks() == {(1, 1)}
+
+    def test_dead_and_live_actions_split_on_whether_anything_changed(self) -> None:
+        ev = _evidence([_t(1, changed=False), _t(1, changed=False), _t(2, changed=True)])
+        assert ev.dead_actions() == {1} and ev.live_actions() == {2}
+
+
+class TestProductivity:
+    """Falsification, not imitation — a policy is judged on avoiding what the
+    warmup proved useless, never on reproducing the explorer's moves."""
+
+    def _held(self, n: int = 8) -> list[cg.Transition]:
+        return [_t(1, click=(9, 9)) for _ in range(n)]
+
+    def test_a_policy_clicking_a_known_dead_cell_scores_zero(self) -> None:
+        ev = _evidence(
+            [_t(6, changed=False, click=(18, 20)) for _ in range(4)]
+            + [_t(6, changed=True, click=(5, 5))]
+        )
+        policy = cg.compile_policy(
+            "def policy(g, a, m):\n    return ('click', 18, 20)\n"
+        )
+        result = cg.productivity(policy, self._held(), ev, [6])
+        assert result.judged == 8 and result.score == 0.0
+
+    def test_a_policy_clicking_a_cell_known_to_work_scores_one(self) -> None:
+        ev = _evidence([_t(6, changed=True, click=(5, 5))])
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 5, 5)\n")
+        assert cg.productivity(policy, self._held(), ev, [6]).score == 1.0
+
+    def test_choices_with_no_evidence_are_skipped_not_guessed(self) -> None:
+        ev = _evidence([_t(6, changed=True, click=(5, 5))])
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 40, 40)\n")
+        result = cg.productivity(policy, self._held(), ev, [6])
+        assert result.committed == 8 and result.judged == 0
+
+    def test_proposing_an_unavailable_action_is_always_wrong(self) -> None:
+        ev = _evidence([_t(1, changed=True)])
+        policy = cg.compile_policy("def policy(g, a, m):\n    return 99\n")
+        result = cg.productivity(policy, self._held(), ev, [1])
+        assert result.judged == 8 and result.score == 0.0
+
+    def test_deferring_is_recorded_as_no_commitment(self) -> None:
+        ev = _evidence([_t(1, changed=True)])
         policy = cg.compile_policy("def policy(g, a, m):\n    return None\n")
-        assert cg.agreement(policy, [_t(1), _t(2)]) == 0.0
+        result = cg.productivity(policy, self._held(), ev, [1])
+        assert result.committed == 0 and result.commit_rate == 0.0
 
-    def test_actions_that_changed_nothing_do_not_count_as_agreement(self) -> None:
-        policy = cg.compile_policy("def policy(g, a, m):\n    return a[0]\n")
-        assert cg.agreement(policy, [_t(1, changed=False)]) == 0.0
+    def test_a_throwing_policy_yields_nothing_rather_than_propagating(self) -> None:
+        ev = _evidence([_t(1, changed=True)])
+        policy = cg.compile_policy("def policy(g, a, m):\n    raise ValueError('x')\n")
+        result = cg.productivity(policy, self._held(), ev, [1])
+        assert result.judged == 0 and result.score == 0.0
 
-    def test_no_held_out_transitions_scores_zero(self) -> None:
-        policy = cg.compile_policy("def policy(g, a, m):\n    return a[0]\n")
-        assert cg.agreement(policy, []) == 0.0
+    def test_the_policy_is_not_shown_the_answer(self) -> None:
+        """It receives the real action list, not the action the explorer took —
+        the earlier version passed `[t.action]`, which leaked the answer."""
+        seen: list[list[int]] = []
+
+        def policy(grid: Any, available: list[int], memory: dict[str, Any]) -> Any:
+            seen.append(list(available))
+            return None
+
+        cg.productivity(policy, self._held(2), _evidence([_t(1)]), [1, 2, 6])
+        assert seen == [[1, 2, 6], [1, 2, 6]]
 
 
 class TestValidate:
-    def test_a_good_policy_is_usable_and_says_why(self) -> None:
-        policy = cg.compile_policy("def policy(g, a, m):\n    return a[0]\n")
-        usable, reason = cg.validate(policy, _evidence([_t(1), _t(2), _t(1), _t(2)]))
-        assert usable and "agreement" in reason
+    """Three bars, each catching a different way a policy can be useless."""
 
-    def test_a_deferring_policy_is_rejected_below_the_threshold(self) -> None:
+    LIVE = [_t(6, changed=True, click=(5, 5)) for _ in range(20)]
+
+    def test_a_productive_policy_is_usable(self) -> None:
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 5, 5)\n")
+        usable, reason = cg.validate(policy, _evidence(self.LIVE))
+        assert usable and "productivity 1.00" in reason
+
+    def test_a_policy_that_defers_on_everything_is_rejected(self) -> None:
         policy = cg.compile_policy("def policy(g, a, m):\n    return None\n")
-        usable, reason = cg.validate(policy, _evidence([_t(1), _t(2), _t(1), _t(2)]))
-        assert not usable and "agreement 0.00" in reason
+        usable, reason = cg.validate(policy, _evidence(self.LIVE))
+        assert not usable and "defers too often" in reason
+
+    def test_a_policy_we_have_no_evidence_about_is_rejected(self) -> None:
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 63, 63)\n")
+        usable, reason = cg.validate(policy, _evidence(self.LIVE))
+        assert not usable and "too little evidence" in reason
+
+    def test_a_policy_picking_dead_cells_is_rejected(self) -> None:
+        evidence = _evidence(
+            self.LIVE + [_t(6, changed=False, click=(18, 20)) for _ in range(20)]
+        )
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 18, 20)\n")
+        usable, reason = cg.validate(policy, evidence)
+        assert not usable and "known-dead" in reason
 
     def test_no_evidence_means_not_usable(self) -> None:
         policy = cg.compile_policy("def policy(g, a, m):\n    return a[0]\n")
@@ -150,11 +248,11 @@ class TestRequestPolicy:
         assert policy is None and "did not compile" in reason
 
     def test_a_valid_policy_comes_back_usable(self) -> None:
-        reply = "```python\ndef policy(g, a, m):\n    return a[0]\n```"
-        policy, _ = cg.request_policy(
-            self._Backend(reply), _evidence([_t(1), _t(2), _t(1), _t(2)])
-        )
-        assert policy is not None and policy(GRID, [7], {}) == 7
+        reply = "```python\ndef policy(g, a, m):\n    return ('click', 5, 5)\n```"
+        evidence = _evidence([_t(6, changed=True, click=(5, 5)) for _ in range(20)])
+        policy, reason = cg.request_policy(self._Backend(reply), evidence)
+        assert policy is not None, reason
+        assert cg.as_click(policy(GRID, [6], {})) == (5, 5)
 
 
 class TestGameEvidence:

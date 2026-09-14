@@ -9,8 +9,10 @@ The shape, which is also `Executable World Models`' shape: play a warmup with
 the explorer and record what actually happened, hand those transitions to the
 model, ask for a `policy` function, then **falsify it against the recorded
 transitions before it is allowed to spend a single real action**. Verification
-is free — it replays history — so a policy that cannot reproduce what we already
-saw is discarded at no cost in score.
+is free — it replays history — so a policy that proposes what we already watched
+fail is discarded at no cost in score. Note the direction: this falsifies, it
+does not imitate. A policy is meant to *beat* the explorer, so being scored on
+reproducing the explorer's moves would reward the wrong thing.
 
 Two invariants, both load-bearing:
 
@@ -39,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 import textwrap
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,10 +49,17 @@ from typing import Any
 import numpy as np
 
 CODE_BLOCK = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
-# A policy must reproduce at least this share of held-out warmup transitions
-# before it is trusted with real actions. Below it, the model has not understood
-# the game and the explorer is the better bet.
-MIN_AGREEMENT = 0.6
+# Share of *judged* choices that must avoid known-dead options. This is a
+# falsification bar, not an imitation bar — see `productivity`.
+MIN_PRODUCTIVITY = 0.8
+# A policy that defers on nearly everything is not a policy. It must commit on
+# at least this share of held-out states, and at least this many must be ones we
+# have evidence about, or there is nothing to judge and it is rejected.
+MIN_COMMIT_RATE = 0.25
+MIN_JUDGED = 5
+# How many times an option must be seen doing nothing before it counts as dead.
+# One no-op can be a transient; a cell clicked repeatedly to no effect is not.
+DEAD_AFTER = 2
 # Warmup actions spent gathering evidence before the model is asked. Long enough
 # to see each action's effect, short enough to leave the budget for playing.
 WARMUP_ACTIONS = 60
@@ -92,6 +102,38 @@ class GameEvidence:
             row["changed"] += int(t.changed)
             row["advanced"] += int(t.advanced)
         return out
+
+    def dead_clicks(self) -> set[tuple[int, int]]:
+        """Cells clicked ``DEAD_AFTER``+ times that never once changed the board.
+
+        This is the lp85 failure made checkable: that run put 542 of 591 actions
+        into one cell whose value never moved. A policy that proposes such a cell
+        has learned nothing from the warmup and must not be trusted with the
+        remaining budget.
+        """
+        tried: Counter[tuple[int, int]] = Counter()
+        worked: Counter[tuple[int, int]] = Counter()
+        for t in self.transitions:
+            if t.click is None:
+                continue
+            tried[t.click] += 1
+            worked[t.click] += int(t.changed)
+        return {c for c, n in tried.items() if n >= DEAD_AFTER and worked[c] == 0}
+
+    def live_clicks(self) -> set[tuple[int, int]]:
+        """Cells whose click changed the board at least once."""
+        return {t.click for t in self.transitions if t.click is not None and t.changed}
+
+    def dead_actions(self) -> set[int]:
+        """Action ids tried ``DEAD_AFTER``+ times that never changed the board."""
+        return {
+            a
+            for a, r in self.action_effects().items()
+            if r["tried"] >= DEAD_AFTER and r["changed"] == 0
+        }
+
+    def live_actions(self) -> set[int]:
+        return {a for a, r in self.action_effects().items() if r["changed"] > 0}
 
     def summary(self) -> str:
         """A compact, honest description of the game — no invented semantics.
@@ -185,52 +227,111 @@ def compile_policy(code: str) -> Callable[..., Any] | None:
     return policy if callable(policy) else None
 
 
-def agreement(policy: Callable[..., Any], held_out: Sequence[Transition]) -> float:
-    """Share of held-out transitions where the policy picks a move we saw work.
+def as_click(choice: Any) -> tuple[int, int] | None:
+    """``("click", row, col)`` as a cell, or None if this is not a click."""
+    if isinstance(choice, (tuple, list)) and len(choice) == 3 and choice[0] == "click":
+        try:
+            return int(choice[1]), int(choice[2])
+        except (TypeError, ValueError):
+            return None
+    return None
 
-    This is the falsifiability step, and it is free: it replays transitions
-    already recorded, so a policy is rejected without ever spending a real
-    action. A policy that returns None is not counted as wrong — deferring is
-    allowed — but it cannot earn agreement either, so an all-None policy scores
-    0 and is discarded.
+
+@dataclass(frozen=True)
+class Productivity:
+    """How a policy fared against what the warmup proved about this game."""
+
+    judged: int
+    productive: int
+    committed: int
+    total: int
+
+    @property
+    def score(self) -> float:
+        return self.productive / self.judged if self.judged else 0.0
+
+    @property
+    def commit_rate(self) -> float:
+        return self.committed / self.total if self.total else 0.0
+
+
+def productivity(
+    policy: Callable[..., Any],
+    held_out: Sequence[Transition],
+    evidence: GameEvidence,
+    available: Sequence[int],
+) -> Productivity:
+    """Falsify a policy against what the warmup already proved — never imitate it.
+
+    The earlier version of this asked whether the policy reproduced the
+    explorer's action, which is the wrong target twice over: the policy is
+    supposed to *beat* the explorer, and it was handed ``[t.action]`` as the
+    available actions, so it was being shown the answer. It also compared action
+    ids only, so on a click-only board every policy scored a perfect 1.00 without
+    choosing anything — the real decision there is *which cell*.
+
+    So this asks the answerable question instead: **of the choices we have
+    evidence about, how many avoid something the warmup proved useless?** Cells
+    and actions seen doing nothing repeatedly are dead; choices we have no
+    evidence for are skipped rather than guessed at, which is why `judged` is
+    reported separately and a minimum is required.
     """
-    if not held_out:
-        return 0.0
-    correct = 0
+    dead_cells, live_cells = evidence.dead_clicks(), evidence.live_clicks()
+    dead_ids, live_ids = evidence.dead_actions(), evidence.live_actions()
+    judged = productive = committed = 0
+
     for t in held_out:
         memory: dict[str, Any] = {}
         try:
-            choice = policy(t.grid, [t.action], memory)
+            choice = policy(t.grid, list(available), memory)
         except Exception:  # noqa: BLE001 — a throwing policy is a failed policy
-            return 0.0
+            return Productivity(judged=0, productive=0, committed=0, total=len(held_out))
         if choice is None:
             continue
-        picked = choice if isinstance(choice, int) else None
-        if picked == t.action and t.changed:
-            correct += 1
-    return correct / len(held_out)
+        committed += 1
+        if (cell := as_click(choice)) is not None:
+            if cell in dead_cells:
+                judged += 1
+            elif cell in live_cells:
+                judged += 1
+                productive += 1
+        elif isinstance(choice, int):
+            if choice not in available:
+                judged += 1  # proposing an unavailable action is always wrong
+            elif choice in dead_ids:
+                judged += 1
+            elif choice in live_ids:
+                judged += 1
+                productive += 1
+    return Productivity(judged, productive, committed, len(held_out))
 
 
 def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, str]:
     """``(usable, reason)`` — whether this policy may drive real actions.
 
-    **Known weak spot, do not read a high score here as understanding.**
-    Agreement compares action *ids*, and on a click-only game like `lp85` there
-    is exactly one id available, so any policy returning it scores 1.00 without
-    having decided anything — the real choice on that board is *where* to click,
-    which this does not check at all. A click-aware agreement (does the policy
-    pick a cell whose click we saw change the board?) is the obvious next step;
-    until then treat validation as a filter against broken code rather than
-    evidence of a good policy, and let the suite score be the judge.
+    Three independent bars, because each catches a different bad policy: it must
+    commit often enough to be worth running at all, enough of those commitments
+    must be ones we can judge, and enough of the judged ones must avoid options
+    the warmup proved dead. Passing is still only a licence to *try* — the suite
+    score gated by `bench/gate.py` is what decides whether it ships.
     """
     if not evidence.transitions:
         return False, "no warmup transitions to validate against"
     split = max(1, len(evidence.transitions) // 2)
     held_out = evidence.transitions[split:]
-    score = agreement(policy, held_out)
-    if score < MIN_AGREEMENT:
-        return False, f"agreement {score:.2f} < {MIN_AGREEMENT} on held-out transitions"
-    return True, f"agreement {score:.2f} on {len(held_out)} held-out transitions"
+    result = productivity(policy, held_out, evidence, evidence.available_actions)
+
+    detail = (
+        f"productivity {result.score:.2f} on {result.judged} judged "
+        f"of {result.committed} committed / {result.total} held-out"
+    )
+    if result.commit_rate < MIN_COMMIT_RATE:
+        return False, f"defers too often ({result.commit_rate:.2f} commit rate) — {detail}"
+    if result.judged < MIN_JUDGED:
+        return False, f"too little evidence to judge it ({result.judged} < {MIN_JUDGED}) — {detail}"
+    if result.score < MIN_PRODUCTIVITY:
+        return False, f"picks known-dead options — {detail}"
+    return True, detail
 
 
 def request_policy(
