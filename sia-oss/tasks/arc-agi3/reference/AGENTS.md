@@ -33,6 +33,7 @@ the directive below and implement it.**
 | Repeat count folded into `_live`'s sort key | 0.3516 (-0.075). Cost `ls20`/`sp80`/`sc25` their first level: re-ordering between visits to one signature desynchronises the per-signature untested set, exactly as `_live`'s docstring warns |
 | Per-level click-repeat filter (`_unspent`, swept 16→256) | Knife-edge, not an improvement. Exactly baseline at every threshold except 64/68, where `lp85` clears level 2 (0.5089). A width-8 window in a range of 250 is a lucky perturbation of one deterministic rollout — do not ship a tuned constant |
 | Learned chrome mask for `_learn_inert` (per-cell volatility, excluded cells changing >50% of steps) | Exactly baseline. The mask *works* — 104 chrome cells correctly identified on `lp85`, active 562 of 591 steps — but it buys nothing, for the reason in the note below. Do not retry masking, cropping, or denoising to fix `lp85` |
+| Same chrome mask applied to `frame_signature` instead (`_settled`) | **Looks like the session's biggest win and is not one.** Best config reads RHAE 0.5860 with `lp85` at 3 levels. But the mask binds in *every* config and finds the *same* 104 chrome cells, while `lp85` clears 3 levels at (0.5, 20) and (0.4, 20) and only 1 at (0.6,20)/(0.5,10)/(0.5,40)/(0.5,5). The variable is *when* the mask switches on, not what it finds — it reshuffles a chaotic rollout. Fixing the state key is necessary but nowhere near sufficient; the search consuming it is still undirected |
 
 **`--seed` does not perturb this agent.** Seeds 0-3 give byte-identical
 scorecards, so a seed sweep cannot separate a real effect from a lucky one.
@@ -70,6 +71,16 @@ detection will separate them.** Only a notion of progress can — distance to a
 goal, or a state abstraction under which the cycle is visibly a cycle.
 
 So the fix is a real goal signal on a click-only, avatar-less board.
+
+**A warning about how to measure it.** This agent is fully deterministic — seeds
+0-3 give byte-identical scorecards — and the rollout is chaotic, so *any*
+perturbation reshuffles every downstream decision. Three separate changes this
+session produced large apparent gains (0.5089, 0.7296, 0.5860) that all
+evaporated under a parameter sweep. A single config scoring above baseline is
+worth nothing on its own. **Before believing a result, sweep its parameters and
+show the gain survives across the range, or show the mechanism fires on a game
+that has no such parameter.** The metric is 8 deterministic rollouts; it is very
+easy to fit them by accident.
 
 **Implement goal-directed pathfinding instead of frontier-BFS.** `act()`
 currently only routes over edges the frontier search already opened; it
