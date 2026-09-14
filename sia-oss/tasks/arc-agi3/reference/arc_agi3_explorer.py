@@ -1,0 +1,668 @@
+"""Game-agnostic explorer for ARC-AGI-3 — the explore→induce→exploit controller.
+
+Unlike the LS20-tuned ``KeyDoorController``, this agent assumes nothing about a
+game's win condition. It builds a directed **state graph** of frame signatures
+and drives **frontier-directed exploration**: at each step it takes an untested
+action from the current state, or routes along known edges to the nearest state
+that still has one. This is the training-free, no-LLM spine that topped the
+ARC-AGI-3 2025 preview (algorithmic exploration ≫ frontier LLM ≫ random).
+
+Win-induction is wired for both verbs. Phase 3a (click): when a click advances a
+level, the clicked cell's value is learned and re-clicked first on later levels.
+Phase 3b (navigate): an ``EmpiricalSemantics`` detector induces the avatar (by
+controllability), its move lattice, and the goal value that vanishes under the
+avatar on a level-up; once known, ``_nav_move`` BFS-plans to the nearest goal
+cell via the ``Planner``, with refused moves recorded as walls (no hardcoded
+colours). This re-solves multi-level ``ls20`` without the LS20 semantics prior.
+
+Phase 4 (directed bootstrap) closes the cold-start gap: induction can only fire
+*after* a first win, so blind exploration must manufacture one — infeasible on a
+real 64×64 grid. Once the avatar and its lattice are induced (which needs only
+controllability, not a win), ``_nav_affordance`` steers toward the nearest salient
+object — a candidate key/door — so the first win is *sought*, not stumbled into;
+its cost is then path-length (linear), not area (quadratic). ``_probe_moves`` seeds
+the full lattice first so directed routing never oscillates on a partial one.
+
+Action primitives generalise across verbs: simple actions are ``("act", id)``;
+ACTION6 becomes salience-ranked ``("click", row, col)`` targets at component
+centroids, so the click-only games the navigate planner cannot touch still get
+explored.
+"""
+
+from __future__ import annotations
+
+from collections import Counter, deque
+from typing import Any
+
+import numpy as np
+
+from tgaer.agents.arc_agi3_grid import (
+    Box,
+    Planner,
+    cells,
+    components,
+    field_box,
+    in_field,
+)
+from tgaer.agents.arc_agi3_semantics import EmpiricalSemantics
+from tgaer.core.agent_base import Agent
+from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
+
+# A primitive is the atomic unit of exploration: ("act", id) or ("click", r, c).
+Primitive = tuple
+
+_MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built from
+# Avatar positions affordance won't step back onto. This is a window over the last 8
+# *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a
+# click re-appends the cell the avatar is standing on. An agent that alternates a
+# successful move with a refused one therefore remembers ~4 distinct cells, which
+# breaks a 2-cycle but not a 5-cell box loop. The step window is deliberate — it lets
+# a corridor-trapped agent self-heal within 8 steps once affordance stalls — so tune
+# this against steps, not against the size of the loop you want broken.
+_RECENT_CELLS = 8
+
+
+def frame_signature(
+    arr: np.ndarray, box: Box | None = None
+) -> tuple[tuple[int, int], bytes]:
+    """Hashable identity of the *play-field* — the region inside the field box,
+    so HUD / status-bar churn outside it doesn't fragment the state graph.
+
+    ``field_box`` takes the modal colour's extent, so a board whose modal colour
+    is a static panel rather than the floor hashes identically every frame.
+
+    TODO (deferred, post-Phase-7): this keys on every in-field pixel, so a board with
+    incidental per-frame churn fragments one avatar position into many signatures
+    (live ls20: 741 signatures for 30 avatar cells), blinding the ``StateGraph``
+    frontier to revisits. ``_nav_affordance`` works around it in position space, but
+    the real fix is a position-keyed or denoised signature so ``_choose`` survives
+    churn too. ``ExplorerArcAgi3Agent._inert`` compensates for the same defect from
+    the other side — it is deliberately state-key-free because this key is not
+    trustworthy — so re-measure whether it still pays if this is ever fixed."""
+    lo, hi = field_box(arr) if box is None else box
+    r0, c0, r1, c1 = int(lo[0]), int(lo[1]), int(hi[0]), int(hi[1])
+    sub = arr[r0 : r1 + 1, c0 : c1 + 1]
+    return sub.shape, sub.tobytes()
+
+
+def _background(arr: np.ndarray, box) -> int:
+    """The most common in-field cell value — treated as floor and not a target."""
+    lo, hi = box
+    sub = arr[int(lo[0]) : int(hi[0]) + 1, int(lo[1]) : int(hi[1]) + 1]
+    return int(Counter(sub.ravel().tolist()).most_common(1)[0][0]) if sub.size else 0
+
+
+def _centroid(comp: np.ndarray) -> tuple[int, int]:
+    return int(round(comp[:, 0].mean())), int(round(comp[:, 1].mean()))
+
+
+def click_targets(
+    arr: np.ndarray,
+    k: int = 12,
+    max_grid_frac: float = 0.25,
+    box: Box | None = None,
+) -> list[tuple[int, int]]:
+    """Salience-ranked click points: centroids of in-field, single-colour,
+    non-background components, largest compact object first, capped at ``k``.
+    Components spanning more than ``max_grid_frac`` of the grid are treated as
+    structure (walls / floor), not buttons, and dropped. Measured against the
+    grid rather than the field box, which moves with the modal colour and so
+    silently slid this cutoff between frames.
+
+    The size cutoff is a Phase-1 heuristic; Phase 2 (action-effect classification)
+    replaces it with empirical "does clicking here change the frame?" filtering."""
+    box = field_box(arr) if box is None else box
+    max_cells = max_grid_frac * arr.size
+    bg = _background(arr, box)
+    scored: list[tuple[int, int, int]] = []
+    for v in (int(x) for x in np.unique(arr)):
+        if v == bg:
+            continue
+        for c in components(arr, (v,)):  # one colour at a time — never merge objects
+            if not in_field(c.mean(0), box) or len(c) > max_cells:
+                continue
+            cr, cc = _centroid(c)
+            if arr[cr, cc] != v:  # centroid off the component → a hollow frame/ring
+                continue  # (e.g. the wall border), not a clickable object
+            scored.append((len(c), cr, cc))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [(r, c) for _, r, c in scored[:k]]
+
+
+def goal_targets(arr: np.ndarray, goal_values) -> list[tuple[int, int]]:
+    """Centroids of components whose value is a learned goal — a click here has
+    previously advanced a level, so it is worth trying before blind salience."""
+    out: list[tuple[int, int]] = []
+    for v in goal_values:
+        out.extend(_centroid(comp) for comp in components(arr, (v,)))
+    return out
+
+
+def proposals(
+    arr: np.ndarray, available: list[int], goal_values=(), box: Box | None = None
+) -> list[Primitive]:
+    """Ordered action primitives to try at the current frame. Clicks on learned
+    goal values come first; then ACTION6 fans out into salience-ranked click
+    targets; every other id is a simple ``act``. Duplicates are dropped."""
+    prims: list[Primitive] = []
+    if COMPLEX_ACTION_ID in available and goal_values:
+        prims.extend(("click", r, c) for r, c in goal_targets(arr, goal_values))
+    for a in available:
+        if a == COMPLEX_ACTION_ID:
+            prims.extend(("click", r, c) for r, c in click_targets(arr, box=box))
+        else:
+            prims.append(("act", a))
+    seen: set[Primitive] = set()
+    return [p for p in prims if not (p in seen or seen.add(p))]
+
+
+def _action_id(prim: Primitive) -> int:
+    """The action id a primitive sends, so every click shares one budget."""
+    return COMPLEX_ACTION_ID if prim[0] == "click" else int(prim[1])
+
+
+def to_arc(prim: Primitive) -> ArcAction:
+    if prim[0] == "click":
+        return ArcAction(id=COMPLEX_ACTION_ID, x=prim[2], y=prim[1])  # x=col, y=row
+    return ArcAction(id=prim[1])
+
+
+class StateGraph:
+    """Directed graph of frame signatures. Nodes carry their untested primitives;
+    edges record observed ``(signature, primitive) -> signature`` transitions."""
+
+    def __init__(self) -> None:
+        self._untested: dict[Any, list[Primitive]] = {}
+        self._adj: dict[Any, list[tuple[Primitive, Any]]] = {}
+
+    def register(self, sig: Any, prims: list[Primitive]) -> None:
+        """Record a node's untested primitives on first sighting only — a
+        re-sighting must never resurrect primitives already taken."""
+        if sig not in self._untested:
+            self._untested[sig] = list(prims)  # _adj is filled lazily by connect()
+
+    def take(self, sig: Any, prim: Primitive) -> None:
+        rest = self._untested.get(sig)
+        if rest and prim in rest:
+            rest.remove(prim)
+
+    def connect(self, src: Any, prim: Primitive, dst: Any) -> None:
+        edges = self._adj.setdefault(src, [])
+        if (prim, dst) not in edges:
+            edges.append((prim, dst))
+
+    def seen(self, sig: Any) -> bool:
+        """Whether this signature has ever been registered.
+
+        Not the same as ``untested_at(sig)`` being empty, which is also true of
+        a state that was registered and then exhausted.
+        """
+        return sig in self._untested
+
+    def untested_at(self, sig: Any) -> list[Primitive]:
+        return self._untested.get(sig, [])
+
+    def path_to_frontier(self, start: Any) -> list[Primitive] | None:
+        """Primitive sequence from ``start`` to the nearest node with untested
+        primitives. ``[]`` if ``start`` itself is a frontier; ``None`` if no
+        frontier is reachable over known edges."""
+        if self.untested_at(start):
+            return []
+        prev: dict[Any, tuple[Any, Primitive]] = {}
+        seen, q = {start}, deque([start])
+        while q:
+            node = q.popleft()
+            for prim, dst in self._adj.get(node, []):
+                if dst in seen:
+                    continue
+                seen.add(dst)
+                prev[dst] = (node, prim)
+                if self.untested_at(dst):
+                    return self._trace(prev, start, dst)
+                q.append(dst)
+        return None
+
+    @staticmethod
+    def _trace(prev, start, node) -> list[Primitive]:
+        path: list[Primitive] = []
+        while node != start:
+            node, prim = prev[node]
+            path.append(prim)
+        return path[::-1]
+
+
+class ExplorerArcAgi3Agent(Agent):
+    """Frontier-directed explorer. Per level: take an untested primitive at the
+    current state, else follow known edges to the nearest state that has one."""
+
+    # A discovery rate below this counts as "not getting anywhere". Fitted to
+    # a measured gap rather than picked: at WALK/STUCK_WINDOW=96 the games that
+    # need the switch read 0.11 (sp80) and 0.00 (tu93), and the ones that must
+    # not switch read 0.18 (sc25), 0.50 (ls20), 0.82 (lp85). 0.15 sits in the
+    # 0.11-0.18 gap, which is the narrowest margin here and the first thing to
+    # re-measure if a game regresses.
+    MIN_NOVELTY = 0.15
+    # Navigation runs before exploration, so a pinned avatar can spend a whole
+    # game walking. Rather than cap the walk at a constant — which gained tu93
+    # and cost ls20 and sc25, because walking pays off very differently per
+    # game — the walk is judged on what it discovers. Measured over 600
+    # actions: ls20 finds ~0.5 new states per walk, sp80 ~0.04.
+    #
+    # One-shot, not rolling: a diverted step is not a walk, so it appends no
+    # evidence, and once the gate trips it stays tripped for states that still
+    # have something untested. That is the behaviour the 4-game measurement
+    # validated; treat WALK_WINDOW as "the first 24 walks decide".
+    WALK_WINDOW = 24
+    # A game with no level that has stopped finding states has nothing left to
+    # lose by reordering how it explores. Least-tried-action ordering finds
+    # sp80's ACTION5 and tu93's win but costs ls20 and sc25 as a permanent
+    # policy, so it is applied only here. Across 25 games no fixed policy
+    # cleared more than 3, while the union of policies reaches 5.
+    #
+    # The window is what makes the test trustworthy rather than twitchy. At 48
+    # steps sc25 dipped to 0.06 and switched at step 140, which diverted it off
+    # the run that clears at step 535; its 100-step average never left 0.25-0.40.
+    # Minimum rolling novelty over the natural trajectory, per game:
+    #
+    #   window   sc25  ls20  lp85  sp80  tu93
+    #      48    0.06  0.46  0.77  0.00  0.00
+    #      96    0.18  0.50  0.82  0.00  0.00
+    #
+    # 96 separates the games that get there from the ones that do not. It also
+    # has to fire early enough to be worth firing: sp80 clears when the switch
+    # lands around step 140-190 and does not when it lands later, so window and
+    # threshold trade against each other and were chosen together.
+    STUCK_WINDOW = 96
+    # A challenger must beat the held field colour by this factor to take it.
+    # field_box keys on the modal colour and the signature is the crop's bytes,
+    # so a near-tie swaps the box between frames and identical boards hash
+    # differently. Measured on lp85 over 301 frames: colour 3 modal on 291,
+    # colour 4 on 10, two distinct box shapes.
+    FIELD_SWITCH_MARGIN = 1.25
+
+    def __init__(self, seed: int = 0, **_: Any) -> None:
+        self._graph = StateGraph()
+        self._plan: deque[Primitive] = deque()
+        self._prev_sig: Any | None = None
+        self._prev_prim: Primitive | None = None
+        self._levels = 0
+        # Edges that led to GAME_OVER, persistent across deaths and level resets.
+        self._fatal: set[tuple[Any, Primitive]] = set()
+        # Cell values whose click advanced a level — persistent goal prior.
+        self._goal_values: set[int] = set()
+        self._prev_arr: np.ndarray | None = None
+        # Induces the avatar (controllability), its move lattice, and the navigate
+        # goal (value that vanishes under the avatar on a level-up). Persists across
+        # level resets — induced roles are the cross-level transfer.
+        self._det = EmpiricalSemantics()
+        # Cells where a lattice move was refused — emergent walls, no colour prior.
+        self._blocked: set[tuple[int, int]] = set()
+        # Key count last seen — a fresh pickup may unlock a previously-refused door.
+        self._prev_key_n = 0
+        # Directional actions already probed once to seed the avatar's move lattice.
+        self._probed: set[int] = set()
+        # Recent avatar cells. Affordance won't step back onto one, breaking the
+        # position-space limit cycle that frame-signature memory can't see (on a real
+        # board incidental per-frame churn fragments one cell into many signatures).
+        self._recent: deque[tuple[int, int]] = deque(maxlen=_RECENT_CELLS)
+        self.last_reply: str | None = None
+        self.trace: dict | None = None
+        self._step = 0
+        # Counts only last-resort choices, so the rotation advances per stall
+        # rather than per step and a stalled state cycles its whole safe set.
+        self._stalls = 0
+        # Whether recent navigation steps reached states not seen before.
+        self._walk_novelty: deque[int] = deque(maxlen=self.WALK_WINDOW)
+        # Novelty of every step, not just navigation, for the stuck test.
+        self._novelty: deque[int] = deque(maxlen=self.STUCK_WINDOW)
+        self._last_branch = ""
+        # How often each action id has been taken. proposals() orders simple
+        # actions by id and _choose takes an untested one, so without this the
+        # low ids crowd out the rest before a state changes.
+        self._taken: Counter[int] = Counter()
+        # The colour whose extent is the play field, held across frames so a
+        # near-tie cannot re-key the map.
+        self._field_colour: int | None = None
+        # Primitives observed to leave the board byte-identical. Measured over
+        # the 25-game roster at 600 actions, 18.6% of every action taken changed
+        # nothing at all (clicks 30%, ft09 100% of its 600) — pure cost under a
+        # metric that squares actions-per-level. A count, not a set: an effect
+        # drops the entry (so a door that opens once a key is held is not
+        # written off), and among primitives that are all dead the least-often-
+        # confirmed one is tried first. Collapsing that tiebreak to membership
+        # is not free — it cost sc25 and 0.1364 -> 0.1354 on the roster.
+        self._inert: Counter[Primitive] = Counter()
+
+    def _on_new_level(self) -> None:
+        # _walk_novelty is cleared with the rest: a fresh board is fresh
+        # evidence, and without this the first barren level turns navigation
+        # off for every level after it.
+        self._graph = StateGraph()
+        self._plan.clear()
+        self._walk_novelty.clear()
+        self._inert.clear()
+        self._prev_sig = None
+        self._prev_prim = None
+        self._recent.clear()  # a fresh board: stale positions must not block
+
+    def act(self, observation: Any) -> ArcAction:
+        obs = observation or {}
+        frame = obs.get("frame") or []
+        available = obs.get("available_actions") or [1]
+        if not frame:
+            return to_arc(("act", available[0]))
+        arr = np.asarray(frame[-1])
+        levels = obs.get("levels_completed", self._levels)
+
+        # Learn avatar / move-lattice / navigate-goal from the prior in-level
+        # transition; a death respawn is not a real successor, so skip it.
+        learning = (
+            not obs.get("terminal")
+            and self._prev_arr is not None
+            and self._prev_prim is not None
+        )
+        if learning:
+            self._det.observe(self._prev_arr, to_arc(self._prev_prim).id, arr, levels)
+            if len(self._det.keys) > self._prev_key_n:  # a pickup may unlock a door
+                self._blocked.clear()
+                self._inert.clear()
+        self._prev_key_n = len(self._det.keys)
+        lattice = self._det.move_lattice()  # once per step, after the observe update
+        if learning:
+            self._learn_blocked(arr, lattice)
+            self._learn_inert(arr)
+        # Track the avatar cell every step (history must be gap-free); only affordance
+        # consults it, so the exploit may still revisit a cell to reach a known goal.
+        if self._det.avatar is not None and len(here := cells(arr, self._det.avatar)):
+            self._recent.append(tuple(map(int, here.min(0))))
+
+        # A respawn after death: the action that led here was fatal. Record the
+        # edge so it is never repeated, and drop the cross-death link — the frame
+        # is a fresh level start, not a normal successor.
+        if obs.get("terminal"):
+            # The board is back to its start state, so the cells walked before
+            # dying describe a position the avatar no longer holds. Keeping them
+            # made affordance refuse to route through its own approach route for
+            # the next several steps — the cold-start window it exists to cover.
+            # A level-up clears this via _on_new_level; a respawn drops
+            # levels_completed instead, so it never reached that branch.
+            self._recent.clear()
+            if self._prev_sig is not None and self._prev_prim:
+                self._fatal.add((self._prev_sig, self._prev_prim))
+                self._graph.take(self._prev_sig, self._prev_prim)
+                self._prev_sig = self._prev_prim = None
+        if levels > self._levels:  # genuine progress wipes the per-level map; a
+            self._induce_goal()  # but first learn what the winning click targeted
+            self._on_new_level()  # death respawn (levels drop) must keep the map
+        self._levels = levels
+
+        field = self._field(arr)
+        sig = frame_signature(arr, field)
+        # Before register(), so "seen before" still means what it says.
+        fresh = int(not self._graph.seen(sig))
+        self._novelty.append(fresh)
+        if self._last_branch == "affordance":
+            self._walk_novelty.append(fresh)
+        prims = proposals(arr, available, self._goal_values, box=field)
+        self._graph.register(sig, prims)
+        if self._prev_sig is not None and self._prev_prim is not None:
+            self._graph.connect(self._prev_sig, self._prev_prim, sig)
+
+        branch = "choose"
+        if prim := self._probe_moves(available, lattice):
+            branch = "probe"
+        elif self._explore_due(sig):
+            branch = "explore"  # the walk has stopped paying
+            prim = self._choose(sig, prims)
+        elif prim := self._nav_affordance(arr, available, lattice):
+            branch = "affordance"
+        elif prim := self._nav_move(arr, available, lattice):
+            branch = "nav"
+        else:
+            prim = self._choose(sig, prims)
+        self._step += 1
+        self.trace = {
+            "step": self._step,
+            "avatar": self._det.avatar,
+            "lattice_size": len(lattice),
+            "branch": branch,
+            "prim": prim,
+            "levels": int(levels),
+        }
+        self._graph.take(sig, prim)
+        self._taken[_action_id(prim)] += 1
+        self._last_branch = branch
+        self._prev_sig, self._prev_prim = sig, prim
+        self._prev_arr = arr
+        self.last_reply = f"[explorer] {prim}"
+        return to_arc(prim)
+
+    def _induce_goal(self) -> None:
+        """A level was just completed: if the preceding action clicked a cell,
+        learn that cell's value as a goal to re-click on later levels."""
+        if (
+            self._prev_arr is not None
+            and self._prev_prim
+            and self._prev_prim[0] == "click"
+        ):
+            _, r, c = self._prev_prim
+            self._goal_values.add(int(self._prev_arr[r, c]))
+
+    def _learn_inert(self, arr: np.ndarray) -> None:
+        """The previous primitive left the board untouched, so it is dead here.
+
+        Two narrower forms already exist and both need a pinned avatar, so both
+        are silent on click games and through cold start — where the budget
+        actually goes: ``_learn_blocked`` records a refused directional move as
+        a wall cell, and ``move_lattice`` drops an action whose majority delta
+        is (0, 0). Byte-identity needs neither.
+
+        Counting per primitive rather than per (state, primitive) is what makes
+        it pay: a cell that does nothing here almost never does something two
+        states later, and the per-state form cannot generalise past the state it
+        was learned in — which matters because ``frame_signature`` fragments one
+        position into many states.
+
+        Comparing the whole grid, not the field-box crop, is deliberate and
+        measured. The crop is the principled region — it excludes HUD churn —
+        but scoring it that way marks primitives dead far more readily and cost
+        a level pair on the roster (0.1335 against 0.1364). Byte-identity over
+        everything is the conservative test, and conservative wins here."""
+        if np.array_equal(self._prev_arr, arr):
+            self._inert[self._prev_prim] += 1
+        else:
+            self._inert.pop(self._prev_prim, None)
+
+    def _live(self, prims: list[Primitive]) -> list[Primitive]:
+        """``prims`` with the ones known to do nothing moved to the back.
+
+        A reordering, not a filter: an action is inert only until the board
+        changes around it, and dropping it outright would strand a level whose
+        every remaining option reads dead. Demoting them any earlier — before
+        ``click_targets`` takes its top ``k`` — measured worse (0.1268, four
+        levels against six): it pulls in low-salience targets and re-orders the
+        proposal list between visits to one signature, which desynchronises the
+        graph's per-signature untested set."""
+        return sorted(prims, key=self._inert.__getitem__)
+
+    def _learn_blocked(self, arr: np.ndarray, lattice: dict[int, np.ndarray]) -> None:
+        """A directional move the lattice expected to shift the avatar, but which
+        left it put, means the destination cell is a wall — record it so the
+        Planner routes around it without any hardcoded wall colours."""
+        avatar = self._det.avatar
+        if avatar is None or self._prev_arr is None or self._prev_prim[0] != "act":
+            return
+        d = lattice.get(self._prev_prim[1])
+        prev_av, cur_av = cells(self._prev_arr, avatar), cells(arr, avatar)
+        if d is None or not len(prev_av) or not len(cur_av):
+            return
+        if (cur_av.min(0) == prev_av.min(0)).all():  # refused: avatar did not move
+            cell = prev_av.min(0) + d
+            self._blocked.add((int(cell[0]), int(cell[1])))
+
+    def _probe_moves(
+        self, available: list[int], lattice: dict[int, np.ndarray]
+    ) -> Primitive | None:
+        """Bootstrap: take each directional action once so the avatar's move lattice
+        is complete before directed routing relies on it (a partial lattice makes the
+        router oscillate). Skip a move whose effect is already known or once tried."""
+        for a in available:
+            if a in _MOVES and a not in lattice and a not in self._probed:
+                self._probed.add(a)
+                return ("act", a)
+        return None
+
+    def _route(
+        self,
+        arr: np.ndarray,
+        available: list[int],
+        lattice: dict[int, np.ndarray],
+        av: np.ndarray,
+        goal: np.ndarray,
+    ) -> Primitive | None:
+        """First move that carries the avatar toward ``goal``: step straight onto an
+        adjacent goal (the Planner stops a cell short, but a pickup / door-entry must
+        actually land), else BFS-plan around known walls. ``None`` if no usable move."""
+        tl = av.min(0)
+        if int(abs(goal - tl).sum()) == 1:  # adjacent → step straight on
+            for a, d in lattice.items():
+                if a in available and (tl + d == goal).all():
+                    return ("act", a)
+        planner = Planner(arr, (av - tl).astype(int), lattice, walls=())
+        planner.blocked = self._blocked
+        path = planner.path(tl, goal)
+        if path and path[0] in available:
+            return ("act", path[0])
+        return None
+
+    def _nav_move(
+        self, arr: np.ndarray, available: list[int], lattice: dict[int, np.ndarray]
+    ) -> Primitive | None:
+        """Exploit: once the avatar, its move lattice, and the navigate goal (door)
+        are induced, route to the nearest goal cell. ``None`` whenever the goal isn't
+        known or no path exists — the caller falls back to frontier exploration."""
+        avatar, door = self._det.avatar, self._det.door
+        if avatar is None or door is None:
+            return None
+        av, goals = cells(arr, avatar), cells(arr, door)
+        if not lattice or not len(av) or not len(goals):
+            return None
+        tl = av.min(0)
+        goal = min(goals, key=lambda g: int(abs(g - tl).sum()))
+        return self._route(arr, available, lattice, av, goal)
+
+    def _nav_affordance(
+        self, arr: np.ndarray, available: list[int], lattice: dict[int, np.ndarray]
+    ) -> Primitive | None:
+        """Directed bootstrap: before the goal is induced, steer toward the nearest
+        salient object — a candidate key/door — so the *first* win is sought rather
+        than stumbled into. Targets exclude the avatar, the already-induced door
+        (the real exploit drives that), and known walls. ``None`` when the avatar or
+        its lattice isn't known yet, or nothing reachable remains."""
+        avatar = self._det.avatar
+        if avatar is None or not lattice:
+            return None
+        av = cells(arr, avatar)
+        if not len(av):
+            return None
+        door = self._det.door
+        skip = {tuple(c) for c in cells(arr, door)} if door is not None else set()
+        skip |= self._blocked
+        tl = av.min(0)
+        targets = [
+            np.array(t)
+            for t in click_targets(arr)
+            if arr[t] != avatar and t not in skip
+        ]
+        for goal in sorted(targets, key=lambda g: int(abs(g - tl).sum())):
+            move = self._route(arr, available, lattice, av, goal)
+            if move is not None and not self._steps_back(move, tl, lattice):
+                return move
+        return None
+
+    def _steps_back(
+        self, move: Primitive, tl: np.ndarray, lattice: dict[int, np.ndarray]
+    ) -> bool:
+        """Would ``move`` land the avatar on a recently-occupied cell? Greedy nearest-
+        target seeking otherwise ping-pongs between two salient cells straddling the
+        avatar; refusing the step back breaks that cycle in position space.
+
+        Only ``("act", id)`` primitives carry a lattice key. A click's ``move[1]`` is
+        a row index, which would collide with the directional ids 1-4 and veto against
+        an unrelated cell — unreachable while ``_route`` returns only act primitives,
+        but the annotation is wider than the arithmetic, so guard it here.
+        """
+        if move[0] != "act":
+            return False
+        d = lattice.get(move[1])
+        if d is None:
+            return False
+        return (int(tl[0] + d[0]), int(tl[1] + d[1])) in self._recent
+
+    def _field(self, arr: np.ndarray) -> Box:
+        """The play field, held stable against a near-tie for modal colour."""
+        values, counts = np.unique(arr, return_counts=True)
+        if not values.size:
+            return field_box(arr)
+        order = counts.argsort()[::-1]
+        leader = int(values[order[0]])
+        if self._field_colour is None:
+            self._field_colour = leader
+        elif leader != self._field_colour:
+            held = counts[values == self._field_colour]
+            held_n = int(held[0]) if held.size else 0
+            if int(counts[order[0]]) > held_n * self.FIELD_SWITCH_MARGIN:
+                self._field_colour = leader  # decisive, not a flicker
+        cells_of = np.argwhere(arr == self._field_colour)
+        if not len(cells_of):
+            return field_box(arr)
+        return (cells_of.min(0), cells_of.max(0))
+
+    def _is_stuck(self) -> bool:
+        """No level yet, and the board has stopped yielding unseen states."""
+        if self._levels > 0 or len(self._novelty) < self.STUCK_WINDOW:
+            return False
+        return sum(self._novelty) / len(self._novelty) < self.MIN_NOVELTY
+
+    def _explore_due(self, sig: Any) -> bool:
+        """Whether walking has stopped discovering and owes this state a try.
+
+        Waits for a full window before judging, so a productive walk is never
+        interrupted on a couple of unlucky steps. See WALK_WINDOW: the verdict
+        is effectively one-shot, since diverted steps add no walk evidence.
+        """
+        if len(self._walk_novelty) < self.WALK_WINDOW:
+            return False
+        rate = sum(self._walk_novelty) / len(self._walk_novelty)
+        return rate < self.MIN_NOVELTY and bool(self._graph.untested_at(sig))
+
+    def _choose(self, sig: Any, prims: list[Primitive]) -> Primitive:
+        # Drop a stale route the current frame can no longer execute.
+        if self._plan and self._plan[0] not in set(prims):
+            self._plan.clear()
+        if self._plan:
+            return self._plan.popleft()
+        # Untested prims are fatal-free by construction (fatal edges are taken out
+        # of untested when recorded), so only this last-resort reuse needs to screen
+        # them: prefer a primitive not known to end the game.
+        if untested := self._graph.untested_at(sig):
+            untested = self._live(untested)
+            if not self._is_stuck():
+                return untested[0]
+            return min(untested, key=lambda p: self._taken[_action_id(p)])
+        path = self._graph.path_to_frontier(sig)
+        if path:
+            self._plan = deque(path)
+            return self._plan.popleft()
+        safe = [p for p in prims if (sig, p) not in self._fatal]
+        if safe:
+            # Rotate rather than replay. This is reached only once nothing is
+            # untested and no frontier is reachable, and returning safe[0] there
+            # is a fixed point: tn36 played 2 distinct primitives in 601 steps
+            # and ft09 one of them 98% of the time. Across 25 games at 600
+            # actions, 3763 of them — 27% of the budget on games that never
+            # cleared — went into repeating a single move.
+            self._stalls += 1
+            safe = self._live(safe)
+            return safe[self._stalls % len(safe)]
+        return prims[0] if prims else ("act", 1)

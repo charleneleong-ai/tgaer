@@ -1,0 +1,7 @@
+{
+  "profile_id": "openai-meta",
+  "name": "OpenAI GPT-5.5 meta agent (OpenHands)",
+  "agent_impl": "openhands",
+  "model": "gpt-5.5",
+  "provider_id": "openai"
+}
