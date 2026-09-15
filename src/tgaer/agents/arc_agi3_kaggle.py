@@ -93,7 +93,7 @@ GRID_SIZE = 64
 # well above the need because hitting the cap is indistinguishable from a
 # refusal: a reasoning model burned all 64 tokens on <think> and returned
 # nothing usable at all.
-MAX_OUTPUT_TOKENS = int(os.environ.get("ARC_MAX_OUTPUT_TOKENS", "128"))
+MAX_OUTPUT_TOKENS = int(os.environ.get("ARC_MAX_OUTPUT_TOKENS", "256"))
 # "required" forces a tool call through guided decoding; "auto" leaves the model
 # to emit a <tool_call> block the server's parser picks up. Which one works is a
 # property of the serving stack, not of us: the scored kernel installs vLLM
@@ -173,8 +173,10 @@ PYTHON_TOOL = {
             "Run Python against the board and print what you want to know. "
             "Available: grid (tuple of rows of ints), objects (segmentation dict "
             "with 'nodes' and 'adjacency'), prev (previous board or None), "
-            "SYMBOLS (int->char). "
-            "Use print(); each call starts fresh."
+            "grid_diff (changed cells vs prev), object_positions (hash→positions), "
+            "action_history (last 10 actions), score_history (last 10 scores), "
+            "hud_cells (set of chrome cells to ignore), SYMBOLS (int→char), "
+            "step (current step number). Use print(); each call starts fresh."
         ),
         "parameters": {
             "type": "object",
@@ -202,6 +204,98 @@ RAW_TEXT_SYSTEM = (
 
 THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+
+# ============================================================
+# Procedure Cache: Cache successful action sequences with
+# Bayesian stats, replay on similar boards. From MACLA pattern.
+# ============================================================
+
+@dataclass
+class CachedProcedure:
+    """A cached action sequence with Bayesian success/failure stats."""
+    board_hash: int
+    actions: list[str]
+    alpha: int = 1  # success count
+    beta: int = 1   # failure count
+    created_step: int = 0
+    last_used_step: int = 0
+
+    @property
+    def success_rate(self) -> float:
+        return self.alpha / (self.alpha + self.beta) if (self.alpha + self.beta) > 0 else 0.5
+
+
+class ProcedureCache:
+    """Cache successful action sequences and replay them on similar boards.
+
+    Inspired by MACLA's procedural memory. When the agent finds a sequence
+    that works (score increases), cache it. On future similar boards, replay
+    the cached sequence instead of asking the model.
+    """
+
+    def __init__(self, max_size: int = 50):
+        self.procedures: dict[int, CachedProcedure] = {}
+        self.max_size = max_size
+        self._current_sequence: list[str] = []
+        self._current_board_hash: int = 0
+        self._sequence_start_step: int = 0
+
+    def start_sequence(self, board_hash: int, step: int) -> None:
+        """Begin tracking a new action sequence."""
+        self._current_board_hash = board_hash
+        self._current_sequence = []
+        self._sequence_start_step = step
+
+    def record_action(self, action_name: str) -> None:
+        """Record an action in the current sequence."""
+        self._current_sequence.append(action_name)
+
+    def record_success(self, board_hash: int) -> None:
+        """Cache the current sequence as successful."""
+        if not self._current_sequence:
+            return
+        key = board_hash % (self.max_size * 1000)
+        if key in self.procedures:
+            self.procedures[key].alpha += 1
+            self.procedures[key].last_used_step = self._sequence_start_step
+        else:
+            if len(self.procedures) >= self.max_size:
+                # Evict lowest success rate
+                worst = min(self.procedures.values(), key=lambda p: p.success_rate)
+                del self.procedures[id(worst)]
+            self.procedures[key] = CachedProcedure(
+                board_hash=board_hash,
+                actions=list(self._current_sequence),
+                created_step=self._sequence_start_step,
+                last_used_step=self._sequence_start_step,
+            )
+        self._current_sequence = []
+
+    def record_failure(self) -> None:
+        """Mark the current sequence as failed."""
+        if not self._current_sequence:
+            return
+        key = self._current_board_hash % (self.max_size * 1000)
+        if key in self.procedures:
+            self.procedures[key].beta += 1
+        self._current_sequence = []
+
+    def get_cached_action(self, board_hash: int) -> str | None:
+        """Get a cached action if we've seen this board and it has a high success rate."""
+        key = board_hash % (self.max_size * 1000)
+        proc = self.procedures.get(key)
+        if proc and proc.success_rate > 0.6 and proc.actions:
+            return proc.actions[0]
+        return None
+
+    def get_cached_sequence(self, board_hash: int) -> list[str] | None:
+        """Get the full cached sequence for replay."""
+        key = board_hash % (self.max_size * 1000)
+        proc = self.procedures.get(key)
+        if proc and proc.success_rate > 0.6:
+            return list(proc.actions)
+        return None
 
 
 def strip_thinking(text: str) -> str:
@@ -1376,6 +1470,17 @@ class MyAgent(Agent):
         # Action payload passed to arc_env.step() by do_action_request.
         self._pending_data: dict[str, int] | None = None
         self._pending_reasoning: str | dict[str, str] | None = None
+        # Persistent memory: track action and score history (v33).
+        self._action_history: list[str] = []
+        self._score_history: list[int] = []
+        # Supervisor: stagnation detection and redirect (v34).
+        self._stagnation_count = 0
+        self._last_score = -1
+        self._grid_hash_history: list[int] = []
+        self._redirect_hint: str | None = None
+        # Procedure cache: replay successful sequences (v36).
+        self._procedure_cache = ProcedureCache()
+        self._cache_replay_remaining: list[str] = []
 
     @property
     def name(self) -> str:
@@ -1456,6 +1561,14 @@ class MyAgent(Agent):
             self.graph.reset()
             self._sig = None
             self._frontier_plan.clear()
+            # Reset supervisor and procedure cache for new level (v34/v36).
+            self._stagnation_count = 0
+            self._last_score = -1
+            self._grid_hash_history.clear()
+            self._redirect_hint = None
+            self._action_history.clear()
+            self._score_history.clear()
+            self._cache_replay_remaining.clear()
 
         # Start / restart the game. The gateway returns an empty frame while
         # NOT_PLAYED and a dead board after GAME_OVER; RESET yields the real
@@ -1474,11 +1587,19 @@ class MyAgent(Agent):
             return self._make_reset()
 
         self._step += 1
+        # Track score for REPL context (v33).
+        if latest_frame.levels_completed is not None:
+            self._score_history.append(latest_frame.levels_completed)
+            if len(self._score_history) > 50:
+                self._score_history = self._score_history[-50:]
 
         board = tuple(tuple(row) for row in grid)
         # Exactly once per turn, and before anything reads the segmentation or
         # the movement events.
         self.observe_frame(grid)
+        # Supervisor: check for stagnation and set redirect hint (v34).
+        score = latest_frame.levels_completed or 0
+        self._redirect_hint = self._check_supervisor(score, grid)
         # The board in hand is the result of the previous action, so score that
         # transition now — before the prompt is built, or the effect shown is
         # always one turn stale.
@@ -1540,6 +1661,37 @@ class MyAgent(Agent):
 
         available = latest_frame.available_actions or [1, 2, 3, 4, 5, 6]
 
+        # Procedure cache replay (v36): if we have a cached sequence for this
+        # board, replay it instead of asking the model.
+        board_hash = hash(board)
+        if self._cache_replay_remaining:
+            next_action_name = self._cache_replay_remaining.pop(0)
+            aid = NAME_TO_ID.get(next_action_name)
+            if aid is not None and aid in available:
+                self.stats["cache_replay"] += 1
+                self._procedure_cache.record_action(next_action_name)
+                if not self._cache_replay_remaining:
+                    self._procedure_cache.start_sequence(board_hash, self._step)
+                return self._arc_to_game_action(ArcAction(id=aid))
+        elif not self._cache_replay_remaining and self._procedure_cache._current_sequence:
+            # Sequence just finished — record outcome based on score change
+            if score > (self._score_history[-2] if len(self._score_history) > 1 else 0):
+                self._procedure_cache.record_success(board_hash)
+            else:
+                self._procedure_cache.record_failure()
+
+        # Check for a new cached sequence to replay
+        cached_seq = self._procedure_cache.get_cached_sequence(board_hash)
+        if cached_seq and len(cached_seq) > 1:
+            self._cache_replay_remaining = list(cached_seq[1:])
+            self._procedure_cache.start_sequence(board_hash, self._step)
+            first_action = cached_seq[0]
+            aid = NAME_TO_ID.get(first_action)
+            if aid is not None and aid in available:
+                self.stats["cache_hit"] += 1
+                self._procedure_cache.record_action(first_action)
+                return self._arc_to_game_action(ArcAction(id=aid))
+
         # Cheap policies first. Probing and exploiting need no inference, and
         # both address what a trace showed the model doing badly: it never
         # learned what its buttons did, and never repeated anything that worked.
@@ -1549,6 +1701,14 @@ class MyAgent(Agent):
             action = self._call_llm(raw_prompt, tool_prompt, available, board)
 
         action = self._escape_if_stuck(action, valid_names, available)
+
+        # Record action in procedure cache (v36).
+        action_name = ACTION_NAMES.get(action.id, f"ACTION{action.id}")
+        self._procedure_cache.record_action(action_name)
+        # Track action history for supervisor (v34).
+        self._action_history.append(action_name)
+        if len(self._action_history) > 50:
+            self._action_history = self._action_history[-50:]
 
         # Convert to GameAction
         game_action = self._arc_to_game_action(action)
@@ -1926,6 +2086,57 @@ class MyAgent(Agent):
             parts.append(f"{self.undo.candidate} undoes the last move for free")
         return "; ".join(parts)
 
+    def _check_supervisor(self, score: int, grid: Grid) -> str | None:
+        """Supervisor: detect stagnation and return redirect hint (v34).
+
+        Monitors three signals:
+        1. Score stagnation: no score change for N turns
+        2. Grid repetition: same board hash repeated
+        3. Action overuse: same action used too many times
+
+        Returns a redirect message if stagnation detected, else None.
+        """
+        grid_hash = hash(tuple(tuple(row) for row in grid))
+        self._grid_hash_history.append(grid_hash)
+        if len(self._grid_hash_history) > 20:
+            self._grid_hash_history = self._grid_hash_history[-20:]
+
+        # Score stagnation
+        if score == self._last_score:
+            self._stagnation_count += 1
+        else:
+            self._stagnation_count = 0
+            self._last_score = score
+
+        if self._stagnation_count >= 5:
+            self.stats["supervisor_stagnation"] += 1
+            return ("Score hasn't changed in several turns. "
+                    "Try a different area of the board or a different action type.")
+
+        # Grid repetition
+        if len(self._grid_hash_history) >= 3:
+            last_3 = self._grid_hash_history[-3:]
+            if len(set(last_3)) == 1:
+                self.stats["supervisor_repeat"] += 1
+                return ("The board isn't changing. Try a completely different action.")
+
+        # Action overuse
+        if self._action_history:
+            last_action = self._action_history[-1]
+            count = sum(1 for a in self._action_history[-10:] if a == last_action)
+            if count >= 7:
+                self.stats["supervisor_overuse"] += 1
+                return (f"You've used {last_action} {count} of the last 10 times. "
+                        "Try something different.")
+
+        return None
+
+    def _supervisor_hint(self) -> str:
+        """Return the supervisor's redirect as a prompt suffix."""
+        if self._redirect_hint:
+            return f"\n\n*** SUPERVISOR: {self._redirect_hint} ***"
+        return ""
+
     def _build_prompt(
         self,
         encoded_grid: str,
@@ -2008,7 +2219,7 @@ Current state: {state}, step {self._step}
 Last action: {self._last_action_name}
 Effect of that action: {effect}
 What moved: {moved}
-Progress: {progress}{theory}{notes}
+Progress: {progress}{theory}{notes}{self._supervisor_hint()}
 
 Valid actions: {", ".join(valid_names)}
 
@@ -2097,15 +2308,33 @@ Current board (symbols: {ARC_LEGEND}):
             code = json.loads(arguments).get("code", "") if arguments else ""
         except (TypeError, ValueError):
             code = arguments or ""
-        return run_python(
-            code,
-            {
-                "grid": board,
-                "objects": self._segmentation,
-                "prev": self._last_grid,
-                "SYMBOLS": ARC_SYMBOLS,
-            },
-        )
+        # Build rich context for the REPL sandbox.
+        grid_diff = None
+        if self._last_grid is not None and board is not None:
+            grid_diff = [
+                [board[r][c] - self._last_grid[r][c]
+                 if board[r][c] != self._last_grid[r][c] else 0
+                 for c in range(len(board[r]))]
+                for r in range(len(board))
+            ]
+        object_positions: dict[str, list[tuple[int, int]]] = {}
+        for node in (self._segmentation or {}).get("nodes", []):
+            h = node.get("hash", "?")
+            pos = (node.get("row", 0), node.get("col", 0))
+            object_positions.setdefault(str(h), []).append(pos)
+        namespace = {
+            "grid": board,
+            "objects": self._segmentation,
+            "prev": self._last_grid,
+            "grid_diff": grid_diff,
+            "object_positions": object_positions,
+            "action_history": list(self._action_history[-10:]),
+            "score_history": list(self._score_history[-10:]),
+            "hud_cells": getattr(self.memory, "hud_cells", set()),
+            "SYMBOLS": ARC_SYMBOLS,
+            "step": self._step,
+        }
+        return run_python(code, namespace)
 
     def _complete_messages(
         self, messages: list[dict[str, Any]], temperature: float, **kwargs: Any
