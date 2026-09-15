@@ -184,3 +184,29 @@ non-negotiable — see the three headline "wins" that evaporated under sweeps.
    the validator — were already varied in attempts 1-7 and neither was the
    constraint. The claim here is that the *output type* was, which M0 tests
    without a model at all.
+
+## The M1 backend
+
+`sia-oss/bench/launch_vllm.sh`, copied to the pod and run there; then
+`ssh -N -L 8011:127.0.0.1:8011 pi-a100-80gb` locally and point
+`HTTPChatBackend(base_url="http://127.0.0.1:8011/v1", model="qwen-27b")` at it.
+Verified end to end: the repo's own backend seam returns clean code.
+
+Three launch failures preceded a working one, none of them guessable:
+
+1. **Do not use the pod's base `python3`.** `~/.local` is shared with other
+   tenants and pins `transformers` 4.40.1, which vllm 0.26.0 cannot import
+   (`ALLOWED_LAYER_TYPES`). Upgrading it would risk someone else's job. Use
+   `~/vllm_venv` (transformers 5.16.1 + vllm 0.26.0, a matching pair).
+2. **`ninja` must be on `PATH`**, not merely installed. vLLM shells out to it to
+   JIT the MoE kernels, and invoking the interpreter by absolute path does not
+   put the venv's `bin` on `PATH`.
+3. **Model choice is decided by memory, not preference.** `Qwen3.6-35B-A3B` is
+   cached but needs ~70GB of weights and leaves no room for KV cache at a
+   utilisation this shared card can spare. The FP8 27B that would best match the
+   Kaggle kernel is a **12K stub** in the cache — never actually downloaded. So
+   `Qwen3.8-27B` dense at `--gpu-memory-utilization 0.88`, which lands at 70.7GB
+   and leaves the other tenant alone.
+
+Shared-pod discipline: port 8011 rather than 8000, utilisation capped, and the
+other tenant's process (566MB, ~20% util) untouched throughout.
