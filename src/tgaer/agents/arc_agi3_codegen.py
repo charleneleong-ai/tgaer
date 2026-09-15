@@ -215,6 +215,45 @@ class GameEvidence:
             and self.progress_rate(row) < PROGRESS_RATE
         }
 
+    def latest_grid(self) -> np.ndarray | None:
+        """The most recent board — what a policy will actually be handed next."""
+        return self.transitions[-1].next_grid if self.transitions else None
+
+    def objects(self, grid: np.ndarray, k: int = 12) -> list[dict[str, Any]]:
+        """Salient objects on ``grid``, each annotated with what clicking it did.
+
+        This is the half of the evidence that was missing. Without positions the
+        model is told only action counts and a colour histogram, from which no
+        board-sensitive policy is *writable* — so it emitted constants, and the
+        validator correctly rejected every one. Pairing a coordinate with its
+        observed outcomes is what makes "click the thing that advances levels,
+        not the thing that loops" expressible.
+
+        ``click_targets`` is imported lazily and on purpose: the bench harness
+        swaps the explorer module at runtime, and a module-level import here
+        would bind whichever copy happened to load first.
+        """
+        from tgaer.agents.arc_agi3_explorer import click_targets
+
+        observed = self.outcomes()
+        found: list[dict[str, Any]] = []
+        for row, col in click_targets(grid, k=k):
+            seen = observed.get(("click", row, col), Counter())
+            found.append(
+                {
+                    "row": int(row),
+                    "col": int(col),
+                    "value": int(grid[row, col]),
+                    "size": int((grid == grid[row, col]).sum()),
+                    "clicked": sum(seen.values()),
+                    "advanced": seen["advanced"],
+                    "novel": seen["novel"],
+                    "cyclic": seen["cyclic"],
+                    "dead": seen["dead"],
+                }
+            )
+        return found
+
     def summary(self) -> str:
         """A compact, honest description of the game — no invented semantics.
 
@@ -234,8 +273,8 @@ class GameEvidence:
             f"  action {a}: {r['tried']} / {r['changed']} / {r['advanced']}"
             for a, r in sorted(effects.items())
         )
-        if self.transitions:
-            grid = self.transitions[0].grid
+        grid = self.latest_grid()
+        if grid is not None:
             values, counts = np.unique(grid, return_counts=True)
             lines += [
                 "",
@@ -243,6 +282,26 @@ class GameEvidence:
                 "cell values present (value: count): "
                 + ", ".join(f"{int(v)}: {int(c)}" for v, c in zip(values, counts)),
             ]
+            if found := self.objects(grid):
+                lines += [
+                    "",
+                    "salient objects on the current board, largest first, with what",
+                    "clicking each one did during the warmup:",
+                    "  (row, col) value size | clicked advanced novel cyclic dead",
+                ]
+                lines.extend(
+                    f"  ({o['row']:2d},{o['col']:2d}) v={o['value']:<3} sz={o['size']:<5} | "
+                    f"{o['clicked']:>7} {o['advanced']:>8} {o['novel']:>5} "
+                    f"{o['cyclic']:>6} {o['dead']:>4}"
+                    for o in found
+                )
+                lines += [
+                    "",
+                    "'advanced' cleared a level. 'novel' reached a board state never seen",
+                    "before. 'cyclic' returned to one already visited — real change that",
+                    "goes nowhere. 'dead' changed nothing. Prefer advanced, then novel;",
+                    "a cyclic or dead cell is a trap, not a button.",
+                ]
         return "\n".join(lines)
 
 
@@ -262,6 +321,9 @@ Write exactly one fenced Python block defining:
 
 Rules:
 - Use only numpy and the Python standard library. No imports of anything else.
+- The object coordinates below describe the board at warmup time. Objects move,
+  so locate them in `grid` at each call rather than hardcoding a coordinate —
+  a policy that returns the same cell every time is rejected as a constant.
 - Never raise. If unsure, return None.
 - Deterministic: no randomness, no clocks, no I/O.
 - Prefer returning None over guessing when the board looks unfamiliar.
