@@ -198,13 +198,18 @@ def main() -> None:
     submission = json.loads(submission_path.read_text())
 
     by_game = {c["game"]: c for c in submission.get("scorecards", [])}
+    # Every game played is scored, not only the eight carrying a pass/fail spec.
+    # RHAE is a mean over environments, so omitting played games silently
+    # inflates it; and the local set is the full 25-game / 183-level public set,
+    # which is what published RHAE figures are quoted against.
+    played = sorted(set(specs) | set(by_game))
     graded = [
         grade_game(
             by_game.get(game, {"game": game, "error": "no scorecard submitted"}),
-            spec,
+            specs.get(game, {"game": game, "check": {}}),
             load_baselines(root, game),
         )
-        for game, spec in specs.items()
+        for game in played
     ]
 
     passed = sum(1 for g in graded if g["passed"])

@@ -44,7 +44,13 @@ REPO = Path(__file__).resolve().parents[2]
 BENCH = REPO / "sia-oss/bench"
 EVALUATE = REPO / "sia-oss/tasks/arc-agi3/data/public/evaluate.py"
 DATASET = REPO / "sia-oss/tasks/arc-agi3/data/public"
-SUITE = ["lp85", "ls20", "sp80", "sc25", "tu93", "bp35", "sk48", "cn04"]
+# The full public set: 25 games, 183 levels — the same set published RHAE
+# figures are quoted against. Tuning on the old 8-game subset overweighted
+# whatever those eight happened to reward.
+SUITE = sorted(
+    p.name for p in (REPO / "environment_files").iterdir()
+    if p.is_dir() and len(p.name) == 4
+)
 STATE = REPO / "sia-oss/supervisor_state.json"
 # RHAE (%) of the unmodified explorer on this suite, used only as the fallback
 # before anything has been promoted — see supervisor.py:INITIAL_BASELINE.

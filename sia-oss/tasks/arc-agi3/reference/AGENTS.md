@@ -8,13 +8,24 @@ either in this OSS-sia harness or in an earlier tool (SIA Foundry) against
 the identical suite. Re-proposing a closed item wastes a generation; the
 supervisor will flag it if it happens again.
 
-Baseline: **RHAE = 0.4263%** across the 8-case suite — the official
-ARC-AGI-3 metric (level-index-weighted, capped by levels completed; see
-`task.md` Objective). `lp85` and `ls20` pass their gate; the other six do
-not. A genuine improvement raises RHAE without dropping `lp85` or `ls20`'s
-pass status. The old unweighted `total_level_score` (131.08) is no longer
-the metric — it was almost entirely lp85's capped level 1, which the real
-metric values at 2.8%. **14 generations in, only 1 has ever attempted a
+Baseline: **RHAE = 0.1364%** across the **full 25-game / 183-level public
+set** — the official ARC-AGI-3 metric (level-index-weighted, capped by levels
+completed; see `task.md` Objective).
+
+**This replaced an 8-game subset that read 0.4263%.** The subset had been
+cherry-picked to games where the agent does something, so it overstated the
+score 3x and tuned against whatever those eight rewarded. On the full set we
+clear levels in only **5 of 25 games**; twenty score exactly zero.
+
+**The 25-game number predicts Kaggle almost 1:1**, which the subset never did.
+Kaggle submission v64's own description reads "local 0.1226 -> 0.1364" and it
+scored **0.14**; the preceding 0.1226 scored **0.13**. So treat local RHAE% as a
+forecast of the public score, and note our best-ever public score is **0.17**
+(rank 2099/3049) — a change has to clear roughly 0.17 locally to be worth a
+submission slot.
+
+Ignore the `N/25 games pass` line: games without a `sia_questions.jsonl` check
+spec pass trivially, so 19/25 "passing" mostly means "not checked". **14 generations in, only 1 has ever attempted a
 real change to `explorer.py` (it regressed) — most default to
 reading/scaffolding without ever committing to an edit. Don't do that: pick
 the directive below and implement it.**
