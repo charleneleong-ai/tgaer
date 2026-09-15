@@ -127,8 +127,26 @@ is worth anything: a simulator that is 95% right may produce plans that are 100%
 wrong, in which case the usable threshold is near 1.0 and that is a finding.
 
 State extraction is a prerequisite and is not free — M0 sidestepped it with
-`deepcopy`. M1 must build object-level state from the frame (components and
-positions) and confirm it is Markov enough to simulate.
+`deepcopy`. **That prerequisite is now tested and passes**
+(`sia-oss/bench/m1_markov.py`): keying state as each component's
+`(colour, top-left, pixel count)` gave **119 distinct `(state, action)` pairs
+over 1500 transitions with zero ambiguity**, identical to keying on the whole
+frame. The hidden `StepCounter` does not leak into the dynamics, so a simulator
+over object-level state is well-posed rather than merely plausible.
+
+Two honest limits on that result: it covers lp85 L1 only (2 buttons, a small
+reachable space), and it resets on GAME_OVER, so it never probes the
+budget-exhaustion boundary — exactly where the hidden counter *would* bite.
+Re-run it per level before relying on it.
+
+**What is left in M1 is the semantic step, and it is the LLM's actual job.** The
+heuristic M0 proved decisive was "distance from each block to its nearest goal",
+computed from privileged sprite tags (`bghvgbtwcb`, `goal`). From pixels alone
+lp85 L2 is ~40 same-sized 2x2 tiles in four colours, and deciding which are
+cargo and which are targets is an inference about the game, not a measurement
+of it. That is the first point in this whole line where no amount of careful
+engineering substitutes for a model — which is a much better place to spend an
+LLM than the reactive policy of the closed line.
 
 **M2 — plan through it live, then gate.** Only here do real actions get spent.
 Promotion needs the usual discipline: `gate.py` (RHAE up, no game regresses)
