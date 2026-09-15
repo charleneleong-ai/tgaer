@@ -34,6 +34,7 @@ from typing import Any
 import numpy as np
 import typer
 from dotenv import load_dotenv
+from loguru import logger
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -159,7 +160,7 @@ def log_to_wandb(
     run_dir: Path,
 ) -> None:
     if not os.getenv("WANDB_API_KEY"):
-        print("WANDB_API_KEY unset; skipping W&B logging")
+        logger.warning("WANDB_API_KEY unset; skipping W&B logging")
         return
     # Local: wandb is a hard dependency but a costly import, and every path
     # through this module that skips logging should not pay for it.

@@ -24,6 +24,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 # Below this, a per-game env-score difference is not worth calling a change.
 EPSILON = 1e-9
 
@@ -67,19 +69,19 @@ def report(candidate_dir: Path, baseline_dir: Path) -> bool:
     baseline = json.loads((baseline_dir / "results.json").read_text())
     passed, regressions, improvements = verdict(candidate, baseline)
 
-    print(
-        f"\n=== gate: {candidate_dir.name} vs {baseline_dir.name} ===\n"
-        f"RHAE {baseline['rhae']:.4f}% -> {candidate['rhae']:.4f}% "
-        f"({candidate['rhae'] - baseline['rhae']:+.4f}pp)"
+    logger.info(
+        "gate: {} vs {} | RHAE {:.4f}% -> {:.4f}% ({:+.4f}pp)",
+        candidate_dir.name, baseline_dir.name,
+        baseline["rhae"], candidate["rhae"], candidate["rhae"] - baseline["rhae"],
     )
     for line in improvements:
-        print(f"  better   {line}")
+        logger.success("better   {}", line)
     for line in regressions:
-        print(f"  WORSE    {line}")
+        logger.warning("WORSE    {}", line)
     if passed:
-        print("PASS — RHAE up and no game regressed.")
+        logger.success("PASS — RHAE up and no game regressed.")
     elif regressions:
-        print(f"FAIL — {len(regressions)} game(s) regressed. Do not promote.")
+        logger.error("FAIL — {} game(s) regressed. Do not promote.", len(regressions))
     else:
-        print("FAIL — no game regressed, but RHAE did not improve.")
+        logger.error("FAIL — no game regressed, but RHAE did not improve.")
     return passed

@@ -17,6 +17,7 @@ dependencies = [
   "PyYAML>=6.0.2", # https://github.com/yaml/pyyaml/releases
   "typer>=0.12.3", # https://github.com/tiangolo/typer/releases
   "rich", # https://github.com/Textualize/rich/releases
+  "loguru>=0.7.3", # https://github.com/Delgan/loguru/releases
   "dspy-ai", # https://github.com/stanfordnlp/dspy/releases/
   "mlflow",
   "langsmith",

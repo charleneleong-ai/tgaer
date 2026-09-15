@@ -30,6 +30,7 @@ from typing import Any
 
 import numpy as np
 import typer
+from loguru import logger
 
 REPO = Path(__file__).resolve().parents[2]
 BENCH = REPO / "sia-oss/bench"
@@ -253,9 +254,9 @@ def main(
             import tgaer.agents.arc_agi3_explorer as explorer_module
 
             explorer_module.ExplorerArcAgi3Agent.act = original
-        print(
-            f"[{game}] policy actions={report.get('policy_actions', '0')} :: {report['reason']}",
-            flush=True,
+        logger.info(
+            "[{}] policy actions={} :: {}",
+            game, report.get("policy_actions", "0"), report["reason"],
         )
 
     (run_dir / "results" / "submission.json").write_text(

@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import typer
+from loguru import logger
 
 REPO = Path(__file__).resolve().parents[2]
 BENCH = REPO / "sia-oss/bench"
@@ -102,20 +103,20 @@ def main(
             set_constant(EXPLORER, constant, value)
             rhae, levels = measure(f"sweep-{constant.lower()}-{value}")
             rows.append((value, rhae, levels))
-            print(f"  {constant}={value:<8} RHAE={rhae:.4f}%  levels={levels}", flush=True)
+            logger.info("{}={} RHAE={:.4f}%  levels={}", constant, value, rhae, levels)
     finally:
         EXPLORER.write_text(original)  # never leave a swept file behind
 
     unchanged = [r for r in rows if abs(r[1] - baseline) <= 1e-9]
     verdict, explanation = stability_verdict(rows, baseline)
     gained = sum(1 for r in rows if r[1] > baseline + 1e-9)
-    print(f"\n=== {constant}: {gained}/{len(rows)} values beat {baseline:.4f}% ===")
+    logger.info("{}: {}/{} values beat {:.4f}%", constant, gained, len(rows), baseline)
     if unchanged:
-        print(
-            f"{len(unchanged)} value(s) scored *exactly* baseline — there the "
-            "change is inert, so it is not really being tested"
+        logger.warning(
+            "{} value(s) scored *exactly* baseline — there the change is inert, "
+            "so it is not really being tested", len(unchanged)
         )
-    print(f"VERDICT: {verdict} — {explanation}")
+    logger.info("VERDICT: {} — {}", verdict, explanation)
 
 
 if __name__ == "__main__":

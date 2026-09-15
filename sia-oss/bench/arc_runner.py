@@ -22,7 +22,6 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import importlib.util
 import json
 import os
@@ -34,9 +33,13 @@ from statistics import median
 from typing import Any
 
 import numpy as np
+import typer
+from loguru import logger
+
+app = typer.Typer(add_completion=False)
 
 
-def _repo_root(working_dir: Path) -> Path:
+def repo_root_for(working_dir: Path) -> Path:
     """The tgaer checkout: env override, else walk up from working_dir looking
     for the ``src/tgaer`` + ``environment_files`` layout, else env default."""
     env = os.environ.get("ARC_TGAER_REPO")
@@ -198,7 +201,7 @@ def run_suite(
                 )
             if row.get("error"):
                 scorecards.append({"game": game, "error": row["error"]})
-                print(f"[{game}] ERROR {row['error']} in {time.monotonic() - t0:.1f}s", flush=True)
+                logger.error("[{}] {} in {:.1f}s", game, row["error"], time.monotonic() - t0)
                 continue
             rows: list[dict[str, Any]] = []
             card = arc.get_scorecard()
@@ -211,55 +214,55 @@ def run_suite(
                 {"game": game, "levels": _level_summary(rows), "row": row}
             )
             tot = sum(lvl["level_score"] for lvl in scorecards[-1]["levels"])
-            print(
-                f"[{game}] total={tot:.2f} state={row['state']} "
-                f"actions={row['actions']} in {time.monotonic() - t0:.1f}s",
-                flush=True,
+            logger.info(
+                "[{}] total={:.2f} state={} actions={} in {:.1f}s",
+                game, tot, row["state"], row["actions"], time.monotonic() - t0,
             )
         except Exception as exc:  # noqa: BLE001 — one bad game must not sink the rest
             scorecards.append({"game": game, "error": f"{type(exc).__name__}: {exc}"})
-            print(f"[{game}] EXC {type(exc).__name__}: {exc}", flush=True)
+            logger.exception("[{}] {}: {}", game, type(exc).__name__, exc)
     if frames_out is not None and frame_rows:
         save_frames(frame_rows, frames_out)
-        print(f"[frames] wrote {len(frame_rows)} grids to {frames_out}", flush=True)
+        logger.info("[frames] wrote {} grids to {}", len(frame_rows), frames_out)
     return scorecards
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--working_dir", required=True, type=Path)
-    ap.add_argument("--explorer_path", required=True, type=Path)
-    ap.add_argument("--dataset_dir", required=True, type=Path)
-    ap.add_argument("--games", required=True)  # JSON list
-    ap.add_argument("--max_steps", type=int, default=600)
-    ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--repo_root", type=Path, default=None)
-    ap.add_argument("--frames_out", type=Path, default=None)
-    ap.add_argument("--focus", default=None)
-    ap.add_argument("--focus_every", type=int, default=4)
-    args = ap.parse_args()
-
-    repo = args.repo_root if args.repo_root else _repo_root(args.working_dir)
+@app.command()
+def main(
+    working_dir: Path = typer.Option(..., "--working_dir"),
+    explorer_path: Path = typer.Option(..., "--explorer_path"),
+    dataset_dir: Path = typer.Option(..., "--dataset_dir"),  # noqa: ARG001 — kept for caller compatibility
+    games: str = typer.Option(..., "--games", help="JSON list of game ids."),
+    out: Path = typer.Option(..., "--out"),
+    max_steps: int = typer.Option(600, "--max_steps"),
+    seed: int = typer.Option(0, "--seed"),
+    repo_root: Path | None = typer.Option(None, "--repo_root"),
+    frames_out: Path | None = typer.Option(None, "--frames_out"),
+    focus: str | None = typer.Option(None, "--focus"),
+    focus_every: int = typer.Option(4, "--focus_every"),
+) -> None:
+    """Play a suite of games with one explorer and write their scorecards."""
+    repo = repo_root if repo_root else repo_root_for(working_dir)
     scorecards = run_suite(
-        args.explorer_path,
-        json.loads(args.games),
+        explorer_path,
+        json.loads(games),
         repo,
-        args.max_steps,
-        args.seed,
-        frames_out=args.frames_out,
-        focus=args.focus,
-        focus_every=args.focus_every,
+        max_steps,
+        seed,
+        frames_out=frames_out,
+        focus=focus,
+        focus_every=focus_every,
     )
     total = sum(lv["level_score"] for c in scorecards for lv in c.get("levels", []))
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
         json.dumps(
             {"total_level_score": round(total, 2), "scorecards": scorecards}, indent=2
         )
     )
+    # stdout, not the logger: `measure.py` scrapes this line.
     print(f"RUNNER_TOTAL={total:.2f}", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    app()
