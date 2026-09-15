@@ -58,25 +58,77 @@ transitions we already have.
 
 ## Milestones, in order, each falsifiable
 
-**M0 — hand-written simulator, no LLM. This is the kill switch.**
-Write `simulate`/`is_goal` for lp85 by hand from the recorded transitions, run
-BFS, and measure real actions to clear L3. If a *human-written*, known-correct
-simulator plus offline planning cannot beat 100 actions, the approach is dead
-and no model was needed to prove it. Cost: hours, zero GPU, zero LLM.
-**Do not proceed to M1 until M0 clears L3 in under ~40 actions.**
+**M0 — hand-written simulator, no LLM. This was the kill switch. RUN, and it
+passes on the thesis while moving the constraint.**
 
-M0 also settles the open feasibility question: lp85's sprite scale is **3**
-(`crxpafuiwp = 3`), so the 64x64 frame does not downsample to a clean logical
-grid — at 4x4 blocks only 55% are single-coloured. State extraction has to be
-object-level (components and positions, which `click_targets` already computes),
-not pixel-level. If object-level state turns out not to be Markov enough to
-simulate, that surfaces in M0 too.
+`copy.deepcopy(env._game)` is a perfect world model and forks in 4.7 ms, so M0
+did not need a hand-written simulator at all — it measures the *ceiling* of the
+approach directly. Results against the explorer:
 
-**M1 — the model writes the simulator.** Hold out a fraction of the recorded
-transitions; score candidates on exact next-state prediction. Report accuracy,
-not a pass/fail. The open question M1 answers is whether partial accuracy is
-worth anything: a simulator that is 95% right may produce plans that are 100%
+| level | explorer | planned | offline expansions | outcome |
+| --- | --- | --- | --- | --- |
+| L1 | 9 | **5** | 9 | already at the cap either way |
+| L2 | 364 | **8** | 48, in 3s | score 1.09 -> **115** (capped) |
+| L3 | 100 | no plan | 80k, plateaued | greedy stuck in a local minimum |
+| L4 | 428 | not reached | — | — |
+
+On L2 alone: lp85's E goes 4.06% -> 10.40% and **RHAE 0.1886% -> 0.4422%**
+(+0.2536pp), more than doubling, from a search that spent **zero** real actions
+and three seconds of CPU.
+
+Three results, in order of how much they change the plan:
+
+1. **The thesis holds.** Planning through a world model beat blind search by
+   **45x** on lp85 L2. That is not a tuning delta; it is a different regime.
+2. **The world model is not the constraint — the heuristic is.** Uninformed BFS
+   over the *same perfect simulator* failed completely: 40k expansions and 26k
+   distinct states still only reached depth 6, because branching is ~6 with
+   almost no state merging. Adding a goal-distance heuristic took L2 from
+   unsolvable to 48 expansions. This is the finding that redirects M1.
+3. **Heuristic shape matters more than heuristic presence.** Counting misplaced
+   blocks (the win condition as written, `khartslnwa`) takes ~3 values on a
+   two-block level and left greedy search flailing at depth 19. Summing each
+   block's distance to its nearest goal — same zero set, real gradient — solved
+   L2 in 3 seconds. L1 also dropped from 21 expansions to 9.
+4. **Greedy is not enough for every level.** L3 drives h from 66 to 26 and then
+   plateaus across 80k expansions: a local minimum where blocks must temporarily
+   move *away* from their goals. Needs A\* with backtracking, or a better
+   heuristic, not more compute.
+
+**What M0 does not show.** It used the game's internals — `deepcopy` of the real
+game as the simulator, and the real sprite tags (`bghvgbtwcb`, `goal`) for the
+heuristic. Neither is available in the kernel. M0 is an upper bound by
+construction; that was its purpose. What it licenses is M1, not a submission.
+
+It also settles the feasibility question it was meant to: lp85's sprite scale is
+**3** (`crxpafuiwp = 3`), so the 64x64 frame does not downsample to a clean
+logical grid — at 4x4 blocks only 55% are single-coloured. State extraction has
+to be object-level, not pixel-level. Usefully, the *action* space turned out
+trivial to recover from observation alone: probing a stride-3 lattice finds 2-6
+distinct button effects per level, and they are static within a level.
+
+**M1 — the model writes the simulator *and the heuristic*.** Revised by M0: ask
+for three functions, not one.
+
+```python
+def simulate(state, action) -> state   # validated: exact next-state prediction
+def is_goal(state) -> bool             # validated: fires exactly on recorded wins
+def distance(state) -> float           # validated: does greedy on it reach a goal?
+```
+
+`distance` is now the interesting one — M0 showed it is the constraint, and that
+the obvious formulation (count the unsatisfied conditions) is the bad one while a
+graded version of the *same* predicate is transformative. That is exactly the
+kind of restatement a model is good at and a fitted constant is not.
+
+Hold out a fraction of the recorded transitions and score `simulate` on exact
+next-state prediction. The open question M1 answers is whether partial accuracy
+is worth anything: a simulator that is 95% right may produce plans that are 100%
 wrong, in which case the usable threshold is near 1.0 and that is a finding.
+
+State extraction is a prerequisite and is not free — M0 sidestepped it with
+`deepcopy`. M1 must build object-level state from the frame (components and
+positions) and confirm it is Markov enough to simulate.
 
 **M2 — plan through it live, then gate.** Only here do real actions get spent.
 Promotion needs the usual discipline: `gate.py` (RHAE up, no game regresses)
