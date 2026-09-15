@@ -20,6 +20,10 @@ GRID = np.array([[0, 1], [2, 3]])
 OTHER = np.array([[9, 9], [9, 9]])
 
 
+def _grid(fill: int) -> np.ndarray:
+    return np.full((2, 2), fill, dtype=np.int16)
+
+
 def _t(
     action: int,
     *,
@@ -27,12 +31,15 @@ def _t(
     level: int = 0,
     after: int | None = None,
     click: tuple[int, int] | None = None,
+    grid: np.ndarray | None = None,
+    next_grid: np.ndarray | None = None,
 ) -> cg.Transition:
+    base = GRID if grid is None else grid
     return cg.Transition(
-        grid=GRID,
+        grid=base,
         action=action,
         click=click,
-        next_grid=OTHER if changed else GRID,
+        next_grid=(OTHER if changed else base) if next_grid is None else next_grid,
         level=level,
         level_after=level if after is None else after,
     )
@@ -98,94 +105,158 @@ class TestAsClick:
         assert cg.as_click(choice) == expected
 
 
-class TestDeadEvidence:
-    def test_a_cell_clicked_repeatedly_to_no_effect_is_dead(self) -> None:
-        """The lp85 failure, made checkable: 542 clicks on one unchanging cell."""
-        ev = _evidence([_t(6, changed=False, click=(18, 20)) for _ in range(5)])
-        assert ev.dead_clicks() == {(18, 20)}
+class TestOutcomes:
+    """`cyclic` is the outcome change-detection cannot see, and the reason this
+    class exists: lp85 spent 542 actions changing the board and going nowhere."""
 
-    def test_one_no_op_is_not_enough_to_call_a_cell_dead(self) -> None:
-        assert _evidence([_t(6, changed=False, click=(1, 1))]).dead_clicks() == set()
-
-    def test_a_cell_that_ever_worked_is_never_dead(self) -> None:
+    def test_an_option_that_only_revisits_old_states_is_cyclic_not_novel(self) -> None:
+        a, b = _grid(1), _grid(2)
         ev = _evidence(
-            [_t(6, changed=False, click=(1, 1)), _t(6, changed=False, click=(1, 1)),
-             _t(6, changed=True, click=(1, 1))]
+            [
+                _t(6, click=(1, 1), grid=a, next_grid=b),  # first sighting of b
+                _t(6, click=(1, 1), grid=b, next_grid=a),  # back to a — a loop
+                _t(6, click=(1, 1), grid=a, next_grid=b),
+            ]
         )
-        assert ev.dead_clicks() == set() and ev.live_clicks() == {(1, 1)}
+        row = ev.outcomes()[("click", 1, 1)]
+        assert row["novel"] == 1 and row["cyclic"] == 2
 
-    def test_dead_and_live_actions_split_on_whether_anything_changed(self) -> None:
-        ev = _evidence([_t(1, changed=False), _t(1, changed=False), _t(2, changed=True)])
-        assert ev.dead_actions() == {1} and ev.live_actions() == {2}
+    def test_a_cycling_option_counts_as_unproductive_despite_always_changing(
+        self,
+    ) -> None:
+        a, b = _grid(1), _grid(2)
+        ev = _evidence(
+            [_t(6, click=(1, 1), grid=a, next_grid=b)]
+            + [_t(6, click=(1, 1), grid=b, next_grid=a) for _ in range(3)]
+        )
+        # it changed the board every single time, and still goes nowhere
+        assert all(t.changed for t in ev.transitions)
+        assert ("click", 1, 1) in ev.unproductive_options()
+
+    def test_an_option_reaching_new_states_is_progressive(self) -> None:
+        ev = _evidence(
+            [_t(6, click=(2, 2), grid=_grid(i), next_grid=_grid(i + 1)) for i in range(4)]
+        )
+        assert ("click", 2, 2) in ev.progressive_options()
+
+    def test_clearing_a_level_is_progressive_whatever_the_board_did(self) -> None:
+        ev = _evidence([_t(6, click=(3, 3), level=0, after=1)])
+        assert ("click", 3, 3) in ev.progressive_options()
+
+    def test_an_option_that_never_changes_anything_is_unproductive(self) -> None:
+        ev = _evidence([_t(6, changed=False, click=(18, 20)) for _ in range(4)])
+        assert ("click", 18, 20) in ev.unproductive_options()
+
+    def test_one_sighting_is_too_few_to_condemn_an_option(self) -> None:
+        assert _evidence([_t(6, changed=False, click=(1, 1))]).unproductive_options() == set()
+
+
+class TestChromeMask:
+    def test_a_cell_animating_every_step_is_masked_out_of_state_identity(self) -> None:
+        """Without this lp85 reads 95% novel while looping on a single cell."""
+        rows = []
+        for i in range(30):
+            before, after = _grid(0).copy(), _grid(0).copy()
+            before[0, 0], after[0, 0] = i % 3, (i + 1) % 3  # a ticking counter
+            rows.append(_t(6, click=(1, 1), grid=before, next_grid=after))
+        ev = _evidence(rows)
+        mask = ev.chrome_mask()
+        assert mask is not None and bool(mask[0, 0])
+        # with the animation masked, those two boards are the same state
+        a, b = rows[0].grid, rows[0].next_grid
+        assert ev.settled_key(a, mask) == ev.settled_key(b, mask)
+
+    def test_too_little_evidence_masks_nothing(self) -> None:
+        assert _evidence([_t(6) for _ in range(3)]).chrome_mask() is None
+
+    def test_a_quiet_board_masks_nothing(self) -> None:
+        rows = [_t(6, changed=False, click=(1, 1)) for _ in range(30)]
+        assert _evidence(rows).chrome_mask() is None
 
 
 class TestProductivity:
-    """Falsification, not imitation — a policy is judged on avoiding what the
-    warmup proved useless, never on reproducing the explorer's moves."""
+    """Judged on progress, never on reproducing the explorer."""
 
     def _held(self, n: int = 8) -> list[cg.Transition]:
         return [_t(1, click=(9, 9)) for _ in range(n)]
 
-    def test_a_policy_clicking_a_known_dead_cell_scores_zero(self) -> None:
-        ev = _evidence(
-            [_t(6, changed=False, click=(18, 20)) for _ in range(4)]
-            + [_t(6, changed=True, click=(5, 5))]
+    def _progressive(self) -> cg.GameEvidence:
+        return _evidence(
+            [_t(6, click=(5, 5), grid=_grid(i), next_grid=_grid(i + 1)) for i in range(6)]
         )
-        policy = cg.compile_policy(
-            "def policy(g, a, m):\n    return ('click', 18, 20)\n"
+
+    def _cycling(self) -> cg.GameEvidence:
+        a, b = _grid(1), _grid(2)
+        return _evidence(
+            [_t(6, click=(18, 20), grid=a, next_grid=b)]
+            + [_t(6, click=(18, 20), grid=b, next_grid=a) for _ in range(5)]
         )
-        result = cg.productivity(policy, self._held(), ev, [6])
+
+    def test_a_policy_choosing_a_progressive_option_scores_one(self) -> None:
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 5, 5)\n")
+        assert cg.productivity(policy, self._held(), self._progressive(), [6]).score == 1.0
+
+    def test_a_policy_choosing_a_cycling_option_scores_zero(self) -> None:
+        """The headline fix: this option changes the board every time."""
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 18, 20)\n")
+        result = cg.productivity(policy, self._held(), self._cycling(), [6])
         assert result.judged == 8 and result.score == 0.0
 
-    def test_a_policy_clicking_a_cell_known_to_work_scores_one(self) -> None:
-        ev = _evidence([_t(6, changed=True, click=(5, 5))])
-        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 5, 5)\n")
-        assert cg.productivity(policy, self._held(), ev, [6]).score == 1.0
-
     def test_choices_with_no_evidence_are_skipped_not_guessed(self) -> None:
-        ev = _evidence([_t(6, changed=True, click=(5, 5))])
         policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 40, 40)\n")
-        result = cg.productivity(policy, self._held(), ev, [6])
+        result = cg.productivity(policy, self._held(), self._progressive(), [6])
         assert result.committed == 8 and result.judged == 0
 
     def test_proposing_an_unavailable_action_is_always_wrong(self) -> None:
-        ev = _evidence([_t(1, changed=True)])
         policy = cg.compile_policy("def policy(g, a, m):\n    return 99\n")
-        result = cg.productivity(policy, self._held(), ev, [1])
+        result = cg.productivity(policy, self._held(), self._progressive(), [6])
+        assert result.judged == 8 and result.score == 0.0
+
+    def test_a_malformed_answer_counts_against_the_policy(self) -> None:
+        policy = cg.compile_policy("def policy(g, a, m):\n    return 'left'\n")
+        result = cg.productivity(policy, self._held(), self._progressive(), [6])
         assert result.judged == 8 and result.score == 0.0
 
     def test_deferring_is_recorded_as_no_commitment(self) -> None:
-        ev = _evidence([_t(1, changed=True)])
         policy = cg.compile_policy("def policy(g, a, m):\n    return None\n")
-        result = cg.productivity(policy, self._held(), ev, [1])
+        result = cg.productivity(policy, self._held(), self._progressive(), [6])
         assert result.committed == 0 and result.commit_rate == 0.0
 
     def test_a_throwing_policy_yields_nothing_rather_than_propagating(self) -> None:
-        ev = _evidence([_t(1, changed=True)])
         policy = cg.compile_policy("def policy(g, a, m):\n    raise ValueError('x')\n")
-        result = cg.productivity(policy, self._held(), ev, [1])
+        result = cg.productivity(policy, self._held(), self._progressive(), [6])
         assert result.judged == 0 and result.score == 0.0
 
     def test_the_policy_is_not_shown_the_answer(self) -> None:
-        """It receives the real action list, not the action the explorer took —
-        the earlier version passed `[t.action]`, which leaked the answer."""
+        """It receives the real action list, not the explorer's chosen action."""
         seen: list[list[int]] = []
 
         def policy(grid: Any, available: list[int], memory: dict[str, Any]) -> Any:
             seen.append(list(available))
             return None
 
-        cg.productivity(policy, self._held(2), _evidence([_t(1)]), [1, 2, 6])
+        cg.productivity(policy, self._held(2), self._progressive(), [1, 2, 6])
         assert seen == [[1, 2, 6], [1, 2, 6]]
 
 
 class TestValidate:
     """Three bars, each catching a different way a policy can be useless."""
 
-    LIVE = [_t(6, changed=True, click=(5, 5)) for _ in range(20)]
+    LIVE = [
+        _t(6, click=(5, 5), grid=_grid(i), next_grid=_grid(i + 1)) for i in range(20)
+    ]
 
-    def test_a_productive_policy_is_usable(self) -> None:
+    def test_a_constant_policy_is_rejected_however_good_its_one_choice(self) -> None:
+        """The failure both earlier bars missed: one known-good option replayed
+        on every state scores a perfect 1.00 and is a loop by construction."""
         policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 5, 5)\n")
+        usable, reason = cg.validate(policy, _evidence(self.LIVE))
+        assert not usable and "ignores the board" in reason
+
+    def test_a_board_sensitive_policy_is_usable(self) -> None:
+        policy = cg.compile_policy(
+            "def policy(g, a, m):\n    return ('click', 5, int(g[0, 0]) % 2 + 5)\n"
+        )
         usable, reason = cg.validate(policy, _evidence(self.LIVE))
         assert usable and "productivity 1.00" in reason
 
@@ -195,11 +266,13 @@ class TestValidate:
         assert not usable and "defers too often" in reason
 
     def test_a_policy_we_have_no_evidence_about_is_rejected(self) -> None:
-        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 63, 63)\n")
+        policy = cg.compile_policy(
+            "def policy(g, a, m):\n    return ('click', 63, int(g[0, 0]) % 2 + 60)\n"
+        )
         usable, reason = cg.validate(policy, _evidence(self.LIVE))
         assert not usable and "too little evidence" in reason
 
-    def test_a_policy_picking_dead_cells_is_rejected(self) -> None:
+    def test_a_policy_picking_cycling_cells_is_rejected(self) -> None:
         evidence = _evidence(
             self.LIVE + [_t(6, changed=False, click=(18, 20)) for _ in range(20)]
         )
@@ -248,11 +321,19 @@ class TestRequestPolicy:
         assert policy is None and "did not compile" in reason
 
     def test_a_valid_policy_comes_back_usable(self) -> None:
-        reply = "```python\ndef policy(g, a, m):\n    return ('click', 5, 5)\n```"
-        evidence = _evidence([_t(6, changed=True, click=(5, 5)) for _ in range(20)])
+        reply = (
+            "```python\ndef policy(g, a, m):\n"
+            "    return ('click', 5, int(g[0, 0]) % 2 + 5)\n```"
+        )
+        evidence = _evidence(
+            [
+                _t(6, click=(5, 5 + i % 2), grid=_grid(i), next_grid=_grid(i + 1))
+                for i in range(20)
+            ]
+        )
         policy, reason = cg.request_policy(self._Backend(reply), evidence)
         assert policy is not None, reason
-        assert cg.as_click(policy(GRID, [6], {})) == (5, 5)
+        assert cg.as_click(policy(_grid(0), [6], {})) == (5, 5)
 
 
 class TestGameEvidence:

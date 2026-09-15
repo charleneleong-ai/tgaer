@@ -14,6 +14,12 @@ fail is discarded at no cost in score. Note the direction: this falsifies, it
 does not imitate. A policy is meant to *beat* the explorer, so being scored on
 reproducing the explorer's moves would reward the wrong thing.
 
+The bar is **progress, not change**. An option counts only where the warmup saw
+it clear a level or reach a board state never visited before — with state
+identity taken after masking self-animating chrome, without which lp85 reads as
+95% novel while looping on one cell. Judging mere change scored every generated
+policy a perfect 1.00, including ones that destroyed levels.
+
 Two invariants, both load-bearing:
 
 * **Never worse than the explorer.** The explorer drives the warmup and remains
@@ -60,6 +66,24 @@ MIN_JUDGED = 5
 # How many times an option must be seen doing nothing before it counts as dead.
 # One no-op can be a transient; a cell clicked repeatedly to no effect is not.
 DEAD_AFTER = 2
+# A cell changing on more than this share of warmup steps is board chrome — an
+# animated border or counter that moves on its own. It has to be masked out
+# before novelty means anything: lp85's level 2 shows 95% "novel" frames while
+# the agent re-clicks one cell, purely because a ring recolours every step.
+# Masking is safe here in a way it was not inside the search: this runs offline
+# against recorded history, so it cannot perturb a rollout.
+CHROME_FRACTION = 0.5
+# Warmup steps needed before the chrome mask is trusted. Below it, too few
+# samples to tell an animation from a consequence, so nothing is masked.
+CHROME_WARMUP = 20
+# If a mask would cover more than this share of the board, the board is not
+# animated — the game simply redraws a lot — and masking it would collapse every
+# state into one, making all progress invisible. Better to mask nothing.
+MAX_CHROME_SHARE = 0.25
+# Share of an option's observed outcomes that must be a level-up or a genuinely
+# new state for it to count as progress. An option that reaches somewhere new
+# once and then loops for the rest of the warmup is not a way forward.
+PROGRESS_RATE = 0.5
 # Warmup actions spent gathering evidence before the model is asked. Long enough
 # to see each action's effect, short enough to leave the budget for playing.
 WARMUP_ACTIONS = 60
@@ -103,37 +127,93 @@ class GameEvidence:
             row["advanced"] += int(t.advanced)
         return out
 
-    def dead_clicks(self) -> set[tuple[int, int]]:
-        """Cells clicked ``DEAD_AFTER``+ times that never once changed the board.
+    def option(self, transition: Transition) -> tuple[Any, ...]:
+        """The choice a policy would have to make to reproduce this transition."""
+        if transition.click is not None:
+            return ("click", *transition.click)
+        return ("act", transition.action)
 
-        This is the lp85 failure made checkable: that run put 542 of 591 actions
-        into one cell whose value never moved. A policy that proposes such a cell
-        has learned nothing from the warmup and must not be trusted with the
-        remaining budget.
-        """
-        tried: Counter[tuple[int, int]] = Counter()
-        worked: Counter[tuple[int, int]] = Counter()
+    def chrome_mask(self) -> np.ndarray | None:
+        """Cells that animate on their own, or None while evidence is too thin."""
+        if len(self.transitions) < CHROME_WARMUP:
+            return None
+        shape = self.transitions[0].grid.shape
+        counts = np.zeros(shape, dtype=np.int32)
         for t in self.transitions:
-            if t.click is None:
-                continue
-            tried[t.click] += 1
-            worked[t.click] += int(t.changed)
-        return {c for c, n in tried.items() if n >= DEAD_AFTER and worked[c] == 0}
+            if t.grid.shape == shape and t.next_grid.shape == shape:
+                counts += t.grid != t.next_grid
+        mask = counts > CHROME_FRACTION * len(self.transitions)
+        if not mask.any() or mask.mean() > MAX_CHROME_SHARE:
+            return None
+        return mask
 
-    def live_clicks(self) -> set[tuple[int, int]]:
-        """Cells whose click changed the board at least once."""
-        return {t.click for t in self.transitions if t.click is not None and t.changed}
+    @staticmethod
+    def settled_key(grid: np.ndarray, chrome: np.ndarray | None) -> bytes:
+        """A state identity that ignores self-animating cells."""
+        if chrome is None or chrome.shape != grid.shape:
+            return grid.tobytes()
+        return np.where(chrome, 0, grid).tobytes()
 
-    def dead_actions(self) -> set[int]:
-        """Action ids tried ``DEAD_AFTER``+ times that never changed the board."""
+    def outcomes(self) -> dict[tuple[Any, ...], Counter[str]]:
+        """Per option, how its observed effects break down.
+
+        Four outcomes, and the distinction between the middle two is the whole
+        point: ``advanced`` cleared a level, ``novel`` reached a board
+        configuration never seen before, ``cyclic`` returned to one already
+        visited, and ``dead`` changed nothing at all once chrome is masked.
+
+        `cyclic` is what change-detection cannot see. lp85 spent 542 actions on
+        a cell that changed the board every time and went nowhere; under a
+        chrome-masked state key that behaviour is visibly a loop, which is
+        exactly what "judge progress, not change" has to mean here.
+        """
+        chrome = self.chrome_mask()
+        seen: set[bytes] = set()
+        out: dict[tuple[Any, ...], Counter[str]] = {}
+        for t in self.transitions:
+            before = self.settled_key(t.grid, chrome)
+            after = self.settled_key(t.next_grid, chrome)
+            seen.add(before)
+            row = out.setdefault(self.option(t), Counter())
+            if t.advanced:
+                row["advanced"] += 1
+            elif after == before:
+                row["dead"] += 1
+            elif after in seen:
+                row["cyclic"] += 1
+            else:
+                row["novel"] += 1
+            seen.add(after)
+        return out
+
+    @staticmethod
+    def progress_rate(row: Counter[str]) -> float:
+        """Share of an option's outcomes that went somewhere."""
+        total = sum(row.values())
+        return (row["advanced"] + row["novel"]) / total if total else 0.0
+
+    def progressive_options(self) -> set[tuple[Any, ...]]:
+        """Options that mostly clear levels or reach genuinely new states."""
         return {
-            a
-            for a, r in self.action_effects().items()
-            if r["tried"] >= DEAD_AFTER and r["changed"] == 0
+            opt
+            for opt, row in self.outcomes().items()
+            if self.progress_rate(row) >= PROGRESS_RATE
         }
 
-    def live_actions(self) -> set[int]:
-        return {a for a, r in self.action_effects().items() if r["changed"] > 0}
+    def unproductive_options(self) -> set[tuple[Any, ...]]:
+        """Options seen enough times to judge that mostly loop or do nothing.
+
+        A rate rather than a flat "never went anywhere": an option that reaches
+        somewhere new once and then cycles for the rest of the warmup is not a
+        way forward, and under the old binary test it escaped judgement
+        entirely.
+        """
+        return {
+            opt
+            for opt, row in self.outcomes().items()
+            if sum(row.values()) >= DEAD_AFTER
+            and self.progress_rate(row) < PROGRESS_RATE
+        }
 
     def summary(self) -> str:
         """A compact, honest description of the game — no invented semantics.
@@ -263,21 +343,24 @@ def productivity(
 ) -> Productivity:
     """Falsify a policy against what the warmup already proved — never imitate it.
 
-    The earlier version of this asked whether the policy reproduced the
-    explorer's action, which is the wrong target twice over: the policy is
-    supposed to *beat* the explorer, and it was handed ``[t.action]`` as the
-    available actions, so it was being shown the answer. It also compared action
-    ids only, so on a click-only board every policy scored a perfect 1.00 without
-    choosing anything — the real decision there is *which cell*.
+    Two earlier versions of this were too weak, and each failed differently.
+    Asking whether the policy reproduced the explorer's action was wrong twice
+    over: the policy is supposed to *beat* the explorer, and it was handed
+    ``[t.action]``, so it was shown the answer. Replacing that with "avoids
+    options that change nothing" then scored a perfect 1.00 on every game that
+    produced a policy at all — including two that went on to destroy levels —
+    because on these boards almost every click changes *something*.
 
-    So this asks the answerable question instead: **of the choices we have
-    evidence about, how many avoid something the warmup proved useless?** Cells
-    and actions seen doing nothing repeatedly are dead; choices we have no
-    evidence for are skipped rather than guessed at, which is why `judged` is
-    reported separately and a minimum is required.
+    So the bar is progress, not change. An option earns credit only where the
+    warmup saw it clear a level or reach a board configuration never visited
+    before, with state identity taken after masking self-animating chrome.
+    Options that only ever looped or did nothing are counted against, which is
+    the lp85 behaviour — 542 actions of real, cycling change — made checkable.
+    Choices we have no evidence for are skipped rather than guessed at, so
+    `judged` is reported separately and a minimum is required.
     """
-    dead_cells, live_cells = evidence.dead_clicks(), evidence.live_clicks()
-    dead_ids, live_ids = evidence.dead_actions(), evidence.live_actions()
+    progressive = evidence.progressive_options()
+    unproductive = evidence.unproductive_options()
     judged = productive = committed = 0
 
     for t in held_out:
@@ -289,21 +372,44 @@ def productivity(
         if choice is None:
             continue
         committed += 1
+
         if (cell := as_click(choice)) is not None:
-            if cell in dead_cells:
-                judged += 1
-            elif cell in live_cells:
-                judged += 1
-                productive += 1
+            option: tuple[Any, ...] = ("click", *cell)
         elif isinstance(choice, int):
             if choice not in available:
                 judged += 1  # proposing an unavailable action is always wrong
-            elif choice in dead_ids:
-                judged += 1
-            elif choice in live_ids:
-                judged += 1
-                productive += 1
+                continue
+            option = ("act", choice)
+        else:
+            judged += 1  # a malformed answer is a wrong one
+            continue
+
+        if option in progressive:
+            judged += 1
+            productive += 1
+        elif option in unproductive:
+            judged += 1
     return Productivity(judged, productive, committed, len(held_out))
+
+
+def distinct_states(held_out: Sequence[Transition]) -> int:
+    """How many genuinely different boards the policy is shown."""
+    return len({t.grid.tobytes() for t in held_out})
+
+
+def distinct_choices(
+    policy: Callable[..., Any], held_out: Sequence[Transition], evidence: GameEvidence
+) -> int:
+    """How many different answers the policy gives across those boards."""
+    answers: set[Any] = set()
+    for t in held_out:
+        try:
+            choice = policy(t.grid, list(evidence.available_actions), {})
+        except Exception:  # noqa: BLE001 — a throwing policy has no answers
+            return 0
+        if choice is not None:
+            answers.add(as_click(choice) or (choice if isinstance(choice, int) else None))
+    return len(answers)
 
 
 def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, str]:
@@ -321,12 +427,22 @@ def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, 
     held_out = evidence.transitions[split:]
     result = productivity(policy, held_out, evidence, evidence.available_actions)
 
+
     detail = (
         f"productivity {result.score:.2f} on {result.judged} judged "
         f"of {result.committed} committed / {result.total} held-out"
     )
     if result.commit_rate < MIN_COMMIT_RATE:
         return False, f"defers too often ({result.commit_rate:.2f} commit rate) — {detail}"
+
+    # A constant policy is a loop by construction, and it is invisible to
+    # `productivity`: one known-good option, replayed on every held-out state,
+    # scores a perfect 1.00 while doing the same thing forever. Both earlier
+    # bars scored exactly 1.00 on every game that produced a policy at all, and
+    # this is why. If the board varies and the answer does not, it is not a
+    # policy — it is a constant wearing one.
+    if distinct_states(held_out) > 1 and distinct_choices(policy, held_out, evidence) < 2:
+        return False, "ignores the board — same choice on every held-out state"
     if result.judged < MIN_JUDGED:
         return False, f"too little evidence to judge it ({result.judged} < {MIN_JUDGED}) — {detail}"
     if result.score < MIN_PRODUCTIVITY:
