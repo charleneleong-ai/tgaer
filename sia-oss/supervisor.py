@@ -100,7 +100,9 @@ def gen_dir(run_id: int, gen: int) -> Path:
 def load_results(path: Path) -> dict[str, Any]:
     results_path = path / "results.json"
     if not results_path.is_file():
-        raise SystemExit(f"no results.json at {results_path} — did the generation finish?")
+        raise SystemExit(
+            f"no results.json at {results_path} — did the generation finish?"
+        )
     return json.loads(results_path.read_text())
 
 
@@ -121,8 +123,12 @@ def diff_summary(candidate: Path) -> tuple[bool, str]:
     if ref_lines == cand_lines:
         return False, "byte-identical to reference — no behavioral change attempted"
     diff = list(difflib.unified_diff(ref_lines, cand_lines, lineterm=""))
-    added = sum(1 for line in diff if line.startswith("+") and not line.startswith("+++"))
-    removed = sum(1 for line in diff if line.startswith("-") and not line.startswith("---"))
+    added = sum(
+        1 for line in diff if line.startswith("+") and not line.startswith("+++")
+    )
+    removed = sum(
+        1 for line in diff if line.startswith("-") and not line.startswith("---")
+    )
     return True, f"+{added}/-{removed} lines changed vs reference"
 
 
@@ -134,13 +140,17 @@ def parse_diff_counts(diff_note: str) -> tuple[int, int]:
 DRY_RUN = False
 
 
-def append_ledger_row(run_id: int, gen: int, hypothesis: str, result: str, verdict: str) -> None:
+def append_ledger_row(
+    run_id: int, gen: int, hypothesis: str, result: str, verdict: str
+) -> None:
     if DRY_RUN:
         return
     text = AGENTS_MD.read_text()
     marker = "## Do this"
     idx = text.index(marker)
-    new_row = f"| {hypothesis} (OSS sia run_{run_id}/gen_{gen}) | {result} — {verdict} |\n"
+    new_row = (
+        f"| {hypothesis} (OSS sia run_{run_id}/gen_{gen}) | {result} — {verdict} |\n"
+    )
     table_end = text.rindex("|\n", 0, idx) + 2  # just past the last table row
     updated = text[:table_end] + new_row + text[table_end:]
     AGENTS_MD.write_text(updated)
@@ -203,10 +213,16 @@ def log_to_wandb(
 
 @app.command()
 def main(
-    run_id: int = typer.Option(..., "--run-id", help="SIA run_id whose generation to grade."),
-    gen: int = typer.Option(..., "--gen", help="Generation number within run_id to grade."),
+    run_id: int = typer.Option(
+        ..., "--run-id", help="SIA run_id whose generation to grade."
+    ),
+    gen: int = typer.Option(
+        ..., "--gen", help="Generation number within run_id to grade."
+    ),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="Grade and log to W&B, but never touch AGENTS.md or the reference."
+        False,
+        "--dry-run",
+        help="Grade and log to W&B, but never touch AGENTS.md or the reference.",
     ),
 ) -> None:
     global DRY_RUN
@@ -270,8 +286,14 @@ def main(
         print("No behavioral change attempted. Ledger updated; no promotion.")
         verdict = "no-op"
     else:
-        verdict = "Regressed — reverted" if score < baseline else "Neutral — no score change despite a diff"
-        append_ledger_row(run_id, gen, hypothesis, f"RHAE={score:.4f}%, {diff_note}", verdict)
+        verdict = (
+            "Regressed — reverted"
+            if score < baseline
+            else "Neutral — no score change despite a diff"
+        )
+        append_ledger_row(
+            run_id, gen, hypothesis, f"RHAE={score:.4f}%, {diff_note}", verdict
+        )
         print(f"{verdict}. Ledger updated; reference NOT changed.")
         print(f"\nAGENTS.md timestamp: {datetime.now(timezone.utc).isoformat()}")
 

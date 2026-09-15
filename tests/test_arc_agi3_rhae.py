@@ -22,7 +22,8 @@ import pytest
 # The grader is a standalone script — it runs inside the generation sandbox
 # with no guarantee `tgaer` is importable — so load it by path.
 EVALUATE_PY = (
-    Path(__file__).resolve().parents[1] / "sia-oss/tasks/arc-agi3/data/public/evaluate.py"
+    Path(__file__).resolve().parents[1]
+    / "sia-oss/tasks/arc-agi3/data/public/evaluate.py"
 )
 _spec = importlib.util.spec_from_file_location("sia_evaluate", EVALUATE_PY)
 grader = importlib.util.module_from_spec(_spec)

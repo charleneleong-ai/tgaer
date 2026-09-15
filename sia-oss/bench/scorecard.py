@@ -53,7 +53,18 @@ def game_state_rows(
         head = [detail["game"], detail["passed"], detail["reason"]]
         levels = levels_by_game.get(detail["game"], [])
         if not levels:
-            rows.append([head[0], None, *head[1:], detail["level_score"], None, None, None, *env])
+            rows.append(
+                [
+                    head[0],
+                    None,
+                    *head[1:],
+                    detail["level_score"],
+                    None,
+                    None,
+                    None,
+                    *env,
+                ]
+            )
             continue
         rows.extend(
             [

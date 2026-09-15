@@ -63,7 +63,9 @@ def measure(label: str) -> tuple[float, int]:
     return data["rhae"], sum(d["levels_completed"] for d in data["details"])
 
 
-def stability_verdict(rows: list[tuple[str, float, int]], baseline: float) -> tuple[str, str]:
+def stability_verdict(
+    rows: list[tuple[str, float, int]], baseline: float
+) -> tuple[str, str]:
     """``(verdict, explanation)`` for a finished sweep.
 
     Split out so it can be tested against the real sweeps rather than restated
@@ -88,7 +90,9 @@ def stability_verdict(rows: list[tuple[str, float, int]], baseline: float) -> tu
 
 @app.command()
 def main(
-    constant: str = typer.Option(..., "--constant", help="Module-level constant to sweep."),
+    constant: str = typer.Option(
+        ..., "--constant", help="Module-level constant to sweep."
+    ),
     values: str = typer.Option(..., "--values", help="Comma-separated values to try."),
     baseline: float = typer.Option(
         0.4263, "--baseline", help="RHAE to call 'no change' against."
@@ -114,7 +118,8 @@ def main(
     if unchanged:
         logger.warning(
             "{} value(s) scored *exactly* baseline — there the change is inert, "
-            "so it is not really being tested", len(unchanged)
+            "so it is not really being tested",
+            len(unchanged),
         )
     logger.info("VERDICT: {} — {}", verdict, explanation)
 

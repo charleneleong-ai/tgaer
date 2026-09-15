@@ -201,7 +201,9 @@ def run_suite(
                 )
             if row.get("error"):
                 scorecards.append({"game": game, "error": row["error"]})
-                logger.error("[{}] {} in {:.1f}s", game, row["error"], time.monotonic() - t0)
+                logger.error(
+                    "[{}] {} in {:.1f}s", game, row["error"], time.monotonic() - t0
+                )
                 continue
             rows: list[dict[str, Any]] = []
             card = arc.get_scorecard()
@@ -216,7 +218,11 @@ def run_suite(
             tot = sum(lvl["level_score"] for lvl in scorecards[-1]["levels"])
             logger.info(
                 "[{}] total={:.2f} state={} actions={} in {:.1f}s",
-                game, tot, row["state"], row["actions"], time.monotonic() - t0,
+                game,
+                tot,
+                row["state"],
+                row["actions"],
+                time.monotonic() - t0,
             )
         except Exception as exc:  # noqa: BLE001 — one bad game must not sink the rest
             scorecards.append({"game": game, "error": f"{type(exc).__name__}: {exc}"})

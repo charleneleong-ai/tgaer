@@ -68,10 +68,14 @@ def environment_score(
     total_weight = n * (n + 1) / 2
     k = levels_completed(levels)
     cap = sum(range(1, k + 1)) / total_weight
-    weighted = sum(
-        level * level_score(baselines[level - 1], levels[level]["our_actions_median"])
-        for level in range(1, k + 1)
-    ) / total_weight
+    weighted = (
+        sum(
+            level
+            * level_score(baselines[level - 1], levels[level]["our_actions_median"])
+            for level in range(1, k + 1)
+        )
+        / total_weight
+    )
     return {
         "env_score": min(cap, weighted),
         "cap": cap,
@@ -142,7 +146,9 @@ def load_specs(private_dir: Path) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         row = json.loads(line)
-        specs.append({"game": game_of(row["input"]), "check": row["check"], "id": row["id"]})
+        specs.append(
+            {"game": game_of(row["input"]), "check": row["check"], "id": row["id"]}
+        )
     return specs
 
 
@@ -160,7 +166,9 @@ def repo_root(script_dir: Path) -> Path:
 def load_baselines(root: Path, game: str) -> list[float]:
     matches = sorted((root / "environment_files" / game).glob("*/metadata.json"))
     if not matches:
-        raise FileNotFoundError(f"no metadata.json for {game} under {root}/environment_files")
+        raise FileNotFoundError(
+            f"no metadata.json for {game} under {root}/environment_files"
+        )
     return json.loads(matches[-1].read_text())["baseline_actions"]
 
 
@@ -228,7 +236,9 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(results, indent=2))
 
-    print(f"{passed}/{len(graded)} games pass | RHAE={rhae:.4f}% | legacy total_level_score={total_level_score:.2f}")
+    print(
+        f"{passed}/{len(graded)} games pass | RHAE={rhae:.4f}% | legacy total_level_score={total_level_score:.2f}"
+    )
     for g in sorted(graded, key=lambda r: r["game"]):
         status = "PASS" if g["passed"] else "FAIL"
         limit = "cap" if g["cap"] <= g["weighted_efficiency"] else "eff"

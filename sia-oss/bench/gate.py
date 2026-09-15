@@ -71,8 +71,11 @@ def report(candidate_dir: Path, baseline_dir: Path) -> bool:
 
     logger.info(
         "gate: {} vs {} | RHAE {:.4f}% -> {:.4f}% ({:+.4f}pp)",
-        candidate_dir.name, baseline_dir.name,
-        baseline["rhae"], candidate["rhae"], candidate["rhae"] - baseline["rhae"],
+        candidate_dir.name,
+        baseline_dir.name,
+        baseline["rhae"],
+        candidate["rhae"],
+        candidate["rhae"] - baseline["rhae"],
     )
     for line in improvements:
         logger.success("better   {}", line)

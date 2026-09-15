@@ -49,7 +49,8 @@ DATASET = REPO / "sia-oss/tasks/arc-agi3/data/public"
 # figures are quoted against. Tuning on the old 8-game subset overweighted
 # whatever those eight happened to reward.
 SUITE = sorted(
-    p.name for p in (REPO / "environment_files").iterdir()
+    p.name
+    for p in (REPO / "environment_files").iterdir()
     if p.is_dir() and len(p.name) == 4
 )
 STATE = REPO / "sia-oss/supervisor_state.json"
@@ -69,6 +70,7 @@ def current_baseline() -> float:
         return json.loads(STATE.read_text())["baseline_score"]
     return INITIAL_BASELINE
 
+
 load_dotenv(REPO / ".env")
 
 app = typer.Typer(add_completion=False)
@@ -79,10 +81,22 @@ app = typer.Typer(add_completion=False)
 # same board between frames and make a diff impossible to read by eye.
 ARC_PALETTE = np.array(
     [
-        (0, 0, 0), (0, 116, 217), (255, 65, 54), (46, 204, 64),
-        (255, 220, 0), (170, 170, 170), (240, 18, 190), (255, 133, 27),
-        (127, 219, 255), (135, 12, 37), (255, 255, 255), (96, 96, 96),
-        (0, 255, 200), (140, 90, 200), (60, 60, 60), (200, 200, 120),
+        (0, 0, 0),
+        (0, 116, 217),
+        (255, 65, 54),
+        (46, 204, 64),
+        (255, 220, 0),
+        (170, 170, 170),
+        (240, 18, 190),
+        (255, 133, 27),
+        (127, 219, 255),
+        (135, 12, 37),
+        (255, 255, 255),
+        (96, 96, 96),
+        (0, 255, 200),
+        (140, 90, 200),
+        (60, 60, 60),
+        (200, 200, 120),
     ],
     dtype=np.uint8,
 )
@@ -126,7 +140,8 @@ def frame_payload(
         keyed = [r for r in rows if r["tag"] != "step"]
         payload[f"frames/{game}"] = [
             wandb.Image(
-                render(r["grid"]), caption=f"{r['tag']} @ step {r['idx']} (L{r['level']})"
+                render(r["grid"]),
+                caption=f"{r['tag']} @ step {r['idx']} (L{r['level']})",
             )
             for r in keyed
         ]

@@ -75,6 +75,7 @@ extend-exclude = [
   "vendor",
   "wandb",
   "logs",
+  "runs", # SIA generation output: machine-written, regenerable, never committed
 ]
 
 [tool.ruff.lint]

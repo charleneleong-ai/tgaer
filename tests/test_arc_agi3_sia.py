@@ -202,4 +202,3 @@ class TestParseScorecard:
 
     def test_no_marker_present_returns_empty_rather_than_raising(self) -> None:
         assert ev.parse_scorecard("no scorecard here") == {}
-

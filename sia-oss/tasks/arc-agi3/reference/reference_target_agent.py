@@ -136,7 +136,9 @@ def main() -> None:
     output_file = output_dir / "submission.json"
     output_file.write_text(json.dumps({"scorecards": scorecards}, indent=2))
     cleared = sum(1 for c in scorecards if c.get("levels"))
-    print(f"{cleared}/{len(games)} games cleared at least one level | saved {output_file}")
+    print(
+        f"{cleared}/{len(games)} games cleared at least one level | saved {output_file}"
+    )
 
 
 if __name__ == "__main__":

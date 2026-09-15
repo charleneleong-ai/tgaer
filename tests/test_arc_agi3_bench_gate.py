@@ -42,7 +42,9 @@ def _results(rhae: float, games: dict[str, tuple[int, float]]) -> dict[str, Any]
     }
 
 
-BASE = _results(0.4263, {"lp85": (1, 0.02778), "sp80": (1, 0.00196), "ls20": (1, 0.00374)})
+BASE = _results(
+    0.4263, {"lp85": (1, 0.02778), "sp80": (1, 0.00196), "ls20": (1, 0.00374)}
+)
 
 
 class TestVerdict:
@@ -89,7 +91,13 @@ class TestSweepStability:
 
     @pytest.mark.parametrize(
         ("gains", "total", "expected"),
-        [(0, 6, "NONE"), (1, 6, "SPIKE"), (2, 11, "SPIKE"), (4, 6, "STABLE"), (6, 6, "STABLE")],
+        [
+            (0, 6, "NONE"),
+            (1, 6, "SPIKE"),
+            (2, 11, "SPIKE"),
+            (4, 6, "STABLE"),
+            (6, 6, "STABLE"),
+        ],
     )
     def test_a_gain_at_few_values_reads_as_a_spike(
         self, gains: int, total: int, expected: str
