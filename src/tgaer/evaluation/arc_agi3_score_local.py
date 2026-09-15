@@ -337,6 +337,44 @@ class WandbRun:
             self.run.finish()
 
 
+def game_key(env_id: str) -> str:
+    """The game id out of a scorecard environment id.
+
+    Environment ids carry a content hash — ``"lp85-305b61c3"`` — because the SDK
+    versions the downloaded game. Matching a scorecard row back to the game that
+    was asked for has to ignore that suffix.
+    """
+    return str(env_id).split("-", 1)[0]
+
+
+def run_levels(game: str, run: Any, score: float = 0.0) -> list[dict[str, Any]]:
+    """Per-level rows for one arcade run: ``game``, ``level``, ``actions``, ``baseline``.
+
+    Only levels the agent actually completed, which the arcade marks with a
+    positive per-level score. A level with no baseline is skipped rather than
+    scored against zero, since the ratio would be meaningless.
+    """
+    actions = run.level_actions or []
+    baselines = run.level_baseline_actions or []
+    scores = run.level_scores or []
+    rows: list[dict[str, Any]] = []
+    for index, spent in enumerate(actions):
+        baseline = baselines[index] if index < len(baselines) else None
+        level_score = scores[index] if index < len(scores) else 0.0
+        if level_score <= 0 or not baseline or baseline <= 0:
+            continue
+        rows.append(
+            {
+                "game": game,
+                "level": index + 1,
+                "actions": spent,
+                "baseline": int(baseline),
+                "run_score": score,
+            }
+        )
+    return rows
+
+
 def play(
     agent_cls: type[Any],
     game_id: str,

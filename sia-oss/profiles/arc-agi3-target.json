@@ -1,0 +1,10 @@
+{
+  "profile_id": "arc-agi3-target",
+  "name": "ARC-AGI-3 explorer target agent (model-free)",
+  "model": "gpt-5.5",
+  "provider_id": "openai",
+  "agent_reference": {
+    "source": "../tasks/arc-agi3/reference/",
+    "entrypoint": "reference_target_agent.py"
+  }
+}

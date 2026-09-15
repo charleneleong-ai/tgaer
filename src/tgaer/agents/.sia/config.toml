@@ -1,0 +1,118 @@
+# SIA Foundry project configuration — commit this file.
+
+[project]
+id = 90
+name = "tgaer-arc-agi3"
+foundry_url = "https://sia.hexo.ai"
+
+[agent]
+# How `sia evals run` invokes your agent.
+#   command — stdin {"input", "case_id"} -> stdout {"output"}
+#   http    — POST {"input"} to url
+#   python  — import "module:callable" and call it with the input
+kind = "command"
+# Bare `python`, not `.venv/bin/python`: `.venv` is excluded from every
+# `.sia/versions/vN/` copy by design (versioning.py's _TOP_LEVEL_ONLY) — it is
+# shared across versions via PATH, which `sia` itself injects from this
+# project's `.venv` (pyenv.env_overrides) before running either command below.
+# The version-relative path resolved to nothing and exited in 0.6s with no
+# results — caught the first time this ran for real.
+cmd = "python sia_adapter.py"
+url = ""
+entrypoint = ""
+# One case is up to ARC_SIA_REPEATS full games at ARC_SIA_MAX_ACTIONS each;
+# the slowest game on the dev set (bp35) runs ~160s per repeat at 600 actions.
+timeout_s = 1800
+concurrency = 4
+
+# A KEY=value file loaded before the agent runs, relative to this
+# project's root. Keep it out of git and it is the right home for
+# API keys — unlike [agent.env] below, which is committed. Your
+# shell always wins. Point it further up when the file lives there
+# (env_file = "../../.env"); set it empty to load none.
+#
+# ARC_API_KEY lives in the repo root's .env (three levels up from this
+# project root, src/tgaer/agents/), alongside the other harness secrets — not
+# duplicated here.
+env_file = "../../../.env"
+
+[agent.env]
+# Extra environment variables for each agent invocation — applied to
+# this process's own environment on every command, then forwarded
+# into every Harbor sandbox `sia evals run`/`sia envs generate` build
+# (an already-exported shell variable always wins over this file).
+# Handy for a locally-running model server's URL, rewritten for
+# `host.docker.internal` (e.g. OLLAMA_URL = "http://host.docker.
+# internal:11434") so the sandbox can actually reach it.
+# Do NOT put secrets here — this file is committed to git. Export
+# API keys in your shell instead; the agent inherits your environment.
+
+[source]
+# Which files are uploaded to SIA for analysis. .gitignore is always
+# honored; add a .siaignore for anything else you want held back.
+include = [
+  "**/*.py",
+  "**/*.ts",
+  "**/*.tsx",
+  "**/*.js",
+  "**/*.jsx",
+  "**/*.go",
+  "**/*.rb",
+  "**/*.java",
+  "**/*.rs",
+  "**/*.md",
+  "**/*.txt",
+  "**/*.yaml",
+  "**/*.yml",
+  "**/*.json",
+  "**/*.toml",
+  "**/*.jinja",
+  "**/*.j2",
+]
+exclude = [
+  "**/.sia/**",
+  "**/node_modules/**",
+  "**/.venv/**",
+  "**/venv/**",
+  "**/__pycache__/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/*.lock",
+  "**/package-lock.json",
+  "**/.git/**",
+  "**/*.min.js",
+  "**/target/**",
+]
+max_files = 400
+max_bytes = 1500000
+
+[traces]
+# gateway_url: point your agent's LLM client here and every call is
+# traced automatically. Otherwise run `sia traces collect`.
+gateway_url = ""
+otlp_port = 4318
+
+[engine]
+# If this repo already has its own eval suite, name it here and SIA
+# will read that instead of generating a corpus of its own.
+#
+# The suite: 8 games, each checked on the exact rule ARC-AGI-3 scores —
+# min((baseline / actions)^2 * 100, 115) per level — so grading is arithmetic,
+# not an LLM judge. See sia_eval.py's own docstring for why.
+questions_file = "sia_questions.jsonl"
+eval_command = "python sia_eval.py --questions sia_questions.jsonl --out eval_results.jsonl"
+run_command = "true"
+# Superseded by .sia/settings.json, which says the same thing and
+# more: rules like "Bash(npm run test:*)", per-path rules, and a
+# mode that stops asking about everything harmless. Both are still
+# read and merged — see `sia permissions`.
+#
+# Commands this repo's diagnosis needs beyond the built-in list
+# (harbor, docker, python, pytest, pip, read-only git, ls, cat, head,
+# tail, wc, jq, grep, rg, find, sort, uniq). Names, not patterns —
+# and allowing one never allows what it is chained or piped into.
+#   allow_commands = ["awk", "sqlite3"]
+allow_commands = []
+# trust = "full" runs every tool call without asking — the blunt
+# version of the line above. Off by default; the server cannot set it.
+trust = ""

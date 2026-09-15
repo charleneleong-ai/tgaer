@@ -60,12 +60,6 @@ _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built
 # a corridor-trapped agent self-heal within 8 steps once affordance stalls — so tune
 # this against steps, not against the size of the loop you want broken.
 _RECENT_CELLS = 8
-# A cell changing on more than this share of steps is board chrome — an animated
-# border or counter moving on its own. Keying the state signature on it mints a
-# fresh state every step, so `untested_at` never empties and a cycle is
-# indistinguishable from progress.
-CHURN_FRACTION = 0.5
-CHURN_WARMUP = 20
 
 
 def frame_signature(
@@ -297,8 +291,6 @@ class ExplorerArcAgi3Agent(Agent):
         # Cell values whose click advanced a level — persistent goal prior.
         self._goal_values: set[int] = set()
         self._prev_arr: np.ndarray | None = None
-        self._churn: np.ndarray | None = None
-        self._churn_steps = 0
         # Induces the avatar (controllability), its move lattice, and the navigate
         # goal (value that vanishes under the avatar on a level-up). Persists across
         # level resets — induced roles are the cross-level transfer.
@@ -349,8 +341,6 @@ class ExplorerArcAgi3Agent(Agent):
         self._plan.clear()
         self._walk_novelty.clear()
         self._inert.clear()
-        self._churn = None  # a fresh board has its own chrome
-        self._churn_steps = 0
         self._prev_sig = None
         self._prev_prim = None
         self._recent.clear()  # a fresh board: stale positions must not block
@@ -380,7 +370,6 @@ class ExplorerArcAgi3Agent(Agent):
         lattice = self._det.move_lattice()  # once per step, after the observe update
         if learning:
             self._learn_blocked(arr, lattice)
-            self._observe_churn(arr)
             self._learn_inert(arr)
         # Track the avatar cell every step (history must be gap-free); only affordance
         # consults it, so the exploit may still revisit a cell to reach a known goal.
@@ -408,7 +397,7 @@ class ExplorerArcAgi3Agent(Agent):
         self._levels = levels
 
         field = self._field(arr)
-        sig = frame_signature(self._settled(arr), field)
+        sig = frame_signature(arr, field)
         # Before register(), so "seen before" still means what it says.
         fresh = int(not self._graph.seen(sig))
         self._novelty.append(fresh)
@@ -458,23 +447,6 @@ class ExplorerArcAgi3Agent(Agent):
         ):
             _, r, c = self._prev_prim
             self._goal_values.add(int(self._prev_arr[r, c]))
-
-    def _observe_churn(self, arr: np.ndarray) -> None:
-        """Count how often each cell changes, to tell board chrome from effect."""
-        if self._prev_arr is None or self._prev_arr.shape != arr.shape:
-            return
-        if self._churn is None or self._churn.shape != arr.shape:
-            self._churn = np.zeros(arr.shape, dtype=np.int32)
-            self._churn_steps = 0
-        self._churn += self._prev_arr != arr
-        self._churn_steps += 1
-
-    def _settled(self, arr: np.ndarray) -> np.ndarray:
-        """``arr`` with self-animating cells flattened, for the state key."""
-        if self._churn is None or self._churn_steps < CHURN_WARMUP:
-            return arr
-        chrome = self._churn > CHURN_FRACTION * self._churn_steps
-        return np.where(chrome, 0, arr) if chrome.any() else arr
 
     def _learn_inert(self, arr: np.ndarray) -> None:
         """The previous primitive left the board untouched, so it is dead here.
