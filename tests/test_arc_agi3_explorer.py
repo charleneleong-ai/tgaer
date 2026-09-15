@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import Any
 
 import numpy as np
 
@@ -436,10 +437,11 @@ class _Ls20LockSim:
 class TestDirectedLockBootstrap:
     """The cold-start fix: a fresh explorer with NO hardcoded semantics manufactures
     its first win by seeking the key→door affordance, then exploits on later levels.
-    Sized so blind exploration (cost ∝ area) cannot finish in budget but directed
-    seeking (cost ∝ path length) can — the fix is load-bearing, not incidental."""
+    Directed seeking costs path length where blind exploration costs area, so the
+    bootstrap is load-bearing rather than incidental — measured as the margin
+    between the two, since RHAE scores actions spent, not levels reached."""
 
-    def _solve(self, blind: bool, budget: int):
+    def _solve(self, blind: bool, budget: int) -> tuple[int | None, Any]:
         size, m = 20, 18
         sim = _Ls20LockSim([((1, 2), (1, m)), ((m, 2), (m, m))], size=size)
         agent = ExplorerArcAgi3Agent()
@@ -451,12 +453,22 @@ class TestDirectedLockBootstrap:
                 return s + 1, agent
         return None, agent
 
-    def test_directed_bootstrap_solves_a_large_locked_game_blind_cannot(self):
-        budget = 250  # directed solves in ~58 steps; blind needs ~668
+    def test_directed_bootstrap_clears_the_locked_game_well_inside_blind_cost(self):
+        """Directed solves in 58 steps against blind's 92.
+
+        This asserted `blind_steps is None` until inert-action detection landed:
+        demoting primitives that leave the board untouched cut blind's cost from
+        beyond a 250 budget to 92, so "blind cannot finish" stopped being true of
+        the agent rather than of the bootstrap. The margin is the real claim, and
+        it is the one that matters — RHAE scores actions spent, so a bootstrap
+        that merely ties on levels while costing 1.6x the actions is worthless.
+        """
+        budget = 250
         steps, agent = self._solve(blind=False, budget=budget)
         blind_steps, _ = self._solve(blind=True, budget=budget)
         assert steps is not None  # both locked levels solved by directed bootstrap
-        assert blind_steps is None  # blind exploration cannot, in the same budget
+        assert blind_steps is not None  # the sim is solvable either way now
+        assert steps < 0.75 * blind_steps  # directed wins on actions, not just levels
         assert agent._det.door == 9  # door induced from the first directed win
         assert 5 in agent._det.keys  # key affordance learned while seeking
 
@@ -853,3 +865,54 @@ class TestFieldStability:
         agent = ExplorerArcAgi3Agent()
         agent.act(_obs(self._board(3, 4, 10), actions=(1,)))
         assert agent._field_colour == 3
+
+
+class TestChromeMaskedSignature:
+    """Self-animating cells must not fragment the state graph.
+
+    lp85 level 2 carries a ring that recolours every frame *inside* the play
+    field, so `frame_signature` minted a fresh state every step: `untested_at`
+    never emptied, `_stalls` rotation never fired, and 542 of 591 actions went
+    into re-clicking one cell. Masking those cells out of the state key is what
+    finally clears that level.
+    """
+
+    def _ticking(self, step: int) -> np.ndarray:
+        """A board whose (1, 1) cell cycles on its own, avatar fixed."""
+        board = _board(avatar=(2, 2))
+        board[1, 1] = 5 + (step % 3)
+        return board
+
+    def test_an_animated_cell_stops_minting_new_states(self) -> None:
+        agent = ExplorerArcAgi3Agent()
+        for step in range(40):
+            agent.act(_obs(self._ticking(step)))
+        mask_applied = agent._settled(self._ticking(0))
+        assert mask_applied[1, 1] != self._ticking(0)[1, 1]
+        # two frames differing only in the animated cell are now one state
+        assert frame_signature(agent._settled(self._ticking(0))) == frame_signature(
+            agent._settled(self._ticking(1))
+        )
+
+    def test_a_quiet_board_is_left_exactly_alone(self) -> None:
+        """No chrome means no masking — the baseline path must be untouched."""
+        agent = ExplorerArcAgi3Agent()
+        board = _board()
+        for _ in range(40):
+            agent.act(_obs(board))
+        assert np.array_equal(agent._settled(board), board)
+
+    def test_nothing_is_masked_before_the_warmup(self) -> None:
+        agent = ExplorerArcAgi3Agent()
+        for step in range(5):
+            agent.act(_obs(self._ticking(step)))
+        board = self._ticking(0)
+        assert np.array_equal(agent._settled(board), board)
+
+    def test_a_new_level_forgets_the_old_board_chrome(self) -> None:
+        agent = ExplorerArcAgi3Agent()
+        for step in range(40):
+            agent.act(_obs(self._ticking(step), levels=0))
+        agent.act(_obs(_board(), levels=1))
+        board = self._ticking(0)
+        assert np.array_equal(agent._settled(board), board)

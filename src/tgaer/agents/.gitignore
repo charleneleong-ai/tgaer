@@ -1,0 +1,12 @@
+
+# SIA CLI — derived artifacts (eval sets and environments stay tracked)
+.sia/traces/
+.sia/runs/
+.sia/failures/
+.sia/patches/
+.sia/plans/
+.sia/logs/
+.sia/state.json
+.sia/settings.local.json
+.sia/versions/
+.venv/

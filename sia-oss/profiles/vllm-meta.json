@@ -1,0 +1,7 @@
+{
+  "profile_id": "vllm-meta",
+  "name": "Local Qwen3.8-27B meta agent (OpenHands, vLLM on pi-a100-80gb)",
+  "agent_impl": "openhands",
+  "model": "Qwen/Qwen3.8-27B",
+  "provider_id": "vllm-qwen"
+}
