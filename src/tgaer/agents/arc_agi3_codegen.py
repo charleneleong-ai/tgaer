@@ -58,11 +58,9 @@ CODE_BLOCK = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
 # Share of *judged* choices that must avoid known-dead options. This is a
 # falsification bar, not an imitation bar — see `productivity`.
 MIN_PRODUCTIVITY = 0.8
-# A policy that defers on nearly everything is not a policy. It must commit on
-# at least this share of held-out states, and at least this many must be ones we
-# have evidence about, or there is nothing to judge and it is rejected.
+# A policy that defers on nearly everything is not a policy: it must commit on
+# at least this share of held-out states.
 MIN_COMMIT_RATE = 0.25
-MIN_JUDGED = 5
 # How many times an option must be seen doing nothing before it counts as dead.
 # One no-op can be a transient; a cell clicked repeatedly to no effect is not.
 DEAD_AFTER = 2
@@ -542,11 +540,12 @@ def distinct_choices(
 def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, str]:
     """``(usable, reason)`` — whether this policy may drive real actions.
 
-    Three independent bars, because each catches a different bad policy: it must
-    commit often enough to be worth running at all, enough of those commitments
-    must be ones we can judge, and enough of the judged ones must avoid options
-    the warmup proved dead. Passing is still only a licence to *try* — the suite
-    score gated by `bench/gate.py` is what decides whether it ships.
+    What is rejected here is only what is *definitely* bad: code that will not
+    run, a policy that defers on almost everything, one that returns the same
+    answer whatever the board, and one that keeps choosing options the warmup
+    already disproved. Everything else is let through, because passing is not a
+    prediction of quality — it is a licence to try, and `bench/gate.py` scoring
+    the suite is the only thing that can actually judge a policy.
     """
     if not evidence.transitions:
         return False, "no warmup transitions to validate against"
@@ -570,10 +569,15 @@ def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, 
     # policy — it is a constant wearing one.
     if distinct_states(held_out) > 1 and distinct_choices(policy, held_out, evidence) < 2:
         return False, "ignores the board — same choice on every held-out state"
-    if result.judged < MIN_JUDGED:
-        return False, f"too little evidence to judge it ({result.judged} < {MIN_JUDGED}) — {detail}"
-    if result.score < MIN_PRODUCTIVITY:
-        return False, f"picks known-dead options — {detail}"
+    # No bar on *how much* evidence there is, deliberately. Requiring the policy
+    # to choose options the warmup already tried would demand it stay inside the
+    # explorer's experience while asking it to beat the explorer — and trying an
+    # untouched cell is exactly what a good policy on an unsolved level does.
+    # An earlier version rejected five games for precisely that. Unjudgeable
+    # choices are now allowed through and `bench/gate.py` decides on the score,
+    # which is the only thing that can actually tell whether they were right.
+    if result.judged and result.score < MIN_PRODUCTIVITY:
+        return False, f"picks options the warmup disproved — {detail}"
     return True, detail
 
 

@@ -265,12 +265,33 @@ class TestValidate:
         usable, reason = cg.validate(policy, _evidence(self.LIVE))
         assert not usable and "defers too often" in reason
 
-    def test_a_policy_we_have_no_evidence_about_is_rejected(self) -> None:
+    def test_a_policy_choosing_untried_cells_is_allowed_through(self) -> None:
+        """Trying an untouched cell is what a good policy on an unsolved level
+        does. Requiring the policy to stay inside the explorer's experience
+        while asking it to beat the explorer is incoherent, and rejected five
+        games for it. Unjudgeable choices go to the gate instead."""
         policy = cg.compile_policy(
             "def policy(g, a, m):\n    return ('click', 63, int(g[0, 0]) % 2 + 60)\n"
         )
         usable, reason = cg.validate(policy, _evidence(self.LIVE))
-        assert not usable and "too little evidence" in reason
+        assert usable and "0 judged" in reason
+
+    def test_a_policy_mixing_good_and_disproved_choices_is_still_rejected(self) -> None:
+        """Loosening the evidence bar must not let a disproved option back in."""
+        # interleaved so the held-out half carries *both* kinds of board and
+        # the policy actually reaches its bad branch
+        rows: list[cg.Transition] = []
+        for i in range(40):
+            if i % 2:
+                rows.append(_t(6, click=(18, 20), grid=_grid(i), next_grid=_grid(i)))
+            else:
+                rows.append(_t(6, click=(5, 5), grid=_grid(i), next_grid=_grid(i + 1)))
+        policy = cg.compile_policy(
+            "def policy(g, a, m):\n"
+            "    return ('click', 18, 20) if int(g[0, 0]) % 2 else ('click', 5, 5)\n"
+        )
+        usable, reason = cg.validate(policy, _evidence(rows))
+        assert not usable and "disproved" in reason
 
     def test_a_policy_picking_cycling_cells_is_rejected(self) -> None:
         evidence = _evidence(
@@ -278,7 +299,7 @@ class TestValidate:
         )
         policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 18, 20)\n")
         usable, reason = cg.validate(policy, evidence)
-        assert not usable and "known-dead" in reason
+        assert not usable and "disproved" in reason
 
     def test_no_evidence_means_not_usable(self) -> None:
         policy = cg.compile_policy("def policy(g, a, m):\n    return a[0]\n")
