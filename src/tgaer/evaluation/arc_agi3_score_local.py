@@ -426,11 +426,6 @@ def play(
     }
 
 
-def game_key(env_id: str) -> str:
-    """The game id without the version suffix: "lp85-abc123" -> "lp85"."""
-    return env_id.split("-", 1)[0]
-
-
 def level_breakdown(card: Any) -> list[dict[str, Any]]:
     """Per-level actions against the human baseline, for every cleared level.
 
