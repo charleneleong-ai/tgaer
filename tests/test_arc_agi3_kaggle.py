@@ -2003,3 +2003,23 @@ class TestExplorerAdapter:
         a._record_branch()
         assert a.stats["branch_affordance"] == 1
         assert a.stats["branch_choose"] == 1
+
+    def test_the_explorer_is_not_capped_at_the_llm_agents_budget(self):
+        """MAX_ACTIONS is the framework's per-game loop bound, and the scored
+        rerun uses the class default — the mock's `agent.MAX_ACTIONS = ...`
+        override never runs there. At 400 the explorer spent 12 minutes of a
+        7.5h budget, while levels keep arriving: 600 -> 6000 actions took the
+        local roster from 6 levels to 14.
+
+        The LLM agent keeps the lower cap. At 1051 actions/min it would need
+        10.5h for 110 games at this budget, over the 7.5h deadline.
+        """
+        assert ma.ExplorerAgent.MAX_ACTIONS > ma.MyAgent.MAX_ACTIONS
+        assert ma.ExplorerAgent.MAX_ACTIONS >= 6000
+
+    def test_the_run_deadline_still_bounds_the_whole_run(self):
+        """The per-game cap is generous precisely because is_done() carries the
+        global stop; raising one must not remove the other."""
+        import inspect
+
+        assert "_RUN_DEADLINE" in inspect.getsource(ma.MyAgent.is_done)
