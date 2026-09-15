@@ -357,3 +357,93 @@ def test_as_json_is_loadable(monkeypatch: Any) -> None:
     import json
 
     assert json.loads(cg.as_json(_evidence([_t(1)])))["steps"] == 1
+
+
+class TestRefinePolicy:
+    """The REPL loop: ask, replay, critique, ask again — all offline."""
+
+    class _Scripted:
+        """A backend that returns a fixed sequence and records what it was told."""
+
+        def __init__(self, replies: list[str]) -> None:
+            self.replies = replies
+            self.seen: list[list[dict[str, str]]] = []
+
+        def chat(self, messages: list[dict[str, str]], max_tokens: int = 2048) -> str:
+            self.seen.append([dict(m) for m in messages])
+            return self.replies[min(len(self.seen) - 1, len(self.replies) - 1)]
+
+    GOOD = (
+        "```python\ndef policy(g, a, m):\n"
+        "    return ('click', 5, int(g[0, 0]) % 2 + 5)\n```"
+    )
+    CONSTANT = "```python\ndef policy(g, a, m):\n    return ('click', 5, 5)\n```"
+    BROKEN = "```python\ndef policy(:\n```"
+
+    def _evidence(self) -> cg.GameEvidence:
+        return _evidence(
+            [
+                _t(6, click=(5, 5 + i % 2), grid=_grid(i), next_grid=_grid(i + 1))
+                for i in range(20)
+            ]
+        )
+
+    def test_a_good_first_answer_stops_the_loop(self) -> None:
+        backend = self._Scripted([self.GOOD])
+        policy, reason = cg.refine_policy(backend, self._evidence(), rounds=4)
+        assert policy is not None and "round 1" in reason
+        assert len(backend.seen) == 1  # no wasted rounds
+
+    def test_a_rejected_answer_is_retried_with_the_reason(self) -> None:
+        backend = self._Scripted([self.CONSTANT, self.GOOD])
+        policy, reason = cg.refine_policy(backend, self._evidence(), rounds=4)
+        assert policy is not None and "round 2" in reason
+        followup = backend.seen[1][-1]["content"]
+        assert "rejected" in followup and "same answer on every board" in followup
+
+    def test_a_compile_error_is_handed_back_verbatim(self) -> None:
+        backend = self._Scripted([self.BROKEN, self.GOOD])
+        policy, _ = cg.refine_policy(backend, self._evidence(), rounds=4)
+        assert policy is not None
+        assert "SyntaxError" in backend.seen[1][-1]["content"]
+
+    def test_it_gives_up_after_the_round_limit(self) -> None:
+        backend = self._Scripted([self.CONSTANT])
+        policy, reason = cg.refine_policy(backend, self._evidence(), rounds=3)
+        assert policy is None and "after 3 rounds" in reason
+        assert len(backend.seen) == 3
+
+    def test_the_conversation_accumulates_rather_than_restarting(self) -> None:
+        backend = self._Scripted([self.CONSTANT])
+        cg.refine_policy(backend, self._evidence(), rounds=3)
+        assert [len(m) for m in backend.seen] == [2, 4, 6]
+
+    def test_a_dead_backend_stops_immediately(self) -> None:
+        class Dead:
+            def chat(self, messages: list[dict[str, str]], max_tokens: int = 2048) -> str:
+                raise ConnectionError("refused")
+
+        policy, reason = cg.refine_policy(Dead(), self._evidence(), rounds=4)
+        assert policy is None and "backend failed on round 1" in reason
+
+    def test_empty_content_names_the_reasoning_trap(self) -> None:
+        policy, reason = cg.refine_policy(self._Scripted(["  "]), self._evidence())
+        assert policy is None and "thinking" in reason
+
+
+class TestCritique:
+    def test_it_cites_a_concrete_board_and_the_option_record(self) -> None:
+        """Aggregates say a policy failed; an instance says how."""
+        a, b = _grid(1), _grid(2)
+        evidence = _evidence(
+            [_t(6, click=(18, 20), grid=a, next_grid=b)]
+            + [_t(6, click=(18, 20), grid=b, next_grid=a) for _ in range(9)]
+        )
+        policy = cg.compile_policy("def policy(g, a, m):\n    return ('click', 18, 20)\n")
+        text = cg.critique(policy, evidence, "picks known-dead options")
+        assert "held-out board" in text and "repeats" in text
+
+    def test_a_throwing_policy_is_reported_with_its_exception(self) -> None:
+        evidence = _evidence([_t(6, click=(1, 1)) for _ in range(6)])
+        policy = cg.compile_policy("def policy(g, a, m):\n    raise KeyError('nope')\n")
+        assert "KeyError" in cg.critique(policy, evidence, "threw")

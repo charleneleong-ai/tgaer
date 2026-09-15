@@ -72,7 +72,7 @@ class VLLMBackend:
             return json.load(response)["choices"][0]["message"]["content"]
 
 
-def install_codegen(backend: Any, warmup: int, report: dict[str, str]) -> Any:
+def install_codegen(backend: Any, warmup: int, report: dict[str, str], rounds: int) -> Any:
     """Wrap the explorer's ``act`` with record -> ask -> policy-first-with-fallback.
 
     Patching `act` rather than subclassing keeps `load_agent_class(None,
@@ -121,7 +121,7 @@ def install_codegen(backend: Any, warmup: int, report: dict[str, str]) -> Any:
         state["steps"] += 1
         if state["steps"] == warmup and state["policy"] is None:
             started = time.monotonic()
-            policy, reason = cg.request_policy(backend, evidence)
+            policy, reason = cg.refine_policy(backend, evidence, rounds=rounds)
             state["policy"] = policy
             report["reason"] = f"{reason} ({time.monotonic() - started:.1f}s)"
 
@@ -175,6 +175,9 @@ def main(
     base_url: str = typer.Option("http://localhost:8001/v1", "--base-url"),
     warmup: int = typer.Option(80, "--warmup", help="Explorer actions before asking."),
     max_steps: int = typer.Option(600, "--max-steps"),
+    rounds: int = typer.Option(
+        4, "--rounds", help="Refinement attempts per game; each replays history, costing no game actions."
+    ),
     gate_against: str | None = typer.Option(None, "--gate-against"),
 ) -> None:
     """Play every game with a generated policy and grade the result."""
@@ -206,7 +209,7 @@ def main(
     scorecards: list[dict[str, Any]] = []
     for game in SUITE:
         report: dict[str, str] = {"game": game, "reason": "policy never requested"}
-        original = install_codegen(backend, warmup, report)
+        original = install_codegen(backend, warmup, report, rounds)
         try:
             arc = arc_agi.Arcade(
                 operation_mode=OperationMode.OFFLINE,

@@ -84,6 +84,10 @@ MAX_CHROME_SHARE = 0.25
 # new state for it to count as progress. An option that reaches somewhere new
 # once and then loops for the rest of the warmup is not a way forward.
 PROGRESS_RATE = 0.5
+# Attempts the model gets per game. Each round replays recorded transitions, so
+# the extra attempts cost LLM time and zero game actions. Kept small because the
+# in-kernel budget is shared across every game.
+REFINE_ROUNDS = 4
 # Warmup actions spent gathering evidence before the model is asked. Long enough
 # to see each action's effect, short enough to leave the budget for playing.
 WARMUP_ACTIONS = 60
@@ -352,21 +356,82 @@ def extract_code(reply: str) -> str | None:
     return match.group(1) if match else None
 
 
+def compile_report(code: str) -> tuple[Callable[..., Any] | None, str]:
+    """``(policy, error)`` — like `compile_policy`, but keeps the failure text.
+
+    The error is the single most useful thing to hand back in a refinement
+    round: a model shown its own traceback fixes the bug, while a model told
+    only "that did not work" guesses again.
+    """
+    namespace: dict[str, Any] = {"np": np, "numpy": np}
+    try:
+        exec(code, namespace)  # noqa: S102 — offline kernel, text we asked for
+    except Exception as exc:  # noqa: BLE001 — any failure means "no policy"
+        return None, f"{type(exc).__name__}: {exc}"
+    policy = namespace.get("policy")
+    if not callable(policy):
+        return None, "no callable named `policy` was defined"
+    return policy, ""
+
+
+def first_fault(policy: Callable[..., Any], held_out: Sequence[Transition],
+                evidence: GameEvidence) -> str:
+    """A concrete example of the policy going wrong, or "" if it never does.
+
+    Aggregates tell a model that it failed; an instance tells it how. This
+    reports the first held-out board where the policy threw or chose an option
+    the warmup already judged, with that option's actual record attached.
+    """
+    unproductive = evidence.unproductive_options()
+    observed = evidence.outcomes()
+    for index, t in enumerate(held_out):
+        try:
+            choice = policy(t.grid, list(evidence.available_actions), {})
+        except Exception as exc:  # noqa: BLE001 — the fault we are looking for
+            return f"on held-out board {index} it raised {type(exc).__name__}: {exc}"
+        if choice is None:
+            continue
+        cell = as_click(choice)
+        option = ("click", *cell) if cell else ("act", choice)
+        if option in unproductive:
+            row = observed.get(option, Counter())
+            return (
+                f"on held-out board {index} it chose {choice}, which the warmup "
+                f"tried {sum(row.values())} times for "
+                f"{row['advanced']} level-ups, {row['novel']} new states, "
+                f"{row['cyclic']} repeats and {row['dead']} no-ops"
+            )
+        if isinstance(choice, int) and choice not in evidence.available_actions:
+            return f"on held-out board {index} it returned action {choice}, which is not available"
+    return ""
+
+
+def critique(policy: Callable[..., Any], evidence: GameEvidence, reason: str) -> str:
+    """The feedback a rejected policy gets before its next attempt."""
+    split = max(1, len(evidence.transitions) // 2)
+    held_out = evidence.transitions[split:]
+    lines = [f"That policy was rejected: {reason}."]
+    if fault := first_fault(policy, held_out, evidence):
+        lines.append(f"Concretely, {fault}.")
+    if distinct_states(held_out) > 1 and distinct_choices(policy, held_out, evidence) < 2:
+        lines.append(
+            "It returned the same answer on every board. Read `grid` and choose "
+            "from what is actually on it — locate the object by its colour and "
+            "shape each call instead of hardcoding a coordinate."
+        )
+    lines.append("Rewrite the whole function in one fenced python block.")
+    return "\n".join(lines)
+
+
 def compile_policy(code: str) -> Callable[..., Any] | None:
-    """Execute ``code`` in an isolated namespace and return its ``policy``.
+    """``code``'s ``policy``, or None if it does not load.
 
     The sandbox is deliberately thin: this runs offline in a competition kernel
     against text we asked for, so the threat is a buggy policy, not a hostile
     one. What matters is that a failure here is contained and falls back, rather
     than taking the whole run down.
     """
-    namespace: dict[str, Any] = {"np": np, "numpy": np}
-    try:
-        exec(code, namespace)  # noqa: S102 — see docstring
-    except Exception:  # noqa: BLE001 — any failure means "no policy"
-        return None
-    policy = namespace.get("policy")
-    return policy if callable(policy) else None
+    return compile_report(code)[0]
 
 
 def as_click(choice: Any) -> tuple[int, int] | None:
@@ -543,6 +608,64 @@ def request_policy(
         return None, "generated code did not compile to a callable policy"
     usable, reason = validate(policy, evidence)
     return (policy if usable else None), reason
+
+
+def refine_policy(
+    backend: Any,
+    evidence: GameEvidence,
+    *,
+    rounds: int = REFINE_ROUNDS,
+    max_tokens: int = 2048,
+) -> tuple[Callable[..., Any] | None, str]:
+    """Ask, run, critique, ask again — the loop, rather than one shot.
+
+    Every Milestone #1 winner ran the model in a REPL rather than generating
+    once, and the reason it is affordable here is that the "run" is a replay of
+    recorded transitions: the model watches its own code throw, or pick a cell
+    the warmup already disproved, without a single game action being spent. One
+    shot across four increasingly informative prompts produced only constants;
+    this gives the model the one thing it never had, which is to see the result.
+
+    Returns the first policy that passes validation, else ``(None, reason)``
+    from the final attempt.
+    """
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": build_prompt(evidence)},
+    ]
+    reason = "no attempts made"
+    for attempt in range(1, rounds + 1):
+        try:
+            reply = backend.chat(messages, max_tokens=max_tokens)
+        except Exception as exc:  # noqa: BLE001 — a dead model must not sink the run
+            return None, f"backend failed on round {attempt}: {type(exc).__name__}: {exc}"
+
+        if not (reply or "").strip():
+            return None, (
+                "model returned empty content — a reasoning model will spend the "
+                "whole token budget thinking; disable thinking on the backend"
+            )
+        code = extract_code(reply)
+        if code is None:
+            reason = "no python block"
+            feedback = "You wrote no fenced python block. Reply with exactly one."
+        else:
+            policy, error = compile_report(code)
+            if policy is None:
+                reason = f"did not compile: {error}"
+                feedback = f"That code failed to load: {error}. Fix it and resend the whole function."
+            else:
+                usable, detail = validate(policy, evidence)
+                if usable:
+                    return policy, f"round {attempt}: {detail}"
+                reason = detail
+                feedback = critique(policy, evidence, detail)
+
+        messages += [
+            {"role": "assistant", "content": reply},
+            {"role": "user", "content": feedback},
+        ]
+    return None, f"rejected after {rounds} rounds — {reason}"
 
 
 def as_json(evidence: GameEvidence) -> str:
