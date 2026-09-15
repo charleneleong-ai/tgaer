@@ -865,3 +865,54 @@ class TestFieldStability:
         agent = ExplorerArcAgi3Agent()
         agent.act(_obs(self._board(3, 4, 10), actions=(1,)))
         assert agent._field_colour == 3
+
+
+class TestChromeMaskedSignature:
+    """Self-animating cells must not fragment the state graph.
+
+    lp85 level 2 carries a ring that recolours every frame *inside* the play
+    field, so `frame_signature` minted a fresh state every step: `untested_at`
+    never emptied, `_stalls` rotation never fired, and 542 of 591 actions went
+    into re-clicking one cell. Masking those cells out of the state key is what
+    finally clears that level.
+    """
+
+    def _ticking(self, step: int) -> np.ndarray:
+        """A board whose (1, 1) cell cycles on its own, avatar fixed."""
+        board = _board(avatar=(2, 2))
+        board[1, 1] = 5 + (step % 3)
+        return board
+
+    def test_an_animated_cell_stops_minting_new_states(self) -> None:
+        agent = ExplorerArcAgi3Agent()
+        for step in range(40):
+            agent.act(_obs(self._ticking(step)))
+        mask_applied = agent._settled(self._ticking(0))
+        assert mask_applied[1, 1] != self._ticking(0)[1, 1]
+        # two frames differing only in the animated cell are now one state
+        assert frame_signature(agent._settled(self._ticking(0))) == frame_signature(
+            agent._settled(self._ticking(1))
+        )
+
+    def test_a_quiet_board_is_left_exactly_alone(self) -> None:
+        """No chrome means no masking — the baseline path must be untouched."""
+        agent = ExplorerArcAgi3Agent()
+        board = _board()
+        for _ in range(40):
+            agent.act(_obs(board))
+        assert np.array_equal(agent._settled(board), board)
+
+    def test_nothing_is_masked_before_the_warmup(self) -> None:
+        agent = ExplorerArcAgi3Agent()
+        for step in range(5):
+            agent.act(_obs(self._ticking(step)))
+        board = self._ticking(0)
+        assert np.array_equal(agent._settled(board), board)
+
+    def test_a_new_level_forgets_the_old_board_chrome(self) -> None:
+        agent = ExplorerArcAgi3Agent()
+        for step in range(40):
+            agent.act(_obs(self._ticking(step), levels=0))
+        agent.act(_obs(_board(), levels=1))
+        board = self._ticking(0)
+        assert np.array_equal(agent._settled(board), board)
