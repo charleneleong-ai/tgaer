@@ -82,22 +82,21 @@ class TestVerdict:
         assert not passed and "sp80" in regressions[0]
 
 
-class TestSweepVerdictShape:
-    """The sweeper's job is separating a trend from a spike."""
+class TestSweepStability:
+    """`STABLE_FRACTION` is the line between a trend and a lucky spike. The
+    numbers below are the real sweeps: the click-repeat limit gained at 1 of 6
+    values, the chrome mask at 2 of 11, and both were wrong."""
 
     @pytest.mark.parametrize(
-        ("gains", "total", "is_spike"),
-        [
-            (1, 6, True),  # CLICK_REPEAT_LIMIT: only 64 gained, of six values
-            (2, 11, True),  # the chrome mask across both its constants
-            (4, 6, False),  # a real mechanism improves across a range
-            (6, 6, False),
-        ],
+        ("gains", "total", "expected"),
+        [(0, 6, "NONE"), (1, 6, "SPIKE"), (2, 11, "SPIKE"), (4, 6, "STABLE"), (6, 6, "STABLE")],
     )
-    def test_a_gain_at_few_values_is_a_spike(
-        self, gains: int, total: int, is_spike: bool
+    def test_a_gain_at_few_values_reads_as_a_spike(
+        self, gains: int, total: int, expected: str
     ) -> None:
-        assert (gains / total < sweep.STABLE_FRACTION) is is_spike
+        rows = [(str(i), 0.5 if i < gains else 0.4263, 6) for i in range(total)]
+        verdict, _ = sweep.stability_verdict(rows, baseline=0.4263)
+        assert verdict == expected
 
 
 class TestSetConstant:

@@ -307,56 +307,6 @@ class TestValidate:
         assert not usable and "no warmup" in reason
 
 
-class TestRequestPolicy:
-    """Every backend failure mode has to degrade to the explorer, not raise."""
-
-    class _Backend:
-        def __init__(self, reply: str | Exception) -> None:
-            self.reply = reply
-
-        def chat(self, messages: list[dict[str, str]], max_tokens: int) -> str:
-            if isinstance(self.reply, Exception):
-                raise self.reply
-            return self.reply
-
-    def test_a_dead_backend_is_reported_not_raised(self) -> None:
-        policy, reason = cg.request_policy(
-            self._Backend(ConnectionError("refused")), _evidence([_t(1)])
-        )
-        assert policy is None and "backend failed" in reason
-
-    def test_empty_content_names_the_reasoning_trap_specifically(self) -> None:
-        """A reasoning model burns the budget thinking and returns "" — which
-        must not be misread as a bad prompt. Measured on Qwen3.8-27B."""
-        policy, reason = cg.request_policy(self._Backend("   "), _evidence([_t(1)]))
-        assert policy is None and "thinking" in reason
-
-    def test_prose_only_is_reported(self) -> None:
-        policy, reason = cg.request_policy(self._Backend("no code here"), _evidence([_t(1)]))
-        assert policy is None and "no python block" in reason
-
-    def test_uncompilable_code_is_reported(self) -> None:
-        policy, reason = cg.request_policy(
-            self._Backend("```python\ndef policy(:\n```"), _evidence([_t(1)])
-        )
-        assert policy is None and "did not compile" in reason
-
-    def test_a_valid_policy_comes_back_usable(self) -> None:
-        reply = (
-            "```python\ndef policy(g, a, m):\n"
-            "    return ('click', 5, int(g[0, 0]) % 2 + 5)\n```"
-        )
-        evidence = _evidence(
-            [
-                _t(6, click=(5, 5 + i % 2), grid=_grid(i), next_grid=_grid(i + 1))
-                for i in range(20)
-            ]
-        )
-        policy, reason = cg.request_policy(self._Backend(reply), evidence)
-        assert policy is not None, reason
-        assert cg.as_click(policy(_grid(0), [6], {})) == (5, 5)
-
-
 class TestGameEvidence:
     def test_action_effects_separate_changing_from_winning_actions(self) -> None:
         ev = _evidence([_t(1), _t(1, changed=False), _t(2, level=0, after=1)])
@@ -374,7 +324,7 @@ class TestGameEvidence:
         assert "warmup steps observed: 0" in _evidence([]).summary()
 
 
-def test_as_json_is_loadable(monkeypatch: Any) -> None:
+def test_as_json_is_loadable() -> None:
     import json
 
     assert json.loads(cg.as_json(_evidence([_t(1)])))["steps"] == 1
@@ -468,3 +418,64 @@ class TestCritique:
         evidence = _evidence([_t(6, click=(1, 1)) for _ in range(6)])
         policy = cg.compile_policy("def policy(g, a, m):\n    raise KeyError('nope')\n")
         assert "KeyError" in cg.critique(policy, evidence, "threw")
+
+
+class TestReviewRegressions:
+    """One test per defect found reviewing this module. Each of these shipped."""
+
+    def _live(self, n: int = 20) -> cg.GameEvidence:
+        return _evidence(
+            [_t(6, click=(5, 5), grid=_grid(i), next_grid=_grid(i + 1)) for i in range(n)]
+        )
+
+    @pytest.mark.parametrize("answer", ["[1, 2]", "{'a': 1}", "np.array([1, 2])"])
+    def test_an_unhashable_answer_is_reported_not_raised(self, answer: str) -> None:
+        """`("act", [1,2]) in some_set` raises TypeError, and this runs inside
+        the game loop where `play` does not catch — one malformed answer would
+        abort the whole suite instead of falling back to the explorer."""
+        policy = cg.compile_policy(f"def policy(g, a, m):\n    return {answer}\n")
+        text = cg.critique(policy, self._live(), "test")
+        assert "not an action or a click" in text
+
+    def test_numpy_integers_count_as_actions(self) -> None:
+        """The prompt tells the model to use numpy, so it returns np.int64 —
+        which is not an `int`. Both bars misfired: every answer scored malformed
+        and they all collapsed to one bucket, so a board-sensitive policy was
+        rejected as a constant."""
+        assert cg.as_action_id(np.int64(6)) == 6
+        evidence = _evidence(
+            [_t(6, grid=_grid(i), next_grid=_grid(i + 1)) for i in range(20)]
+        )
+        policy = cg.compile_policy(
+            "def policy(g, a, m):\n    return np.int64(a[int(g[0, 0]) % len(a)])\n"
+        )
+        result = cg.productivity(policy, cg.held_out_of(evidence), evidence, [6])
+        assert result.judged > 0 and result.score == 1.0
+
+    def test_booleans_are_not_action_one(self) -> None:
+        assert cg.as_action_id(True) is None
+
+    def test_a_death_respawn_is_not_counted_as_progress(self) -> None:
+        """A respawn lands on an unseen board, so without the terminal flag a
+        lethal click reads as `novel` and gets promoted."""
+        rows = [
+            cg.Transition(
+                grid=_grid(1), action=6, click=(9, 9), next_grid=_grid(99),
+                level=0, level_after=0, terminal=True,
+            )
+            for _ in range(4)
+        ]
+        evidence = _evidence(rows)
+        assert ("click", 9, 9) not in evidence.progressive_options()
+        assert ("click", 9, 9) in evidence.unproductive_options()
+
+    def test_memory_persists_across_a_validation_pass(self) -> None:
+        """The prompt promises `memory` persists; a policy relying on it was
+        being handed a fresh dict per call and judged a constant."""
+        evidence = self._live()
+        policy = cg.compile_policy(
+            "def policy(g, a, m):\n"
+            "    m['n'] = m.get('n', 0) + 1\n"
+            "    return ('click', 5, 5 + m['n'] % 2)\n"
+        )
+        assert cg.distinct_choices(policy, cg.held_out_of(evidence), evidence) == 2

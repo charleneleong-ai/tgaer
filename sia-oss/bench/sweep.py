@@ -62,6 +62,29 @@ def measure(label: str) -> tuple[float, int]:
     return data["rhae"], sum(d["levels_completed"] for d in data["details"])
 
 
+def stability_verdict(rows: list[tuple[str, float, int]], baseline: float) -> tuple[str, str]:
+    """``(verdict, explanation)`` for a finished sweep.
+
+    Split out so it can be tested against the real sweeps rather than restated
+    in a test: the click-repeat limit gained at 1 of 6 values and the chrome
+    mask at 2 of 11, and both were lucky rollouts rather than mechanisms.
+    """
+    better = [r for r in rows if r[1] > baseline + 1e-9]
+    if not better:
+        return "NONE", "no gain anywhere. Drop it."
+    if len(better) / len(rows) < STABLE_FRACTION:
+        best = max(better, key=lambda r: r[1])
+        return "SPIKE", (
+            f"best is {best[1]:.4f}% at {best[0]} but only {len(better)}/{len(rows)} "
+            "values gain. This is what a lucky rollout looks like; do not ship a "
+            "tuned constant."
+        )
+    return "STABLE", (
+        f"gains at {len(better)}/{len(rows)} values, worst of them "
+        f"{min(r[1] for r in better):.4f}%. Worth gating and promoting."
+    )
+
+
 @app.command()
 def main(
     constant: str = typer.Option(..., "--constant", help="Module-level constant to sweep."),
@@ -83,29 +106,16 @@ def main(
     finally:
         EXPLORER.write_text(original)  # never leave a swept file behind
 
-    better = [r for r in rows if r[1] > baseline + 1e-9]
     unchanged = [r for r in rows if abs(r[1] - baseline) <= 1e-9]
-    print(f"\n=== {constant}: {len(better)}/{len(rows)} values beat {baseline:.4f}% ===")
+    verdict, explanation = stability_verdict(rows, baseline)
+    gained = sum(1 for r in rows if r[1] > baseline + 1e-9)
+    print(f"\n=== {constant}: {gained}/{len(rows)} values beat {baseline:.4f}% ===")
     if unchanged:
         print(
             f"{len(unchanged)} value(s) scored *exactly* baseline — there the "
             "change is inert, so it is not really being tested"
         )
-    if not better:
-        print("VERDICT: no gain anywhere. Drop it.")
-    elif len(better) / len(rows) < STABLE_FRACTION:
-        best = max(better, key=lambda r: r[1])
-        print(
-            f"VERDICT: SPIKE, not a trend — best is {best[1]:.4f}% at {constant}="
-            f"{best[0]} but only {len(better)}/{len(rows)} values gain.\n"
-            "This is what a lucky rollout looks like. Do not ship a tuned constant."
-        )
-    else:
-        lo = min(r[1] for r in better)
-        print(
-            f"VERDICT: STABLE — gains at {len(better)}/{len(rows)} values, worst "
-            f"of them {lo:.4f}%. Worth gating and promoting."
-        )
+    print(f"VERDICT: {verdict} — {explanation}")
 
 
 if __name__ == "__main__":

@@ -86,9 +86,6 @@ PROGRESS_RATE = 0.5
 # the extra attempts cost LLM time and zero game actions. Kept small because the
 # in-kernel budget is shared across every game.
 REFINE_ROUNDS = 4
-# Warmup actions spent gathering evidence before the model is asked. Long enough
-# to see each action's effect, short enough to leave the budget for playing.
-WARMUP_ACTIONS = 60
 
 
 @dataclass(frozen=True)
@@ -101,6 +98,7 @@ class Transition:
     next_grid: np.ndarray
     level: int
     level_after: int
+    terminal: bool = False
 
     @property
     def changed(self) -> bool:
@@ -177,7 +175,13 @@ class GameEvidence:
             after = self.settled_key(t.next_grid, chrome)
             seen.add(before)
             row = out.setdefault(self.option(t), Counter())
-            if t.advanced:
+            if t.terminal:
+                # A death respawn lands on a board never seen under the masked
+                # key, so without this it reads as `novel` and a lethal click
+                # gets promoted to progress. The explorer treats terminal the
+                # same way, as evidence the last action was fatal.
+                row["fatal"] += 1
+            elif t.advanced:
                 row["advanced"] += 1
             elif after == before:
                 row["dead"] += 1
@@ -382,15 +386,23 @@ def first_fault(policy: Callable[..., Any], held_out: Sequence[Transition],
     """
     unproductive = evidence.unproductive_options()
     observed = evidence.outcomes()
+    memory: dict[str, Any] = {}
     for index, t in enumerate(held_out):
         try:
-            choice = policy(t.grid, list(evidence.available_actions), {})
+            choice = policy(t.grid, list(evidence.available_actions), memory)
         except Exception as exc:  # noqa: BLE001 — the fault we are looking for
             return f"on held-out board {index} it raised {type(exc).__name__}: {exc}"
         if choice is None:
             continue
         cell = as_click(choice)
-        option = ("click", *cell) if cell else ("act", choice)
+        action = as_action_id(choice)
+        if cell is None and action is None:
+            # Unhashable or malformed (a list, a dict, an array). Reported, not
+            # tested for membership: `("act", [1, 2]) in some_set` raises
+            # TypeError, and this runs inside the game loop, so it would abort
+            # the whole suite rather than fall back to the explorer.
+            return f"on held-out board {index} it returned {choice!r}, which is not an action or a click"
+        option = ("click", *cell) if cell is not None else ("act", action)
         if option in unproductive:
             row = observed.get(option, Counter())
             return (
@@ -399,15 +411,14 @@ def first_fault(policy: Callable[..., Any], held_out: Sequence[Transition],
                 f"{row['advanced']} level-ups, {row['novel']} new states, "
                 f"{row['cyclic']} repeats and {row['dead']} no-ops"
             )
-        if isinstance(choice, int) and choice not in evidence.available_actions:
-            return f"on held-out board {index} it returned action {choice}, which is not available"
+        if action is not None and action not in evidence.available_actions:
+            return f"on held-out board {index} it returned action {action}, which is not available"
     return ""
 
 
 def critique(policy: Callable[..., Any], evidence: GameEvidence, reason: str) -> str:
     """The feedback a rejected policy gets before its next attempt."""
-    split = max(1, len(evidence.transitions) // 2)
-    held_out = evidence.transitions[split:]
+    held_out = held_out_of(evidence)
     lines = [f"That policy was rejected: {reason}."]
     if fault := first_fault(policy, held_out, evidence):
         lines.append(f"Concretely, {fault}.")
@@ -430,6 +441,21 @@ def compile_policy(code: str) -> Callable[..., Any] | None:
     than taking the whole run down.
     """
     return compile_report(code)[0]
+
+
+def as_action_id(choice: Any) -> int | None:
+    """``choice`` as a simple action id, or None if it is not one.
+
+    `np.integer` counts. The system prompt tells the model to use numpy, so a
+    policy computing an action with numpy returns `np.int64`, which is not an
+    `int` — every such answer was being scored malformed *and* collapsing to a
+    single value in `distinct_choices`, so a board-sensitive policy was rejected
+    as a constant. `bool` is excluded because `isinstance(True, int)` would
+    otherwise make `True` a valid "action 1".
+    """
+    if isinstance(choice, bool):
+        return None
+    return int(choice) if isinstance(choice, (int, np.integer)) else None
 
 
 def as_click(choice: Any) -> tuple[int, int] | None:
@@ -487,9 +513,9 @@ def productivity(
     progressive = evidence.progressive_options()
     unproductive = evidence.unproductive_options()
     judged = productive = committed = 0
+    memory: dict[str, Any] = {}  # one dict for the pass, as the runner does
 
     for t in held_out:
-        memory: dict[str, Any] = {}
         try:
             choice = policy(t.grid, list(available), memory)
         except Exception:  # noqa: BLE001 — a throwing policy is a failed policy
@@ -500,11 +526,11 @@ def productivity(
 
         if (cell := as_click(choice)) is not None:
             option: tuple[Any, ...] = ("click", *cell)
-        elif isinstance(choice, int):
-            if choice not in available:
+        elif (action := as_action_id(choice)) is not None:
+            if action not in available:
                 judged += 1  # proposing an unavailable action is always wrong
                 continue
-            option = ("act", choice)
+            option = ("act", action)
         else:
             judged += 1  # a malformed answer is a wrong one
             continue
@@ -517,6 +543,12 @@ def productivity(
     return Productivity(judged, productive, committed, len(held_out))
 
 
+def held_out_of(evidence: GameEvidence) -> list[Transition]:
+    """The later half of the warmup, which no judgement is allowed to fit on."""
+    split = max(1, len(evidence.transitions) // 2)
+    return evidence.transitions[split:]
+
+
 def distinct_states(held_out: Sequence[Transition]) -> int:
     """How many genuinely different boards the policy is shown."""
     return len({t.grid.tobytes() for t in held_out})
@@ -527,13 +559,18 @@ def distinct_choices(
 ) -> int:
     """How many different answers the policy gives across those boards."""
     answers: set[Any] = set()
+    memory: dict[str, Any] = {}
     for t in held_out:
         try:
-            choice = policy(t.grid, list(evidence.available_actions), {})
+            choice = policy(t.grid, list(evidence.available_actions), memory)
         except Exception:  # noqa: BLE001 — a throwing policy has no answers
             return 0
-        if choice is not None:
-            answers.add(as_click(choice) or (choice if isinstance(choice, int) else None))
+        if choice is None:
+            continue
+        cell, action = as_click(choice), as_action_id(choice)
+        # `repr` for anything else: a malformed answer still varies or does not,
+        # and it must not silently collapse to one bucket.
+        answers.add(cell if cell is not None else (action if action is not None else repr(choice)))
     return len(answers)
 
 
@@ -549,8 +586,7 @@ def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, 
     """
     if not evidence.transitions:
         return False, "no warmup transitions to validate against"
-    split = max(1, len(evidence.transitions) // 2)
-    held_out = evidence.transitions[split:]
+    held_out = held_out_of(evidence)
     result = productivity(policy, held_out, evidence, evidence.available_actions)
 
 
@@ -579,39 +615,6 @@ def validate(policy: Callable[..., Any], evidence: GameEvidence) -> tuple[bool, 
     if result.judged and result.score < MIN_PRODUCTIVITY:
         return False, f"picks options the warmup disproved — {detail}"
     return True, detail
-
-
-def request_policy(
-    backend: Any, evidence: GameEvidence, *, max_tokens: int = 2048
-) -> tuple[Callable[..., Any] | None, str]:
-    """Ask the model for a policy and return ``(policy, reason)``.
-
-    ``backend`` is anything exposing ``chat(messages, max_tokens) -> str`` — the
-    same contract `arc_agi3_kaggle.HTTPChatBackend` satisfies, so this is
-    identical against a development vLLM and the in-kernel one.
-    """
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_prompt(evidence)},
-    ]
-    try:
-        reply = backend.chat(messages, max_tokens=max_tokens)
-    except Exception as exc:  # noqa: BLE001 — a dead model must not sink the run
-        return None, f"backend failed: {type(exc).__name__}: {exc}"
-    if not (reply or "").strip():
-        return None, (
-            "model returned empty content — a reasoning model will spend the "
-            "whole token budget thinking and finish with nothing; disable "
-            "thinking on the backend rather than raising max_tokens"
-        )
-    code = extract_code(reply)
-    if code is None:
-        return None, "model returned no python block"
-    policy = compile_policy(code)
-    if policy is None:
-        return None, "generated code did not compile to a callable policy"
-    usable, reason = validate(policy, evidence)
-    return (policy if usable else None), reason
 
 
 def refine_policy(

@@ -89,7 +89,16 @@ def install_codegen(backend: Any, warmup: int, report: dict[str, str], rounds: i
     def act(self: Any, observation: Any) -> Any:
         state = self.__dict__.setdefault(
             "_codegen",
-            {"evidence": None, "policy": None, "pending": {}, "steps": 0, "used": 0},
+            {
+                "evidence": None,
+                "policy": None,
+                "pending": {},
+                "steps": 0,
+                "used": 0,
+                # One dict for the whole game, matching what the prompt promises
+                # the policy about `memory` persisting across calls.
+                "mem": {},
+            },
         )
         obs = observation if isinstance(observation, dict) else {}
         frame = obs.get("frame") or []
@@ -115,26 +124,40 @@ def install_codegen(backend: Any, warmup: int, report: dict[str, str], rounds: i
                     next_grid=grid,
                     level=pending["level"],
                     level_after=level,
+                    terminal=bool(obs.get("terminal")),
                 )
             )
 
         state["steps"] += 1
         if state["steps"] == warmup and state["policy"] is None:
             started = time.monotonic()
-            policy, reason = cg.refine_policy(backend, evidence, rounds=rounds)
+            try:
+                policy, reason = cg.refine_policy(backend, evidence, rounds=rounds)
+            except Exception as exc:  # noqa: BLE001 — defence in depth: this runs
+                # inside the game loop, where `play` does not catch, so anything
+                # escaping here would abort the suite instead of falling back.
+                policy, reason = None, f"refinement raised {type(exc).__name__}: {exc}"
             state["policy"] = policy
             report["reason"] = f"{reason} ({time.monotonic() - started:.1f}s)"
 
         chosen = original(self, observation)  # the explorer always has an answer
         if state["policy"] is not None and grid is not None:
             try:
-                proposal = state["policy"](grid, list(available), state.setdefault("mem", {}))
+                proposal = state["policy"](grid, list(available), state["mem"])
             except Exception:  # noqa: BLE001 — a throwing policy just defers
                 proposal = None
             primitive = to_primitive(proposal, available)
             if primitive is not None:
                 chosen = to_arc(primitive)
                 state["used"] += 1
+                # `original` already recorded *its* choice as the last primitive,
+                # and on the next step the explorer attributes the observed
+                # effect to it via `_det.observe`. Left uncorrected it learns the
+                # policy's consequences against an action that never ran, which
+                # poisons `_learn_blocked`, `_learn_inert`, `_fatal` and
+                # `_induce_goal` — so every later step the policy declines falls
+                # back to a *degraded* explorer rather than the baseline one.
+                self._prev_prim = primitive
 
         report["policy_actions"] = str(state["used"])
         pending.update(
