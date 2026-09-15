@@ -1,0 +1,30 @@
+{
+  "//": "Who may run what, when SIA's coding agent works in this repository.",
+  "//docs": "sia permissions — the effective policy. sia permissions check '<cmd>' — why.",
+  "version": 1,
+
+  "//mode": "auto = only dangerous things ask | ask = only allowlisted things run | full = no gate",
+  "mode": "auto",
+
+  "permissions": {
+    "//": "Rules are literal, never patterns: Bash(.*) means a program named `.*`.",
+    "//allow": "Bash(awk:*) — awk with any arguments. Bash(pwd) — exactly pwd.",
+    "allow": [],
+    "//ask": "Stop and ask, even in auto mode.",
+    "ask": [],
+    "//deny": "Refuse outright. Checked first, so a deny always wins.",
+    "//deny2": "A deny with no / in it matches that filename anywhere, and also",
+    "//deny3": "covers `cat .env` — best effort against argv, not a sandbox.",
+    "deny": [
+      "Read(.env)",
+      "Read(**/*.pem)",
+      "Read(**/id_rsa*)",
+      "Read(credentials.json)"
+    ]
+  },
+
+  "dangerous": {
+    "//": "Groups that keep asking in auto mode. Also available: network, history_rewrite, clobber.",
+    "ask_for": ["destructive", "outside_repo"]
+  }
+}
