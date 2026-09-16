@@ -210,3 +210,53 @@ Three launch failures preceded a working one, none of them guessable:
 
 Shared-pod discipline: port 8011 rather than 8000, utilisation capped, and the
 other tenant's process (566MB, ~20% util) untouched throughout.
+
+## M1 result — the heuristic transfers, the simulator does not
+
+Run on lp85 L1 with Qwen3.8-27B (`sia-oss/bench/m1_codegen.py`, two requests:
+`is_goal`+`distance`, then `simulate`).
+
+| function | result |
+| --- | --- |
+| `is_goal` | **9/9 wins, 8/340 false positives** |
+| `distance` | **8 distinct values**, and it solves L1 in **5 real actions** |
+| `simulate` | **0/340 exact** |
+
+**The headline: the generated `distance`, plugged into M0's search in place of the
+privileged sprite-tag heuristic, clears lp85 L1 in the same 5 real actions**
+(`sia-oss/bench/m1_endtoend.py`). It takes 133 offline expansions against M0's 9,
+which costs nothing — the metric charges real actions only. On the measure that
+matters, a model-written heuristic matched a hand-written one with access to the
+game's internals.
+
+**Two of the three failures along the way were mine, not the model's**, and both
+are worth stating because each looked like a model limitation:
+
+1. **The prompt never showed a winning board.** It said "9 transitions reached
+   the solved board" and included only the start board in full. The model wrote
+   `# The solved board is the initial board` and hardcoded the start state as the
+   target — exactly inverted. Showing one win took `is_goal` from 0/9 to 9/9.
+2. **The state representation was non-stationary.** `objects()` stripped the
+   *per-frame* modal colour. Colour 4 is lp85's floor while unsolved, but a
+   solved board is mostly one 41x41 colour-4 region, which shifts the mode and
+   makes colour 4 appear as an object. The model inferred "41x41 colour-4 object
+   means solved" — correct from what it could see — then wrote a `distance` over
+   colour-4 objects that are absent from every unsolved state, returning infinity
+   everywhere. Pinning the background took `distance` from 1 distinct value to 8.
+
+**The real limitation is circularity, not capability.** Both functions hardcode
+the solved board they were shown: `is_goal` checks a 59-object subset, `distance`
+measures Manhattan distance to per-colour target positions read off that same
+board. The *shape* is exactly M0's winning heuristic and it demonstrably works —
+but computing distance-to-goal from a known goal is not yet search, because the
+goal configuration is what an unseen level withholds. The open problem is now
+narrow and stateable: **infer the target configuration from an unsolved board.**
+lp85 shows its goal markers on the board, so this is plausible; it was simply
+never asked for, because the prompt handed over a win instead.
+
+**`simulate` at 0% did not block any of this**, because expansion ran against a
+`deepcopy` of the real game. Whether that is available in the Kaggle kernel is
+now the highest-value open question: if the kernel's arcade is local, planning
+costs zero real actions there too and a learned simulator is unnecessary; if it
+is remote, `simulate` becomes load-bearing and 0% is fatal. **Check before
+building anything further on this.**
