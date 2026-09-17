@@ -260,3 +260,51 @@ now the highest-value open question: if the kernel's arcade is local, planning
 costs zero real actions there too and a learned simulator is unnecessary; if it
 is remote, `simulate` becomes load-bearing and 0% is fatal. **Check before
 building anything further on this.**
+
+## Does `deepcopy` work in the kernel? No — but a shadow might
+
+**Answered, and it was already in the codebase.** The `ForwardModel` docstring in
+`arc_agi3_kaggle.py` says it outright, and exists because of it:
+
+> there is no way to get one from the environment where it counts. The scored run
+> sets OPERATION_MODE=online against a gateway sidecar with no local
+> environments, so there is no game object to fork the way the local sk48 solver
+> forked one with deepcopy.
+
+Confirmed in `arc_agi3_build_notebook.py`. Two paths, and only one is scored:
+
+| path | mode | environments |
+| --- | --- | --- |
+| **Scored run** (Cell 5) | `OPERATION_MODE=online` -> `http://gateway:8001/` | `ENVIRONMENTS_DIR=` **empty** |
+| Mock / preflight | `OperationMode.OFFLINE` | `{COMP}/environment_files` |
+
+So M0's ceiling is not reachable by the route M0 used, and **`simulate` scoring
+0% in M1 is fatal rather than incidental**. This should have been established
+before M0 was scoped; a previous generation hit the same wall and wrote it down.
+
+**The shadow alternative.** The bundled `environment_files` *are* present in the
+kernel — the mock reads them. So an agent could instantiate its own copy of the
+game, replay its own actions into it to hold it in sync, and fork *that*. Two
+prerequisites, both now measured:
+
+- **Seed-independence**: 8/8 scoring games produce identical opening frames
+  across seeds 0/1/3/7, so a shadow starts where the gateway starts.
+- **Replay determinism** (`sia-oss/bench/shadow_sync.py`): 8/8 games replay a
+  300-action trajectory byte-identical into a fresh instance, lp85 including a
+  level transition.
+
+**Still unverified, and all three are load-bearing:**
+
+1. The gateway must serve the same build as the version-pinned bundle
+   (`environment_files/<game>/<hash>`). Untestable from outside the kernel.
+2. The scored games must be among the bundled 25. Local-25 RHAE tracking the
+   public score is evidence, not proof.
+3. Determinism was measured under random play, which clears almost nothing — only
+   one level transition is actually covered.
+
+**And a judgement call that is not the model's to make.** A shadow built from the
+shipped game source *reads* the dynamics rather than inferring them, which is a
+different thing from the world model this document set out to learn. The files
+ship with the competition and the top of the leaderboard is hard to explain
+without something in this family, but whether to use it is the submitter's call.
+Recorded here as measured and available, not adopted.
