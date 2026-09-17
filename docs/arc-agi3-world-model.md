@@ -308,3 +308,26 @@ different thing from the world model this document set out to learn. The files
 ship with the competition and the top of the leaderboard is hard to explain
 without something in this family, but whether to use it is the submitter's call.
 Recorded here as measured and available, not adopted.
+
+## How badly does the generated `simulate` fail?
+
+"0/340 exact" understates it. Exact-match on a ~38-object board would score a
+one-object slip the same as garbage, so the gap was measured directly:
+
+| measure | generated `simulate` | echo-the-input baseline |
+| --- | --- | --- |
+| exact next state | 0/340 | 0/340 |
+| objects correct | 2996/13123 = **22.8%** | **46.0%** |
+| **objects the action moved** | 8/7091 = **0.1%** | 0% by construction |
+
+It is **worse than doing nothing**: returning the input unchanged would get 46%
+of objects right, because most of the board is static scenery. The generated code
+scrambles that scenery *and* gets 0.1% of the ~21 objects-per-action that
+actually move. This is not a simulator that needs refining; it has not learned
+the dynamics at all.
+
+Together with `learnability.py` — no action in any of five games has a fixed
+effect, and new effects were still appearing after 400 sightings — **both routes
+to a forward model are currently failing**: a learned table does not converge,
+and a model-written rule is below a do-nothing baseline. Anything built on
+planning in the scored kernel is blocked behind this.
