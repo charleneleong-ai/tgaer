@@ -136,6 +136,22 @@ def background(arr: np.ndarray) -> int:
     return int(np.bincount(arr.ravel()).argmax())
 
 
+CLICK_ID = 6  # ACTION6 is the only action carrying coordinates
+
+
+def act(game: Any, action: Any) -> Any:
+    """One action: an int id for a simple action, or (row, col) for a click.
+
+    `GameAction` keys its value map by (int, subclass) tuples, so the member has
+    to be looked up by name — `GameAction(4)` raises despite ACTION4.value == 4.
+    """
+    if isinstance(action, tuple):
+        return click(game, action)
+    return game.perform_action(
+        ActionInput(id=GameAction[f"ACTION{int(action)}"], data={}), raw=True
+    )
+
+
 def objects(arr: np.ndarray, bg: int) -> list[tuple[int, ...]]:
     """The board as non-background components, the representation M1 hands over.
 
