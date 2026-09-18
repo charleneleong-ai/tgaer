@@ -399,3 +399,53 @@ like: the oracle plan is an optimal exploitation path, the explorer's trace is
 mostly exploration. What it establishes is a *hypothesis worth gating* — a
 run/momentum prior that keeps pressing what just worked — not a proven win.
 Two such changes were already rejected by the gate this session.
+## Why five games never clear
+
+The oracle clears cd82, ft09, sk48, vc33 and a second m0r0 level that the
+explorer never reaches. Comparing its winning plans against the explorer's
+candidate set splits them into two causes:
+
+**ft09 and vc33 — the winning button is not in the action set.** No click the
+explorer proposes reproduces the oracle's winning effect, and raising `k` from
+12 to 96 or dropping the field filter does not surface it. vc33's button is at
+col 60, outside the field box (1,0)-(63,51), so `in_field` excludes it. ft09's is
+in-field, 36px, non-background — so the centroid test (`arr[cr,cc] != v`, which
+drops hollow shapes) rejects it. Budget and search were never going to help.
+
+**cd82, sk48 and m0r0 — candidates are fine.** The oracle's first action
+(`act3`/`act1`/`act1`) is proposed and is played; they fail on the continuation.
+
+A caveat on method: the first version of this test asked whether the oracle's
+exact *cell* was proposed. That is too strict — the explorer clicks component
+centroids, so a different cell on the same button is equivalent. The numbers
+above come from an effect-equivalence test, which happens to agree.
+
+## Four changes measured, four rejected
+
+Every one came from a correct measurement, and the gate plus sweep refused all of
+them. Recorded so they are not re-attempted.
+
+| change | gate | why it failed |
+| --- | --- | --- |
+| `_inert` compared on the chrome-masked view | 0.1879 -> **0.1558** | lp85 -1 level, and it did nothing on sp80: the mask targets animation (>50% churn), while a step-budget HUD ticks on ~5-10% of steps |
+| reject an induced avatar outside the field box | 0.1879 -> **0.1852** | **sp80 itself got worse** (E 0.196 -> 0.130). Affordance chasing chrome was not pure waste |
+| repeat a productive primitive (`RUN_LIMIT`) | 0.1879 -> **0.1111** | six games regressed. "Productive" is not "progressing" |
+| clicks scan the whole grid | **PASS** 0.1879 -> 0.1896 | sweep **SPIKE**: only 2/5 values of `k` beat baseline |
+
+The last is the instructive one. vc33 clears at k=9/12/16/24 — the *mechanism* is
+stable — but at k=16/24 the extra candidates displace in-field ones and sc25
+stops scoring entirely (0.1229). k=12 is the lucky spot where vc33, sc25 and
+ar25 all survive. Appending the out-of-field candidates as a demoted tail instead
+fixes the displacement and loses the reach: nothing regresses, and vc33 is never
+tried (0.1879, no change).
+
+**`CLICK_TARGETS_K = 12` is a hard proposal budget, and reach trades against
+focus inside it at roughly one game for one game.** Do not retry this as a
+candidate-list tweak; it needs candidates scored by measured effect rather than
+salience rank, which is the Phase-2 filtering `click_targets` already promises.
+
+Two oracle-derived priors were also falsified: a run/momentum prior copied from
+the plans' 60-80% repeat rate (above), and — from the earlier M1 work — the idea
+that a table of action effects could be learned online at all. Across
+lp85/ls20/sp80/tu93/sc25 **no action has a single fixed effect**; each does 24-75
+distinct things and new ones were still appearing after 400 sightings.
