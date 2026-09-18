@@ -331,3 +331,71 @@ effect, and new effects were still appearing after 400 sightings — **both rout
 to a forward model are currently failing**: a learned table does not converge,
 and a model-written rule is below a do-nothing baseline. Anything built on
 planning in the scored kernel is blocked behind this.
+
+## The local simulator as an offline oracle (2026-09-18)
+
+Reframed: the forked game is a **research instrument we read locally**, not a
+shadow to ship. The live agent will not have the source; the point is to learn
+from the oracle what good play looks like and fold that back into the agent.
+
+**Uninformed offline planning reaches a level in 11 of 25 games** — no heuristic
+at all, just "did the level counter go up" (`sia-oss/bench/m0_suite.py`). Five of
+those the explorer has never cleared:
+
+| game | oracle levels | oracle actions | explorer | now E% | oracle E% |
+| --- | --- | --- | --- | --- | --- |
+| m0r0 | 2 | 38 | 1293 for 1 | 0.0026 | 16.43 |
+| tu93 | 3 | 47 | 1463 for 3 | 0.0455 | 14.86 |
+| cd82 | 1 | **5** | never cleared | 0.0000 | 5.48 |
+| ft09 | 1 | **4** | never cleared | 0.0000 | 5.48 |
+| sp80 | 1 | **4** | 192 | 0.1965 | 5.48 |
+| vc33 | 1 | **3** | never cleared | 0.0000 | 4.11 |
+| ls20 | 1 | 13 | 68 | 0.3738 | 4.11 |
+| sk48 | 1 | 14 | never cleared | 0.0000 | 3.19 |
+| s5i5 | 1 | 13 | 1708 | 0.0004 | 3.19 |
+| ar25 | 1 | 15 | 570 | 0.0098 | 3.19 |
+| lp85 | 1 | 5 | — | 4.0591 | 3.19 |
+
+Projected RHAE **2.75% against 0.1886%**. Read it as a *ceiling on what the
+explorer leaves behind*, not a target: it needs a forked game, and it is not
+uniformly better (lp85 scores worse because the oracle took 1 level where the
+explorer takes 4, and it failed outright on sc25).
+
+**Risks 2 and 3, both now closed.** The scored kernel plays the same 25 games —
+measured in commit mode, and `2/25` was the recorded ceiling; the "~110
+concurrent" in the notebook is thread slots, not distinct games. And a fresh
+instance replaying an identical action list stays **byte-identical through level
+transitions**: tu93 over 3 levels / 47 actions, m0r0 over 2 / 38, plus sp80,
+ls20, vc33.
+
+### What the oracle says about the architecture
+
+Winning plans are **short, narrow, and repetitive**: 3-18 actions, using 1-4 of
+the 2-8 available actions, and 60-80% repeats. ar25's win is essentially
+`act2 x10` then `act3 x5`.
+
+Mean consecutive-run length, oracle plan against what the explorer plays:
+
+| game | oracle | explorer |
+| --- | --- | --- |
+| ar25 | **7.50** | 1.42 |
+| s5i5 | **6.50** | 1.09 |
+| lp85 | **5.00** | 1.37 |
+| ls20 | **3.25** | 1.67 |
+| sp80 | 2.00 | 1.68 |
+| m0r0 | 1.88 | 1.79 |
+| sk48 | 1.75 | 1.38 |
+| tu93 | 1.29 | 1.27 |
+
+The explorer sits at 1.1-1.8 everywhere: it almost never repeats an action. That
+is structural, not incidental — `_choose` takes an *untested* primitive at the
+current state, and every repetition changes the state, which makes the other
+primitives untested again. A novelty-ordered frontier search cannot emit
+`act2 x10` except by accident.
+
+**Honest limits on that claim.** It is a strong gap on 4 of 8 games and absent on
+the other 4 (tu93 and m0r0 nearly match). And the comparison is not like for
+like: the oracle plan is an optimal exploitation path, the explorer's trace is
+mostly exploration. What it establishes is a *hypothesis worth gating* — a
+run/momentum prior that keeps pressing what just worked — not a proven win.
+Two such changes were already rejected by the gate this session.
