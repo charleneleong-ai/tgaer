@@ -107,6 +107,7 @@ def click_targets(
     k: int = 12,
     max_grid_frac: float = 0.25,
     box: Box | None = None,
+    salt: int = 0,
 ) -> list[tuple[int, int]]:
     """Salience-ranked click points: centroids of in-field, single-colour,
     non-background components, largest compact object first, capped at ``k``.
@@ -131,7 +132,10 @@ def click_targets(
             if arr[cr, cc] != v:  # centroid off the component → a hollow frame/ring
                 continue  # (e.g. the wall border), not a clickable object
             scored.append((len(c), cr, cc))
-    scored.sort(key=lambda t: t[0], reverse=True)
+    # Break equal-size ties by a hash of the cell and the run's salt: stable
+    # within a run, so one signature's proposals keep their order between
+    # visits, but different across runs, which is the variance the bench needs.
+    scored.sort(key=lambda t: (-t[0], hash((salt, t[1], t[2]))))
     return [(r, c) for _, r, c in scored[:k]]
 
 
@@ -145,7 +149,11 @@ def goal_targets(arr: np.ndarray, goal_values) -> list[tuple[int, int]]:
 
 
 def proposals(
-    arr: np.ndarray, available: list[int], goal_values=(), box: Box | None = None
+    arr: np.ndarray,
+    available: list[int],
+    goal_values=(),
+    box: Box | None = None,
+    salt: int = 0,
 ) -> list[Primitive]:
     """Ordered action primitives to try at the current frame. Clicks on learned
     goal values come first; then ACTION6 fans out into salience-ranked click
@@ -155,7 +163,9 @@ def proposals(
         prims.extend(("click", r, c) for r, c in goal_targets(arr, goal_values))
     for a in available:
         if a == COMPLEX_ACTION_ID:
-            prims.extend(("click", r, c) for r, c in click_targets(arr, box=box))
+            prims.extend(
+                ("click", r, c) for r, c in click_targets(arr, box=box, salt=salt)
+            )
         else:
             prims.append(("act", a))
     seen: set[Primitive] = set()
@@ -287,6 +297,13 @@ class ExplorerArcAgi3Agent(Agent):
     FIELD_SWITCH_MARGIN = 1.25
 
     def __init__(self, seed: int = 0, **_: Any) -> None:
+        # Breaks ties between candidates the policy ranks equally, so repeated
+        # runs differ and the bench gets a variance estimate. The wrapper hands
+        # over its own seeded generator; the policy itself is unchanged.
+        # Salts the tie-break between equal-size click candidates: stable
+        # within a run, different across seeds, so repeated runs give the bench
+        # a variance estimate. The policy and its salience order are unchanged.
+        self._salt = int(seed)
         self._graph = StateGraph()
         self._plan: deque[Primitive] = deque()
         self._prev_sig: Any | None = None
@@ -414,7 +431,7 @@ class ExplorerArcAgi3Agent(Agent):
         self._novelty.append(fresh)
         if self._last_branch == "affordance":
             self._walk_novelty.append(fresh)
-        prims = proposals(arr, available, self._goal_values, box=field)
+        prims = proposals(arr, available, self._goal_values, box=field, salt=self._salt)
         self._graph.register(sig, prims)
         if self._prev_sig is not None and self._prev_prim is not None:
             self._graph.connect(self._prev_sig, self._prev_prim, sig)

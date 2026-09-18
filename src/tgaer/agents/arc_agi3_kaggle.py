@@ -2455,6 +2455,7 @@ class ExplorerAgent(MyAgent):
         from tgaer.agents.arc_agi3_explorer import ExplorerArcAgi3Agent
 
         self._explorer = ExplorerArcAgi3Agent()
+        self._salted = False
 
     def _record_branch(self) -> None:
         """Count which policy chose this action.
@@ -2480,6 +2481,12 @@ class ExplorerAgent(MyAgent):
         # Asked even when the board is dead: this is the frame that teaches the
         # explorer which edge killed it, and it refuses to repeat a recorded
         # one. On a dead board the answer is then dropped for the restart.
+        # play() swaps in a seeded _rng *after* construction, so derive the
+        # explorer's tie-break salt here, once. Doing it per step would reorder
+        # a signature's proposals between visits and desynchronise the graph.
+        if not self._salted:
+            self._explorer._salt = self._rng.randrange(1 << 30)
+            self._salted = True
         arc_action = self._explorer.act(observation)
         self._record_branch()
 
