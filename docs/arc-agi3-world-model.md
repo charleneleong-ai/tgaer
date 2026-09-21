@@ -521,10 +521,30 @@ each oracle plan:
 | `affordance` | 27 | 30% | learned avatar and move lattice |
 | `_choose` | 117 | **15%** | static proposal order |
 
-`_choose` makes 68% of the decisions on the worst signal available. The two
-branches that learn within the episode are twice as good. That is the direction
-the labels actually point: widen in-episode effect learning, not a cold-start
-prior fitted offline.
+`_choose` makes 68% of the decisions on the worst signal available.
+
+**But the branch gap does not survive a control, and `probe` is not a lever.**
+`_probe_moves` is a bootstrap: it takes each of the four directional ids once to
+build the move lattice, guarded by a `_probed` set that never resets, so 28
+firings is 4 moves x 7 games with moves. It is already saturated — **145 of the
+147 winning simple actions use ids 1-4**, which it covers; only 3 use action 5.
+
+The 36% vs 15% comparison was confounded. `_choose` only fires early in the
+click-only games (ft09, lp85, s5i5, vc33), where click recall@1 is 0% anyway, so
+the branches never competed at the same positions or on the same games.
+Restricted to games where both occur:
+
+| branch | n | agrees |
+| --- | --- | --- |
+| `probe` | 28 | 36% |
+| `affordance` | 27 | 30% |
+| `_choose` | 92 | 20% |
+| — at idx 4-9 | 26 | **31%** |
+| — at idx 10+ | 66 | 15% |
+
+`_choose` at comparable early positions scores 31% against probe's 36% — inside
+noise at n=26. What varies is decision depth, not branch, and even that rests on
+two games dominating the deep bucket. **Do not retry "make probe fire more".**
 
 ## Four changes measured, four rejected
 
