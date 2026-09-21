@@ -491,6 +491,41 @@ of the 7 click-inert games (sk48 280, ar25 147; the other five emit none). Cutti
 them moves ar25's E% from 0.0098 to ~0.017, about **0.0003pp** — two orders of
 magnitude under the 0.030pp noise floor.
 
+## A learned static ranker does not transfer (2026-09-21)
+
+`oracle_rank.py` fits a ranker on the labelled decisions and scores it
+leave-one-game-out, because the scored kernel plays games the fit never saw.
+In-sample numbers are not reported: they answer the wrong question.
+
+**Leave-one-game-out recall@1: 31/167 (19%) -> 36/167 (22%).** All five gained
+decisions are lp85; every other game is identical to baseline. Split by action
+kind, the result is unambiguous:
+
+| decisions | baseline@1 | model@1 |
+| --- | --- | --- |
+| clicks (20) | 0% | 25% |
+| simple (147) | 21% | 21% |
+
+The ranker transfers a little on clicks and not at all on simple actions, which
+are 88% of the decisions. **This falsifies the static-prior programme**, and the
+reason is structural rather than a feature-engineering shortfall: the map from
+an action id to its meaning is game-specific, so no frame-derived feature can
+tell which id is right without having watched that id act in *this* game.
+
+The agent's own branch statistics agree, measured by teacher-forcing it along
+each oracle plan:
+
+| branch | fired | agrees with the oracle | what it uses |
+| --- | --- | --- | --- |
+| `probe` | 28 | **36%** | effects observed in this episode |
+| `affordance` | 27 | 30% | learned avatar and move lattice |
+| `_choose` | 117 | **15%** | static proposal order |
+
+`_choose` makes 68% of the decisions on the worst signal available. The two
+branches that learn within the episode are twice as good. That is the direction
+the labels actually point: widen in-episode effect learning, not a cold-start
+prior fitted offline.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
