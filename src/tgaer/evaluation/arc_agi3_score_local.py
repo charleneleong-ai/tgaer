@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import itertools
 import json
 import logging
 import os
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from statistics import median
@@ -383,6 +385,7 @@ def play(
     backend: Any | None,
     max_steps: int,
     seed: int | None = None,
+    on_step: Callable[[int, Any, Any], None] | None = None,
 ) -> dict[str, Any]:
     env = arc.make(game_id)
     if env is None:
@@ -411,6 +414,19 @@ def play(
         )
         agent._rng = random.Random(f"{seed}:{game_id}")
     agent.MAX_ACTIONS = max_steps
+    if on_step is not None:
+        # The agent owns its own loop, so the board as it saw it is only
+        # reachable at this seam. Bound per instance, not on the class, so
+        # concurrent games keep separate counters.
+        actor = getattr(agent, "_explorer", agent)
+        inner = actor.act
+        counter = itertools.count()
+
+        def observed(observation: Any) -> Any:
+            on_step(next(counter), observation, env)
+            return inner(observation)
+
+        actor.act = observed
 
     started = time.monotonic()
     agent.main()
