@@ -420,6 +420,77 @@ exact *cell* was proposed. That is too strict — the explorer clicks component
 centroids, so a different cell on the same button is equivalent. The numbers
 above come from an effect-equivalence test, which happens to agree.
 
+## The oracle's labels, and what they say about the agent (2026-09-21)
+
+`m0_suite.py` found winning plans and logged only their length. `oracle_labels.py`
+keeps them: for each of the 11 games the oracle solves, the board as it stood
+before every winning action — **172 labelled decisions**, committed under
+`sia-oss/bench/oracle/`. `oracle_recall.py` replays those boards through the
+agent's own `proposals` and reports where the winning move lands.
+
+Everything here is inferred from play — `available_actions`, the rendered grid,
+the level counter — so nothing learned from it is privileged the way `m0_plan`'s
+sprite-tag heuristic was.
+
+**Coverage is not the bottleneck. Ranking is.**
+
+| cutoff | recall |
+| --- | --- |
+| proposable at all | 167/172 (**97%**) |
+| @12 | 167/172 (97%) |
+| @4 | 150/172 (87%) |
+| @1 | 31/172 (**18%**) |
+
+The winning move is almost always on the list; the agent takes it first 18% of
+the time. That kills the candidate-generator program these labels were gathered
+to support, and redirects the question to selection.
+
+**The plans are simple actions, not clicks** — 147 of 172. Only ft09, vc33, s5i5
+and lp85 win by clicking. Read with care: `actions_for` lists simple ids before
+click cells and BFS returns the first shortest path it finds, so ties break
+toward simple actions. What survives the caveat is that a short simple-action
+solution *exists* — cd82 in 5, sp80 in 4 — for games the explorer never clears
+in 6000.
+
+Two corrections to "Why five games never clear" above:
+
+- **ft09's level-clearing click is proposable after all.** Of its four
+  decisions, steps 0 and 3 are covered and step 3 is the one that takes the
+  level; the two uncovered are intermediate setup clicks. The game still cannot
+  be completed, but not for the reason recorded there.
+- **vc33 is confirmed** at 0/3 — the col-60 button outside the field box
+  (1,0)-(63,51).
+
+The effect-equivalence caveat recorded above was re-derived here the hard way:
+exact-cell recall scores lp85 0/5 and s5i5 0/13, against 5/5 and 13/13 by effect.
+`oracle_recall.py` therefore defaults to `--effect`.
+
+## Click effect is predictable, but constant in most games (2026-09-21)
+
+`effect_purity.py` fork-probes a stride-3 lattice at six on-policy frames per
+game across all 25, and buckets each cell by `(colour, component-size)`.
+Excluding the background colour and singleton buckets, **1096/1112 buckets
+(99%) are unanimous** on whether clicking does anything. Mid-episode does not
+degrade it; su15 (80%) and ft09 (89%) are the only games below unanimous.
+
+So effect is learnable from frame features. It is also **uninformative in 14 of
+25 games**, because it is constant there:
+
+| regime | games |
+| --- | --- |
+| no click ever works | ar25, ls20, re86, sk48, tr87, tu93, wa30 |
+| every cell works | bp35, lf52, r11l, s5i5, sp80, tn36, vc33 |
+| informative | cd82, cn04, dc22, ft09, g50t, ka59, lp85, m0r0, sb26, sc25, su15 |
+
+vc33 sits in the all-effective set, so effect-ranking could never have surfaced
+its button — the earlier diagnosis of it as a ranking problem was wrong on
+mechanism as well as on cause.
+
+A lever that looked promising and is not: the explorer spends clicks in only 2
+of the 7 click-inert games (sk48 280, ar25 147; the other five emit none). Cutting
+them moves ar25's E% from 0.0098 to ~0.017, about **0.0003pp** — two orders of
+magnitude under the 0.030pp noise floor.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
