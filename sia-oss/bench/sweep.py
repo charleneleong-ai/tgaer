@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sweep one tuning constant and decide whether a gain is real or a lucky draw.
 
-The no-regression gate in `gate.py` catches bad trades but not luck: it passes
+The no-regression gate in `ab.py` catches bad trades but not luck: it passes
 a variant whose only effect is that one perturbation happened to land well. Three
 changes in one session passed it and were still wrong — a click-repeat limit
 reading 0.5089 at exactly 64 with plain baseline at 48 and 96, and a chrome mask

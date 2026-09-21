@@ -149,7 +149,8 @@ engineering substitutes for a model — which is a much better place to spend an
 LLM than the reactive policy of the closed line.
 
 **M2 — plan through it live, then gate.** Only here do real actions get spent.
-Promotion needs the usual discipline: `gate.py` (RHAE up, no game regresses)
+Promotion needs the usual discipline: `ab.py` (mean RHAE up by more than
+2 sd across seeds, no game loses seeds)
 **and** `sweep.py` on any constant introduced. Per-game non-regression is
 non-negotiable — see the three headline "wins" that evaporated under sweeps.
 
