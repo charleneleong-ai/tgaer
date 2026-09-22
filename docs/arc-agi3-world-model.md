@@ -547,6 +547,62 @@ Restricted to games where both occur:
 noise at n=26. What varies is decision depth, not branch, and even that rests on
 two games dominating the deep bucket. **Do not retry "make probe fire more".**
 
+## Every scoring game is efficiency-limited, not level-limited (2026-09-21)
+
+`evaluate.py` scores `env = min(cap, weighted)` where `cap = k(k+1)/2 /
+total_weight` for `k` levels cleared, and `weighted` sums `l * min(1.15,
+(baseline_l / our_actions_l)^2)`. Only actions inside a *completed* level are
+scored, so the budget burned after the last clear costs nothing — and the cap
+binds only once play matches the human baseline.
+
+On the shipping budget not one scoring game is anywhere near its cap:
+
+| game | levels | env% | cap% | capturing |
+| --- | --- | --- | --- | --- |
+| lp85 | 4/8 | 4.061% | 27.778% | 15% |
+| tu93 | 3/9 | 0.046% | 13.333% | 0.3% |
+| sp80 | 1/6 | 0.196% | 4.762% | 4% |
+| ls20 | 1/7 | 0.374% | 3.571% | 10% |
+| ar25 | 1/8 | 0.009% | 2.778% | 0.3% |
+| m0r0 | 1/6 | 0.001% | 4.762% | 0.02% |
+| s5i5 | 1/8 | 0.000% | 2.778% | ~0% |
+
+**Perfect efficiency at the levels already cleared is worth +2.203pp** — RHAE
+0.1875% to ~2.39%, without clearing a single new level, and against +0.73pp for
+winning all four games that never clear. The headroom is in playing what we
+already win faster.
+
+Per level, against the human baseline the metric actually scores:
+
+| game | lvl | ours | baseline | ratio |
+| --- | --- | --- | --- | --- |
+| **lp85** | **1** | **10** | 17 | **0.6x — beats baseline, hits the 1.15 cap** |
+| ls20 | 1 | 68 | 22 | 3.1x |
+| lp85 | 3 | 100 | 31 | 3.2x |
+| sp80 | 1 | 192 | 39 | 4.9x |
+| tu93 | 1 | 383 | 19 | 20.2x |
+| lp85 | 4 | 777 | 16 | 48.6x |
+| m0r0 | 1 | 2087 | 30 | 69.6x |
+| s5i5 | 1 | 1707 | 20 | 85.3x |
+
+lp85 L1 is the important row: the agent already plays *above* the human baseline
+when it finds the path quickly, so this is not a capability ceiling.
+
+**The waste has two mechanisms, and they need different fixes**
+(`action_budget.py`, per-level revisit rate inside scored levels):
+
+| game | level | actions | revisited | prims | mechanism |
+| --- | --- | --- | --- | --- | --- |
+| tu93 | 1-3 | 383/194/886 | 81-88% | 4 | cycling |
+| sp80 | 1 | 192 | 83% | 30 | cycling |
+| lp85 | 2-3 | 364/777 | 3-7% | 12-21 | broad undirected search |
+| ls20 | 1 | 68 | 3% | 4 | broad undirected search |
+
+tu93 and sp80 return to boards they have already seen for most of their actions —
+recoverable waste. lp85 and ls20 do not cycle at all: lp85's 777 actions on level
+3 reached ~730 *distinct* boards, so de-duplication would not touch it. One needs
+a cycle breaker, the other needs direction.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of

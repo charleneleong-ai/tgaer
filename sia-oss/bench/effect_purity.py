@@ -118,7 +118,7 @@ def run_game(
     samples: list[Sample] = []
     dropped = 0
 
-    def hook(step: int, observation: Any, env: Any) -> None:
+    def hook(step: int, observation: Any, env: Any, actor: Any) -> None:
         nonlocal dropped
         if step not in at or env is None or not observation:
             return

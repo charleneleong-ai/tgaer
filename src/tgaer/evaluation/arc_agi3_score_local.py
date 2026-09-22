@@ -385,7 +385,7 @@ def play(
     backend: Any | None,
     max_steps: int,
     seed: int | None = None,
-    on_step: Callable[[int, Any, Any], None] | None = None,
+    on_step: Callable[[int, Any, Any, Any], None] | None = None,
 ) -> dict[str, Any]:
     env = arc.make(game_id)
     if env is None:
@@ -423,8 +423,12 @@ def play(
         counter = itertools.count()
 
         def observed(observation: Any) -> Any:
-            on_step(next(counter), observation, env)
-            return inner(observation)
+            # After the choice, so an observer sees which branch was taken. The
+            # game is not stepped until the action is returned, so `env` still
+            # holds the board this observation describes.
+            action = inner(observation)
+            on_step(next(counter), observation, env, actor)
+            return action
 
         actor.act = observed
 
