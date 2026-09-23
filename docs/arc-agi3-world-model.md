@@ -665,6 +665,27 @@ which makes that effective click less likely, which keeps it demoted.
 `_live_colours` offers recovery only after a success the demotion prevents. The
 information is real; acting on it greedily is self-confirming.
 
+**And the prize was never there to win.** Measured before building the
+non-greedy variant, purely observationally: replay the unchanged agent, note
+from consecutive frames whether each action changed the board, and count the
+clicks a *perfect* in-episode colour filter would have skipped.
+
+| game | actions | clicks | dead | avoidable | % of actions |
+| --- | --- | --- | --- | --- | --- |
+| lp85 | 2501 | 2500 | 138 | 125 | 5.0% |
+| ar25 | 2501 | 738 | 715 | 201 | 8.0% |
+| sp80, ls20, m0r0, s5i5 | 2501 | — | — | **0** | 0.0% |
+
+A perfect filter is worth **+0.0038pp**, sixteen times under the noise floor. No
+implementation of this idea can pay, greedy or otherwise.
+
+The reason is that `click_targets` already solves it. Only **1.4%** of lp85's
+board cells do anything, but **94.5%** of the clicks the agent actually issues
+do (2500 clicks, 138 dead), because salience ranking proposes component
+centroids rather than arbitrary cells. The 98.6%-dead board was never the
+agent's problem — it never clicks most of the board. This is the
+"coverage is not the bottleneck" result from a different direction.
+
 Two instrument bugs fell out of running this, both in tooling written the same
 day. `ab.py` reported "no game changed how often it scores" while lp85 went from
 4 levels to 1 — the port from `gate.py` kept per-game frequency and dropped
