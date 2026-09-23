@@ -633,6 +633,46 @@ routing fix is not. With `rotate` at 0% and `untested` dominating, the only
 general saving left is trying candidates in a better order — which is the
 recall@1 lever again, at 18%. Efficiency and selection are the same problem.
 
+## In-episode colour demotion: measured, swept, rejected (2026-09-23)
+
+`_inert` already demotes a primitive that leaves the board untouched, but it
+keys on the *cell*, so every dead cell is relearned separately. Colour carries
+across the board, and the evidence said it should: pooled over six on-policy
+frames, 43/62 colours are all-live or all-dead, and in lp85 **9 of 11 colours
+never do anything**. lp85 is the biggest scorer (4.061% against a 27.778% cap),
+so a working filter there was worth ~+0.39pp at x4.
+
+It does not work at any threshold.
+
+| DEAD_COLOUR_TRIES | RHAE | levels |
+| --- | --- | --- |
+| baseline | **0.1868%** | **8** |
+| 1 | 0.1403% | 6 |
+| 2 | 0.1400% | 6 |
+| 3 | 0.1397% | 6 |
+| 5 | 0.1393% | 6 |
+| 8 | 0.1901% | 8 |
+| 12 | 0.1898% | 8 |
+
+**When the mechanism fires it costs two levels; when it does not fire it is
+baseline.** At 8 and 12 the threshold is high enough that demotion rarely
+triggers, and the +0.003pp there is a fifth of the noise floor. There is no
+value at which it helps.
+
+The failure is an exploration trap, not a bad threshold. A colour that reaches
+its dead-click threshold *before* its first effective click is sorted last,
+which makes that effective click less likely, which keeps it demoted.
+`_live_colours` offers recovery only after a success the demotion prevents. The
+information is real; acting on it greedily is self-confirming.
+
+Two instrument bugs fell out of running this, both in tooling written the same
+day. `ab.py` reported "no game changed how often it scores" while lp85 went from
+4 levels to 1 — the port from `gate.py` kept per-game frequency and dropped
+per-game depth. And `sweep.py` counted any delta above 1e-9 as a gain, so it
+read the two inert points as "2/6 values gain"; judged against the 0.030pp noise
+floor the same sweep is NONE. Both are fixed, and both were found by running the
+instrument on a change already known to be bad — worth repeating deliberately.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
