@@ -31,12 +31,21 @@ ab = _load("ab")
 sweep = _load("sweep")
 
 
-def _arm(rhaes: list[float], games: dict[str, int], seeds: int = 5) -> list[dict]:
-    """One arm: per-seed runs where ``games`` says how many seeds each scores in."""
+def _arm(
+    rhaes: list[float],
+    games: dict[str, int],
+    seeds: int = 5,
+    depth: dict[str, int] | None = None,
+) -> list[dict]:
+    """One arm: per-seed runs where ``games`` says how many seeds each scores in.
+
+    ``depth`` overrides how many levels a scoring seed clears (default 1).
+    """
+    deep = depth or {}
     return [
         {
             "rhae": rhaes[s],
-            "levels": {g: (1 if s < n else 0) for g, n in games.items()},
+            "levels": {g: (deep.get(g, 1) if s < n else 0) for g, n in games.items()},
         }
         for s in range(seeds)
     ]
@@ -80,6 +89,15 @@ class TestVerdict:
     def test_an_identical_arm_does_not_pass(self) -> None:
         passed, regressions, _ = ab.verdict(cand=BASE, base=BASE)
         assert not passed and not regressions
+
+    def test_losing_depth_fails_even_though_the_game_still_scores(self) -> None:
+        """The real colour-demotion run: lp85 went 4 levels to 1 while still
+        scoring in 5/5 seeds, so scoring frequency alone reads it as unchanged."""
+        base = _arm(FLAT, ALWAYS, depth={"lp85": 4})
+        cand = _arm([x + 0.5 for x in FLAT], ALWAYS, depth={"lp85": 1})
+        passed, regressions, _ = ab.verdict(cand=cand, base=base)
+        assert not passed
+        assert any("lp85" in r and "levels" in r for r in regressions)
 
     def test_a_game_missing_from_every_candidate_run_is_a_regression(self) -> None:
         """A crashed game yields no scorecard row; that must not read as 'equal'."""

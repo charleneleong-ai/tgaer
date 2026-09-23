@@ -38,6 +38,10 @@ RHAE = re.compile(r"RHAE=([0-9.]+)%")
 # A game must lose this many seeds' worth of scoring before it counts as a
 # regression: one flip is the noise this tool exists to see through.
 MIN_FREQ_DROP = 2
+# A game must lose this much of its mean level count before it counts as a
+# regression. Frequency alone is blind to depth: the colour-demotion change took
+# lp85 from 4 levels to 1 while still scoring in 5/5 seeds.
+MIN_LEVEL_DROP = 1.0
 
 app = typer.Typer(add_completion=False)
 
@@ -107,14 +111,27 @@ def score_frequency(runs: list[dict]) -> dict[str, int]:
     return freq
 
 
+def mean_levels(runs: list[dict]) -> dict[str, float]:
+    """Mean levels cleared per game across seeds."""
+    total: dict[str, int] = {}
+    for run in runs:
+        for game, n in run["levels"].items():
+            total[game] = total.get(game, 0) + n
+    return {g: n / len(runs) for g, n in total.items()} if runs else {}
+
+
 def verdict(
-    base: list[dict], cand: list[dict], min_freq_drop: int = MIN_FREQ_DROP
+    base: list[dict],
+    cand: list[dict],
+    min_freq_drop: int = MIN_FREQ_DROP,
+    min_level_drop: float = MIN_LEVEL_DROP,
 ) -> tuple[bool, list[str], list[str]]:
     """``(passed, regressions, improvements)`` for a candidate against a baseline.
 
     Passes only when the mean RHAE gain clears two pooled standard deviations
-    *and* no game scores in materially fewer seeds. Either alone has promoted a
-    change that did not reproduce.
+    *and* no game scores in materially fewer seeds *and* no game loses depth.
+    Frequency alone is blind to depth — a change took lp85 from 4 levels to 1
+    while still scoring in every seed.
     """
     b = [r["rhae"] for r in base]
     c = [r["rhae"] for r in cand]
@@ -122,17 +139,26 @@ def verdict(
     sd = pooled_sd(b, c)
 
     bf, cf = score_frequency(base), score_frequency(cand)
+    bl, cl = mean_levels(base), mean_levels(cand)
+    gone = set(bf) - {g for r in cand for g in r["levels"]}
     regressions: list[str] = []
     improvements: list[str] = []
-    for game in sorted(set(bf) | set(cf)):
-        was, now = bf.get(game, 0), cf.get(game, 0)
-        if now - was <= -min_freq_drop:
-            regressions.append(f"{game}: scores in {was} seeds -> {now}")
-        elif now - was >= min_freq_drop:
-            improvements.append(f"{game}: scores in {was} seeds -> {now}")
-    for game in sorted(set(bf) - {g for r in cand for g in r["levels"]}):
-        # A crashed game yields no scorecard row; that must not read as equal.
-        regressions.append(f"{game}: missing from the candidate scorecards")
+    # One line per game, frequency first: a game that stopped scoring at all has
+    # also lost depth, and saying both twice reads as two separate failures.
+    for game in sorted(set(bf) | set(cf) | set(bl) | set(cl)):
+        was_f, now_f = bf.get(game, 0), cf.get(game, 0)
+        was_l, now_l = bl.get(game, 0.0), cl.get(game, 0.0)
+        if game in gone:
+            # A crashed game yields no scorecard row; not the same as equal.
+            regressions.append(f"{game}: missing from the candidate scorecards")
+        elif now_f - was_f <= -min_freq_drop:
+            regressions.append(f"{game}: scores in {was_f} seeds -> {now_f}")
+        elif was_l - now_l >= min_level_drop:
+            regressions.append(f"{game}: {was_l:.1f} levels -> {now_l:.1f}")
+        elif now_f - was_f >= min_freq_drop:
+            improvements.append(f"{game}: scores in {was_f} seeds -> {now_f}")
+        elif now_l - was_l >= min_level_drop:
+            improvements.append(f"{game}: {was_l:.1f} levels -> {now_l:.1f}")
 
     beats_noise = delta > 2 * sd if sd else delta > 0
     return (beats_noise and not regressions), regressions, improvements
