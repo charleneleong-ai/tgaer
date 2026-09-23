@@ -35,7 +35,11 @@ arc_runner._load_local(
     str(REPO / "src" / "tgaer" / "agents" / "arc_agi3_explorer.py"),
 )
 
-from tgaer.agents.arc_agi3_explorer import field_box, frame_signature  # noqa: E402
+from tgaer.agents.arc_agi3_explorer import (  # noqa: E402
+    ExplorerArcAgi3Agent,
+    field_box,
+    frame_signature,
+)
 from tgaer.evaluation.arc_agi3_score_local import (  # noqa: E402
     OperationMode,
     arc_agi,
@@ -61,7 +65,17 @@ def oracle_cost(game_id: str) -> tuple[int, int]:
 
 
 def account(game_id: str, max_steps: int, seed: int) -> dict[str, Any]:
-    """Play one game, recording the branch and board identity of every action."""
+    """Play one game, recording the branch and board identity of every action.
+
+    `_choose` is split into its four sub-paths, because a high revisit rate does
+    not by itself mean cycling: a board with several untested primitives is
+    revisited once per primitive, which is correct breadth-first play.
+
+      untested  a primitive never tried at this board
+      plan      continuing a route already planned to a frontier
+      frontier  starting a new route to the nearest board with something untested
+      rotate    nothing untested and no frontier reachable — the stall pathology
+    """
     arc = arc_agi.Arcade(
         operation_mode=OperationMode.OFFLINE,
         environments_dir=str(REPO / "environment_files"),
@@ -77,6 +91,24 @@ def account(game_id: str, max_steps: int, seed: int) -> dict[str, Any]:
     seen: set[Any] = set()
     revisits = 0
     stalls = [0]
+    paths: Counter[str] = Counter()
+
+    original = ExplorerArcAgi3Agent._choose
+
+    def traced_choose(self: Any, sig: Any, prims: list[Any]) -> Any:
+        had_plan = bool(self._plan and self._plan[0] in set(prims))
+        untested = len(self._graph.untested_at(sig))
+        before = self._stalls
+        out = original(self, sig, prims)
+        if had_plan:
+            paths["plan"] += 1
+        elif untested:
+            paths["untested"] += 1
+        elif self._stalls > before:
+            paths["rotate"] += 1
+        else:
+            paths["frontier"] += 1
+        return out
 
     def hook(step: int, observation: Any, env: Any, actor: Any) -> None:
         nonlocal revisits
@@ -99,15 +131,19 @@ def account(game_id: str, max_steps: int, seed: int) -> dict[str, Any]:
                 lvl_revisits[level] += 1
             here.add(sig)
 
-    row = play(
-        load_agent_class(None, "explorer"),
-        game_id,
-        arc,
-        None,
-        max_steps,
-        seed=seed,
-        on_step=hook,
-    )
+    ExplorerArcAgi3Agent._choose = traced_choose
+    try:
+        row = play(
+            load_agent_class(None, "explorer"),
+            game_id,
+            arc,
+            None,
+            max_steps,
+            seed=seed,
+            on_step=hook,
+        )
+    finally:
+        ExplorerArcAgi3Agent._choose = original
     total = sum(branches.values())
     return {
         "levels": int(row.get("levels_completed", 0)),
@@ -120,6 +156,7 @@ def account(game_id: str, max_steps: int, seed: int) -> dict[str, Any]:
         "stalls": stalls[0],
         "lvl_revisit": {lv: lvl_revisits[lv] / n for lv, n in per_level.items() if n},
         "lvl_prims": {lv: len(p) for lv, p in lvl_prims.items()},
+        "choose_paths": paths,
     }
 
 
@@ -154,6 +191,15 @@ def main(
             r["stalls"],
         )
         logger.info("        branches {}", dict(r["branches"].most_common()))
+        cp = r["choose_paths"]
+        n = sum(cp.values()) or 1
+        logger.info(
+            "        _choose {}",
+            "  ".join(
+                f"{k} {cp[k]} ({cp[k] / n:.0%})"
+                for k in ("untested", "plan", "frontier", "rotate")
+            ),
+        )
         for lv in sorted(r["per_level"]):
             tag = "stuck" if lv >= r["levels"] else "     "
             logger.info(

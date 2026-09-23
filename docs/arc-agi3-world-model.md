@@ -598,10 +598,40 @@ when it finds the path quickly, so this is not a capability ceiling.
 | lp85 | 2-3 | 364/777 | 3-7% | 12-21 | broad undirected search |
 | ls20 | 1 | 68 | 3% | 4 | broad undirected search |
 
-tu93 and sp80 return to boards they have already seen for most of their actions —
-recoverable waste. lp85 and ls20 do not cycle at all: lp85's 777 actions on level
-3 reached ~730 *distinct* boards, so de-duplication would not touch it. One needs
-a cycle breaker, the other needs direction.
+tu93 and sp80 return to boards they have already seen for most of their actions.
+lp85 and ls20 do not: lp85's 777 actions on level 3 reached ~730 *distinct*
+boards.
+
+**But a high revisit rate is not cycling, and there is no cycle breaker to
+build.** Splitting `_choose` into its four sub-paths shows `rotate` — the stall
+pathology — at **0% in every one of these games**:
+
+| game | untested | plan | frontier | rotate |
+| --- | --- | --- | --- | --- |
+| sp80 | 98% | 0% | 2% | **0%** |
+| lp85 | 99% | 0% | 1% | **0%** |
+| ls20 | 100% | 0% | 0% | **0%** |
+| tu93 | 54% | 34% | 13% | **0%** |
+
+A board holding several untested primitives is revisited once per primitive,
+which is correct breadth-first play — sp80 revisits 83% of boards *and* takes a
+never-tried action 98% of the time. Only tu93 carries real overhead, 47% of its
+actions routing back to frontiers, and removing all of it is worth **+0.0047pp**,
+well under the 0.0625pp noise floor. **Do not build a cycle breaker.**
+
+What the speed ladder is worth, applied to every game at once:
+
+| speedup | RHAE | delta |
+| --- | --- | --- |
+| x1.9 | 0.3432% | +0.156pp |
+| x4 | 0.8571% | +0.670pp |
+| x10 | 1.3280% | +1.141pp |
+| perfect | 2.3905% | +2.203pp |
+
+So a *uniform* 2x is measurable at 2.5x the noise floor, but a single game's
+routing fix is not. With `rotate` at 0% and `untested` dominating, the only
+general saving left is trying candidates in a better order — which is the
+recall@1 lever again, at 18%. Efficiency and selection are the same problem.
 
 ## Four changes measured, four rejected
 
