@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sweep one tuning constant and decide whether a gain is real or a lucky draw.
 
-The no-regression gate in `gate.py` catches bad trades but not luck: it passes
+The no-regression gate in `ab.py` catches bad trades but not luck: it passes
 a variant whose only effect is that one perturbation happened to land well. Three
 changes in one session passed it and were still wrong — a click-repeat limit
 reading 0.5089 at exactly 64 with plain baseline at 48 and 96, and a chrome mask
@@ -36,6 +36,11 @@ EXPLORER = REPO / "src/tgaer/agents/arc_agi3_explorer.py"
 # A gain appearing at fewer than this fraction of swept values is a spike, not a
 # trend, no matter how large it is.
 STABLE_FRACTION = 0.5
+# Seed-to-seed spread of the unchanged agent (`ab.py`). A sweep point inside this
+# of baseline is unchanged, not a gain: the DEAD_COLOUR_TRIES sweep read "2/6
+# values gain" for two points sitting +0.0033pp away, where the mechanism was
+# simply never firing.
+NOISE_PP = 0.030
 
 app = typer.Typer(add_completion=False)
 
@@ -72,9 +77,13 @@ def stability_verdict(
     in a test: the click-repeat limit gained at 1 of 6 values and the chrome
     mask at 2 of 11, and both were lucky rollouts rather than mechanisms.
     """
-    better = [r for r in rows if r[1] > baseline + 1e-9]
+    better = [r for r in rows if r[1] > baseline + NOISE_PP]
+    inert = [r for r in rows if abs(r[1] - baseline) <= NOISE_PP]
     if not better:
-        return "NONE", "no gain anywhere. Drop it."
+        return "NONE", (
+            f"no value gains more than the {NOISE_PP:.3f}pp noise floor "
+            f"({len(inert)}/{len(rows)} are inside it). Drop it."
+        )
     if len(better) / len(rows) < STABLE_FRACTION:
         best = max(better, key=lambda r: r[1])
         return "SPIKE", (
@@ -111,9 +120,9 @@ def main(
     finally:
         EXPLORER.write_text(original)  # never leave a swept file behind
 
-    unchanged = [r for r in rows if abs(r[1] - baseline) <= 1e-9]
+    unchanged = [r for r in rows if abs(r[1] - baseline) <= 1e-9]  # exactly inert
     verdict, explanation = stability_verdict(rows, baseline)
-    gained = sum(1 for r in rows if r[1] > baseline + 1e-9)
+    gained = sum(1 for r in rows if r[1] > baseline + NOISE_PP)
     logger.info("{}: {}/{} values beat {:.4f}%", constant, gained, len(rows), baseline)
     if unchanged:
         logger.warning(

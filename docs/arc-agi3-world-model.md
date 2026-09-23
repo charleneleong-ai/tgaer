@@ -149,7 +149,8 @@ engineering substitutes for a model — which is a much better place to spend an
 LLM than the reactive policy of the closed line.
 
 **M2 — plan through it live, then gate.** Only here do real actions get spent.
-Promotion needs the usual discipline: `gate.py` (RHAE up, no game regresses)
+Promotion needs the usual discipline: `ab.py` (mean RHAE up by more than
+2 sd across seeds, no game loses seeds)
 **and** `sweep.py` on any constant introduced. Per-game non-regression is
 non-negotiable — see the three headline "wins" that evaporated under sweeps.
 
@@ -419,6 +420,279 @@ A caveat on method: the first version of this test asked whether the oracle's
 exact *cell* was proposed. That is too strict — the explorer clicks component
 centroids, so a different cell on the same button is equivalent. The numbers
 above come from an effect-equivalence test, which happens to agree.
+
+## The oracle's labels, and what they say about the agent (2026-09-21)
+
+`m0_suite.py` found winning plans and logged only their length. `oracle_labels.py`
+keeps them: for each of the 11 games the oracle solves, the board as it stood
+before every winning action — **172 labelled decisions**, committed under
+`sia-oss/bench/oracle/`. `oracle_recall.py` replays those boards through the
+agent's own `proposals` and reports where the winning move lands.
+
+Everything here is inferred from play — `available_actions`, the rendered grid,
+the level counter — so nothing learned from it is privileged the way `m0_plan`'s
+sprite-tag heuristic was.
+
+**Coverage is not the bottleneck. Ranking is.**
+
+| cutoff | recall |
+| --- | --- |
+| proposable at all | 167/172 (**97%**) |
+| @12 | 167/172 (97%) |
+| @4 | 150/172 (87%) |
+| @1 | 31/172 (**18%**) |
+
+The winning move is almost always on the list; the agent takes it first 18% of
+the time. That kills the candidate-generator program these labels were gathered
+to support, and redirects the question to selection.
+
+**The plans are simple actions, not clicks** — 147 of 172. Only ft09, vc33, s5i5
+and lp85 win by clicking. Read with care: `actions_for` lists simple ids before
+click cells and BFS returns the first shortest path it finds, so ties break
+toward simple actions. What survives the caveat is that a short simple-action
+solution *exists* — cd82 in 5, sp80 in 4 — for games the explorer never clears
+in 6000.
+
+Two corrections to "Why five games never clear" above:
+
+- **ft09's level-clearing click is proposable after all.** Of its four
+  decisions, steps 0 and 3 are covered and step 3 is the one that takes the
+  level; the two uncovered are intermediate setup clicks. The game still cannot
+  be completed, but not for the reason recorded there.
+- **vc33 is confirmed** at 0/3 — the col-60 button outside the field box
+  (1,0)-(63,51).
+
+The effect-equivalence caveat recorded above was re-derived here the hard way:
+exact-cell recall scores lp85 0/5 and s5i5 0/13, against 5/5 and 13/13 by effect.
+`oracle_recall.py` therefore defaults to `--effect`.
+
+## Click effect is predictable, but constant in most games (2026-09-21)
+
+`effect_purity.py` fork-probes a stride-3 lattice at six on-policy frames per
+game across all 25, and buckets each cell by `(colour, component-size)`.
+Excluding the background colour and singleton buckets, **1096/1112 buckets
+(99%) are unanimous** on whether clicking does anything. Mid-episode does not
+degrade it; su15 (80%) and ft09 (89%) are the only games below unanimous.
+
+So effect is learnable from frame features. It is also **uninformative in 14 of
+25 games**, because it is constant there:
+
+| regime | games |
+| --- | --- |
+| no click ever works | ar25, ls20, re86, sk48, tr87, tu93, wa30 |
+| every cell works | bp35, lf52, r11l, s5i5, sp80, tn36, vc33 |
+| informative | cd82, cn04, dc22, ft09, g50t, ka59, lp85, m0r0, sb26, sc25, su15 |
+
+vc33 sits in the all-effective set, so effect-ranking could never have surfaced
+its button — the earlier diagnosis of it as a ranking problem was wrong on
+mechanism as well as on cause.
+
+A lever that looked promising and is not: the explorer spends clicks in only 2
+of the 7 click-inert games (sk48 280, ar25 147; the other five emit none). Cutting
+them moves ar25's E% from 0.0098 to ~0.017, about **0.0003pp** — two orders of
+magnitude under the 0.030pp noise floor.
+
+## A learned static ranker does not transfer (2026-09-21)
+
+`oracle_rank.py` fits a ranker on the labelled decisions and scores it
+leave-one-game-out, because the scored kernel plays games the fit never saw.
+In-sample numbers are not reported: they answer the wrong question.
+
+**Leave-one-game-out recall@1: 31/167 (19%) -> 36/167 (22%).** All five gained
+decisions are lp85; every other game is identical to baseline. Split by action
+kind, the result is unambiguous:
+
+| decisions | baseline@1 | model@1 |
+| --- | --- | --- |
+| clicks (20) | 0% | 25% |
+| simple (147) | 21% | 21% |
+
+The ranker transfers a little on clicks and not at all on simple actions, which
+are 88% of the decisions. **This falsifies the static-prior programme**, and the
+reason is structural rather than a feature-engineering shortfall: the map from
+an action id to its meaning is game-specific, so no frame-derived feature can
+tell which id is right without having watched that id act in *this* game.
+
+The agent's own branch statistics agree, measured by teacher-forcing it along
+each oracle plan:
+
+| branch | fired | agrees with the oracle | what it uses |
+| --- | --- | --- | --- |
+| `probe` | 28 | **36%** | effects observed in this episode |
+| `affordance` | 27 | 30% | learned avatar and move lattice |
+| `_choose` | 117 | **15%** | static proposal order |
+
+`_choose` makes 68% of the decisions on the worst signal available.
+
+**But the branch gap does not survive a control, and `probe` is not a lever.**
+`_probe_moves` is a bootstrap: it takes each of the four directional ids once to
+build the move lattice, guarded by a `_probed` set that never resets, so 28
+firings is 4 moves x 7 games with moves. It is already saturated — **145 of the
+147 winning simple actions use ids 1-4**, which it covers; only 3 use action 5.
+
+The 36% vs 15% comparison was confounded. `_choose` only fires early in the
+click-only games (ft09, lp85, s5i5, vc33), where click recall@1 is 0% anyway, so
+the branches never competed at the same positions or on the same games.
+Restricted to games where both occur:
+
+| branch | n | agrees |
+| --- | --- | --- |
+| `probe` | 28 | 36% |
+| `affordance` | 27 | 30% |
+| `_choose` | 92 | 20% |
+| — at idx 4-9 | 26 | **31%** |
+| — at idx 10+ | 66 | 15% |
+
+`_choose` at comparable early positions scores 31% against probe's 36% — inside
+noise at n=26. What varies is decision depth, not branch, and even that rests on
+two games dominating the deep bucket. **Do not retry "make probe fire more".**
+
+## Every scoring game is efficiency-limited, not level-limited (2026-09-21)
+
+`evaluate.py` scores `env = min(cap, weighted)` where `cap = k(k+1)/2 /
+total_weight` for `k` levels cleared, and `weighted` sums `l * min(1.15,
+(baseline_l / our_actions_l)^2)`. Only actions inside a *completed* level are
+scored, so the budget burned after the last clear costs nothing — and the cap
+binds only once play matches the human baseline.
+
+On the shipping budget not one scoring game is anywhere near its cap:
+
+| game | levels | env% | cap% | capturing |
+| --- | --- | --- | --- | --- |
+| lp85 | 4/8 | 4.061% | 27.778% | 15% |
+| tu93 | 3/9 | 0.046% | 13.333% | 0.3% |
+| sp80 | 1/6 | 0.196% | 4.762% | 4% |
+| ls20 | 1/7 | 0.374% | 3.571% | 10% |
+| ar25 | 1/8 | 0.009% | 2.778% | 0.3% |
+| m0r0 | 1/6 | 0.001% | 4.762% | 0.02% |
+| s5i5 | 1/8 | 0.000% | 2.778% | ~0% |
+
+**Perfect efficiency at the levels already cleared is worth +2.203pp** — RHAE
+0.1875% to ~2.39%, without clearing a single new level, and against +0.73pp for
+winning all four games that never clear. The headroom is in playing what we
+already win faster.
+
+Per level, against the human baseline the metric actually scores:
+
+| game | lvl | ours | baseline | ratio |
+| --- | --- | --- | --- | --- |
+| **lp85** | **1** | **10** | 17 | **0.6x — beats baseline, hits the 1.15 cap** |
+| ls20 | 1 | 68 | 22 | 3.1x |
+| lp85 | 3 | 100 | 31 | 3.2x |
+| sp80 | 1 | 192 | 39 | 4.9x |
+| tu93 | 1 | 383 | 19 | 20.2x |
+| lp85 | 4 | 777 | 16 | 48.6x |
+| m0r0 | 1 | 2087 | 30 | 69.6x |
+| s5i5 | 1 | 1707 | 20 | 85.3x |
+
+lp85 L1 is the important row: the agent already plays *above* the human baseline
+when it finds the path quickly, so this is not a capability ceiling.
+
+**The waste has two mechanisms, and they need different fixes**
+(`action_budget.py`, per-level revisit rate inside scored levels):
+
+| game | level | actions | revisited | prims | mechanism |
+| --- | --- | --- | --- | --- | --- |
+| tu93 | 1-3 | 383/194/886 | 81-88% | 4 | cycling |
+| sp80 | 1 | 192 | 83% | 30 | cycling |
+| lp85 | 2-3 | 364/777 | 3-7% | 12-21 | broad undirected search |
+| ls20 | 1 | 68 | 3% | 4 | broad undirected search |
+
+tu93 and sp80 return to boards they have already seen for most of their actions.
+lp85 and ls20 do not: lp85's 777 actions on level 3 reached ~730 *distinct*
+boards.
+
+**But a high revisit rate is not cycling, and there is no cycle breaker to
+build.** Splitting `_choose` into its four sub-paths shows `rotate` — the stall
+pathology — at **0% in every one of these games**:
+
+| game | untested | plan | frontier | rotate |
+| --- | --- | --- | --- | --- |
+| sp80 | 98% | 0% | 2% | **0%** |
+| lp85 | 99% | 0% | 1% | **0%** |
+| ls20 | 100% | 0% | 0% | **0%** |
+| tu93 | 54% | 34% | 13% | **0%** |
+
+A board holding several untested primitives is revisited once per primitive,
+which is correct breadth-first play — sp80 revisits 83% of boards *and* takes a
+never-tried action 98% of the time. Only tu93 carries real overhead, 47% of its
+actions routing back to frontiers, and removing all of it is worth **+0.0047pp**,
+well under the 0.0625pp noise floor. **Do not build a cycle breaker.**
+
+What the speed ladder is worth, applied to every game at once:
+
+| speedup | RHAE | delta |
+| --- | --- | --- |
+| x1.9 | 0.3432% | +0.156pp |
+| x4 | 0.8571% | +0.670pp |
+| x10 | 1.3280% | +1.141pp |
+| perfect | 2.3905% | +2.203pp |
+
+So a *uniform* 2x is measurable at 2.5x the noise floor, but a single game's
+routing fix is not. With `rotate` at 0% and `untested` dominating, the only
+general saving left is trying candidates in a better order — which is the
+recall@1 lever again, at 18%. Efficiency and selection are the same problem.
+
+## In-episode colour demotion: measured, swept, rejected (2026-09-23)
+
+`_inert` already demotes a primitive that leaves the board untouched, but it
+keys on the *cell*, so every dead cell is relearned separately. Colour carries
+across the board, and the evidence said it should: pooled over six on-policy
+frames, 43/62 colours are all-live or all-dead, and in lp85 **9 of 11 colours
+never do anything**. lp85 is the biggest scorer (4.061% against a 27.778% cap),
+so a working filter there was worth ~+0.39pp at x4.
+
+It does not work at any threshold.
+
+| DEAD_COLOUR_TRIES | RHAE | levels |
+| --- | --- | --- |
+| baseline | **0.1868%** | **8** |
+| 1 | 0.1403% | 6 |
+| 2 | 0.1400% | 6 |
+| 3 | 0.1397% | 6 |
+| 5 | 0.1393% | 6 |
+| 8 | 0.1901% | 8 |
+| 12 | 0.1898% | 8 |
+
+**When the mechanism fires it costs two levels; when it does not fire it is
+baseline.** At 8 and 12 the threshold is high enough that demotion rarely
+triggers, and the +0.003pp there is a fifth of the noise floor. There is no
+value at which it helps.
+
+The failure is an exploration trap, not a bad threshold. A colour that reaches
+its dead-click threshold *before* its first effective click is sorted last,
+which makes that effective click less likely, which keeps it demoted.
+`_live_colours` offers recovery only after a success the demotion prevents. The
+information is real; acting on it greedily is self-confirming.
+
+**And the prize was never there to win.** Measured before building the
+non-greedy variant, purely observationally: replay the unchanged agent, note
+from consecutive frames whether each action changed the board, and count the
+clicks a *perfect* in-episode colour filter would have skipped.
+
+| game | actions | clicks | dead | avoidable | % of actions |
+| --- | --- | --- | --- | --- | --- |
+| lp85 | 2501 | 2500 | 138 | 125 | 5.0% |
+| ar25 | 2501 | 738 | 715 | 201 | 8.0% |
+| sp80, ls20, m0r0, s5i5 | 2501 | — | — | **0** | 0.0% |
+
+A perfect filter is worth **+0.0038pp**, sixteen times under the noise floor. No
+implementation of this idea can pay, greedy or otherwise.
+
+The reason is that `click_targets` already solves it. Only **1.4%** of lp85's
+board cells do anything, but **94.5%** of the clicks the agent actually issues
+do (2500 clicks, 138 dead), because salience ranking proposes component
+centroids rather than arbitrary cells. The 98.6%-dead board was never the
+agent's problem — it never clicks most of the board. This is the
+"coverage is not the bottleneck" result from a different direction.
+
+Two instrument bugs fell out of running this, both in tooling written the same
+day. `ab.py` reported "no game changed how often it scores" while lp85 went from
+4 levels to 1 — the port from `gate.py` kept per-game frequency and dropped
+per-game depth. And `sweep.py` counted any delta above 1e-9 as a gain, so it
+read the two inert points as "2/6 values gain"; judged against the 0.030pp noise
+floor the same sweep is NONE. Both are fixed, and both were found by running the
+instrument on a change already known to be bad — worth repeating deliberately.
 
 ## Four changes measured, four rejected
 
