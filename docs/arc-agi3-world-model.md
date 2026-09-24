@@ -831,6 +831,33 @@ summary numbers. Confirmed feasible in-kernel: torch 2.10 and torchvision ship
 in the base image, CUDA 12.8 on an RTX PRO 6000 with 94GiB free, and 20 training
 steps at batch 32 on 64x64 take 1.31s.
 
+## Carrying `_inert` across a level boundary: rejected (2026-09-24)
+
+`_on_new_level` clears `_inert` every time a level falls, which contradicts
+`_inert`'s own rationale — it is deliberately state-key-free because "a cell
+that does nothing here almost never does something two states later", and
+`_det`'s move lattice already persists across levels. The measured cost looked
+like relearning: lp85 clears level 1 in **10 actions against a 17-action human
+baseline** (above baseline, hitting the 1.15 cap) and then spends 364, 100 and
+777 on levels 2-4.
+
+Keeping it fails.
+
+| | mean | sd | seeds |
+| --- | --- | --- | --- |
+| baseline | 0.1561% | 0.0280 | 0.1868 x2, 0.1357 x3 |
+| keep `_inert` | 0.1357% | **0.0000** | 0.1357 x5 |
+
+delta **-0.0204pp** against a 2 sd bar of 0.0396 — inside noise, so no evidence
+either way on the headline. Two things argue against pursuing it regardless.
+
+The candidate's **sd collapses to zero**: carried-forward inert counts dominate
+the salted tie-break and the agent goes deterministic again, which would destroy
+the variance estimate the bench depends on. The colour-demotion change failed
+with the same signature. And it reaches the better of the two score clusters on
+**0 of 5 seeds** where the baseline reaches it on 2 of 5 — not significant at
+n=5 (p ~= 0.08), but pointing the same way as the negative delta.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
