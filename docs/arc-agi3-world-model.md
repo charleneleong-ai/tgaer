@@ -858,6 +858,68 @@ with the same signature. And it reaches the better of the two score clusters on
 **0 of 5 seeds** where the baseline reaches it on 2 of 5 — not significant at
 n=5 (p ~= 0.08), but pointing the same way as the negative delta.
 
+## Scope: LLM-as-programmer for a per-game heuristic (2026-09-24)
+
+Eleven agent changes have been measured and reverted. Every one tuned the
+existing policy; none changed what kind of agent it is. This is the one
+remaining direction with a component already validated, and it is the only one
+that **adapts per game at runtime** — which matters because the private set is
+out-of-distribution by design, and that is exactly what defeated the static
+ranker (21% -> 21% on the 88% of decisions that are simple ids).
+
+**What is already known, and what is not.**
+
+| | status |
+| --- | --- |
+| `is_goal` | 9/9 on lp85 once the prompt showed a winning board |
+| `distance` | matched M0's *privileged* heuristic, 5 real actions on lp85 L1 |
+| `simulate` | **failed** — 0.1% of moved objects against 46% for echoing the input |
+| source-free | **yes** — `build_prompt` sends the start board, transitions as diffs, and the objects a solved board has that the start lacks. No game file is read |
+| generality | **unknown** — `distance` was validated on lp85 L1 only, n=1 |
+
+**The design follows from `simulate` failing.** With no forward model there is no
+offline search, so `distance` cannot be used to plan. It can be used as a
+*progress signal*: take an action for real, recompute distance on the new frame,
+and keep or abandon the direction. That converts the explorer's blind novelty
+search into hill-climbing, and a progress signal is precisely what it lacks —
+`_choose` plays `untested[0]`, and on tu93 that ordering is indistinguishable
+from random (26% against a 25% chance floor, n=138).
+
+**Phases, each with a kill criterion, cheapest first.**
+
+1. **Does `distance` generalise past lp85?** Generate one per game for the 11
+   oracle games; walk each oracle trajectory and measure the fraction of steps
+   where distance strictly decreases. 281 labelled steps already exist, the
+   metric is noiseless, and no agent runs. *Kill if fewer than half the games
+   are monotone on most steps.*
+2. **Does greedy-on-distance beat the explorer, given a fork?** At each state
+   fork every proposal and take the minimum. An upper bound, since the kernel
+   has no forkable game. *Kill if it does not beat the explorer's actions-to-
+   clear by 2x on games we already clear.*
+3. **Does it survive without the fork?** Hill-climb with real actions: act,
+   recompute, abandon on a worsening. *Kill if worse than the explorer.*
+4. **Gate with `ab.py`**, 5 seeds, the usual 2 sd and per-game depth bars.
+5. **Kernel integration.**
+
+**Costs and risks, stated before starting.**
+
+- The explorer build currently ships **no model**. Reinstating vLLM costs the
+  10-15 minutes of install and weight load that dropping it saved, plus codegen
+  for ~110 games. At 30s each that is ~1.2h of a 7.5h budget. There is slack —
+  we spend 6000 actions per game where 16590 are affordable — but it is real.
+- **The bootstrap problem is the main risk.** The prompt is far stronger when it
+  can show a winning board, and we clear only 5 of 25 public games. On a game
+  never won, it falls to the "infer the goal from structure" branch, which is
+  unvalidated. This is the same wall the value model hit.
+- Generated code can crash or hang; it needs a timeout and a fall-back to the
+  current policy per game.
+- The kernel runs vLLM 0.19 against 0.26 locally, a divergence that has cost
+  builds before.
+
+**Honest prior.** `distance` worked once, on one level of one game, with a
+winning board in the prompt. Phase 1 is cheap precisely because that is thin
+evidence.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
