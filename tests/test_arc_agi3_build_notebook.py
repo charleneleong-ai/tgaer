@@ -9,6 +9,7 @@ same failure with a bigger blast radius.
 
 from __future__ import annotations
 
+import importlib
 import json
 import subprocess
 import sys
@@ -81,14 +82,28 @@ class TestPortedModules:
         placeholder would be a NameError in the kernel."""
         assert not [c for c in code_cells if "__KERNEL_PKG__" in c]
 
-    def test_the_preflight_imports_what_was_staged(self, code_cells: list[str]) -> None:
-        """Writing the files proves nothing; importing them is the check."""
-        preflight = [c for c in code_cells if "arc_agi3_explorer import" in c]
-        assert preflight, "preflight must import the ported package"
-        assert any("import numpy" in c for c in preflight), (
-            "numpy is assumed present in the kernel rather than installed, so it "
-            "must be asserted — installing pillow here once broke pillow"
-        )
+    def test_the_kernel_imports_what_was_staged(self, code_cells: list[str]) -> None:
+        """Writing the files proves nothing; importing them is the check.
+
+        Which cell does it depends on the build. A model build preflights the
+        server and imports the package there. A model-free build has no
+        preflight at all, so the mock is the first thing to import the staged
+        agent — and it runs it, which exercises numpy the same way.
+        """
+        if bnb.NEEDS_MODEL:
+            preflight = [
+                c
+                for c in code_cells
+                if "arc_agi3_explorer import" in c and "import numpy" in c
+            ]
+            assert preflight, (
+                "the model preflight must import the ported package and numpy — "
+                "numpy is assumed present in the kernel rather than installed, "
+                "and installing pillow here once broke pillow"
+            )
+        else:
+            mock = [c for c in code_cells if "import my_agent" in c and "assert" in c]
+            assert mock, "the mock must import the staged agent and assert it loaded"
 
 
 class TestStagedPackageImports:
@@ -182,6 +197,25 @@ class TestAgentSelection:
         assert not any(
             "__KERNEL_AGENT__" in c or "__KERNEL_AGENT_CLASS__" in c for c in code_cells
         )
+
+    def test_an_unset_selector_builds_the_agent_that_ships(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Building with no ARC_KERNEL_AGENT must pick the explorer.
+
+        The selector reaches the scored rerun, not just the mock, so a default
+        of "myagent" silently builds a submission kernel for the agent that
+        clears nothing — and adds back the vLLM install and weight load. That
+        shipped as kernel v74 on 2026-09-23 and was caught by the kernel log,
+        one step short of the daily submission slot.
+        """
+        monkeypatch.delenv("ARC_KERNEL_AGENT", raising=False)
+        reloaded = importlib.reload(bnb)
+        try:
+            assert reloaded.KERNEL_AGENT == "explorer"
+            assert reloaded.NEEDS_MODEL is False
+        finally:
+            importlib.reload(bnb)  # leave the module as the suite found it
 
     def test_a_model_free_agent_does_not_start_an_inference_server(
         self, monkeypatch: pytest.MonkeyPatch

@@ -63,7 +63,14 @@ BACKEND = os.environ.get("ARC_BACKEND", "vllm")
 # one. Read at build time, not in the kernel: the explorer calls no model, so
 # selecting it also drops the vLLM install, the 36GB weight load and the
 # preflight — 10-15 minutes of startup billed against a wall-clock-scored run.
-KERNEL_AGENT = os.environ.get("ARC_KERNEL_AGENT", "myagent")
+#
+# Defaults to the explorer because this value picks the *scored* agent as well
+# as the mock (`main.py --agent __KERNEL_AGENT__`), and the explorer is what
+# ships: it clears levels on the roster where the 27B agent clears none. A
+# default of "myagent" silently built a submission kernel for the wrong agent on
+# 2026-09-23, caught only by `Mock agent: MyAgent ... 0 levels completed` in the
+# kernel log.
+KERNEL_AGENT = os.environ.get("ARC_KERNEL_AGENT", "explorer")
 # Registry name -> class name in the agent module. The mock rewrites the
 # framework's agents/__init__.py to a one-line stub so importing it does not
 # drag in langgraph, so the registry it would otherwise read does not exist
@@ -991,7 +998,10 @@ def main() -> None:
     NOTEBOOK_PATH.write_text(json.dumps(build(), indent=1))
     print(
         f"[arc_agi3_build_notebook] Wrote {NOTEBOOK_PATH.relative_to(ROOT)}  "
-        f"(backend: {BACKEND}, accelerator: {ACCELERATOR})"
+        # The agent leads: it is the field that decides what gets scored, and
+        # it was the one the summary did not print when it was wrong.
+        f"(agent: {KERNEL_AGENT}, accelerator: {ACCELERATOR}"
+        + (f", backend: {BACKEND})" if NEEDS_MODEL else ", no model)")
     )
 
     # Sync metadata. machine_shape is the field the CLI actually reads; keep
