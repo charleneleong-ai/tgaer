@@ -782,6 +782,36 @@ design and not an artefact.
 The board descriptor that lifted tu93 in the confounded harness changed nothing
 cross-game: 19% -> 22% with and without it, the same five lp85 decisions.
 
+### More oracle depth does not unlock it
+
+Re-ran the oracle at 4x the expansion budget and 2x the per-level deadline
+(`--levels 8 --budget 60000 --per-game 300`). **281 labels against 172, and every
+added label is tu93** — 3 levels and 47 labels becoming 8 levels and 156. The
+other ten games moved by exactly zero. Their level 2 is not reachable by
+uninformed BFS at any budget worth spending, which is a different wall from the
+one tu93 hit.
+
+With tu93 training on 135 decisions across 7 levels and tested on its 8th — the
+split this design actually calls for — the model scores **exactly the baseline**:
+
+| within-game | decisions | baseline | model | chance |
+| --- | --- | --- | --- | --- |
+| tu93 (8 levels) | 21 | 33% | **33%** | 25% |
+| m0r0 | 23 | 9% | 9% | 6% |
+| ar25 | 11 | 0% | 0% | 6% |
+| pooled | 55 | 16% | **16%** | 13% |
+
+Model and baseline agree exactly in all three games, which is the finding rather
+than a coincidence: `rank` remains a feature here, so with hand-crafted features
+the best the ranker finds is to re-learn the ordering it already had. Data was
+not the binding constraint.
+
+**What is left untested is the representation**, which is the one thing the
+6.71% agent does differently — a ResNet over the grid rather than a dozen
+summary numbers. Confirmed feasible in-kernel: torch 2.10 and torchvision ship
+in the base image, CUDA 12.8 on an RTX PRO 6000 with 94GiB free, and 20 training
+steps at batch 32 on 64x64 take 1.31s.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
