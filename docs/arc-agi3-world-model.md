@@ -806,6 +806,25 @@ than a coincidence: `rank` remains a feature here, so with hand-crafted features
 the best the ranker finds is to re-learn the ordering it already had. Data was
 not the binding constraint.
 
+Holding out only the last level wasted most of tu93, so the split became
+**forward-chaining** — for each level k, train on levels < k and score k, which
+is also the online situation. That scores 138 of tu93's decisions instead of 21,
+and the answer is unambiguous:
+
+| within-game, forward-chained | scored | baseline | model | chance |
+| --- | --- | --- | --- | --- |
+| tu93 (8 levels) | 138 | 26% | 27% | **25%** |
+| m0r0 | 23 | 9% | 9% | 6% |
+| ar25 | 11 | 0% | 0% | 6% |
+| pooled | 172 | 22% | 23% | **21%** |
+
+At n=138 the chance floor has an sd of 3.7 points, so 32% is the bar for a 2 sd
+result. The baseline sits **+0.27 sd** above chance and the model **+0.54 sd**.
+**Neither the shipped proposal order nor a learned ranker is distinguishable
+from picking at random on our deepest game.** That is a statement about
+`proposals` as much as about the value model: `_choose` consumes an ordering
+that carries no information on tu93.
+
 **What is left untested is the representation**, which is the one thing the
 6.71% agent does differently — a ResNet over the grid rather than a dozen
 summary numbers. Confirmed feasible in-kernel: torch 2.10 and torchvision ship

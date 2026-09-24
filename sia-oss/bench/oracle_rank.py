@@ -243,18 +243,33 @@ def within_game(per_game: dict[str, tuple]) -> None:
         levels = sorted(set(lv.tolist()))
         if len(levels) < 2:
             continue
-        last = levels[-1]
-        tr, te = lv != last, lv == last
-        if not y[tr].any() or not y[te].any():
+        # Forward-chaining: for each level k, train on levels < k and score k.
+        # Forward-only because that is the online situation — an agent reaching
+        # level k has seen every earlier level and none of the later ones.
+        # Holding out only the last level wastes the rest: tu93 carries 156
+        # decisions across eight levels and its last holds 21 of them.
+        g_hit = g_base = g_seen = 0
+        g_floor: list[tuple[float, int]] = []
+        for k in levels[1:]:
+            tr, te = lv < k, lv == k
+            if not y[tr].any() or not y[te].any():
+                continue
+            model = LogisticRegression(max_iter=2000, class_weight="balanced")
+            model.fit(X[tr], y[tr])
+            m_hit, n = top1(model.decision_function(X[te]), y[te], g[te])
+            b_hit, _ = top1(-X[te][:, 1], y[te], g[te])
+            g_hit += m_hit
+            g_base += b_hit
+            g_seen += n
+            g_floor.append((chance(y[te], g[te]), n))
+        if not g_seen:
             continue
-        model = LogisticRegression(max_iter=2000, class_weight="balanced")
-        model.fit(X[tr], y[tr])
-        m_hit, n = top1(model.decision_function(X[te]), y[te], g[te])
-        b_hit, _ = top1(-X[te][:, 1], y[te], g[te])
-        floor = chance(y[te], g[te])
-        hit += m_hit
-        base += b_hit
-        seen += n
+        floor = sum(f * n for f, n in g_floor) / g_seen
+        hit += g_hit
+        base += g_base
+        seen += g_seen
+        n = g_seen
+        b_hit, m_hit = g_base, g_hit
         floors.append((floor, n))
         logger.info(
             "{:6} {:6} {:9} {:11.0%} {:11.0%} {:9.0%}",
