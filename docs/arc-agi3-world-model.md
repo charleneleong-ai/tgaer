@@ -694,6 +694,56 @@ read the two inert points as "2/6 values gain"; judged against the 0.030pp noise
 floor the same sweep is NONE. Both are fixed, and both were found by running the
 instrument on a change already known to be bad — worth repeating deliberately.
 
+## State fragmentation: the shipped key is already the best one (2026-09-24)
+
+`frame_signature`'s own TODO warns it keys on every in-field pixel — "live ls20:
+741 signatures for 30 avatar cells, blinding the StateGraph frontier to
+revisits". Copying the 6.71% Preview agent's coarser object key looked like the
+fix. It is not: measured against the agent's *real* signature (the settled
+board, animation masked, inside its field box), coarsening is strictly worse.
+
+| game | shipped pixel key | object key | shape+centroid |
+| --- | --- | --- | --- |
+| lp85 | **431 states, 291 rankable** | 733, 146 | 733, 146 |
+| tu93 | **156 states, 147 rankable** | 721, 46 | 721, 46 |
+| ls20 | 562, 153 | 562, 153 | 562, 153 |
+
+"Rankable" is states where two or more distinct actions were tried — what a
+value model can learn from and what the frontier needs to see a revisit.
+Ambiguous transitions are **1 in ~2600** across all three, so every key is
+effectively Markov; the shipped one simply merges more. The chrome mask is
+doing the work the object key was supposed to do, and object tuples do not
+benefit from it because every animated pixel still perturbs a component.
+
+**Fragmentation is not the blocker.** An earlier reading of "728 states, 28
+rankable" came from measuring the raw board rather than the settled one.
+
+## The in-episode value model, and why its harness does not answer the question
+
+`value_model.py` back-labels a cleared level by distance-to-win over the graph
+the agent walked, trains on earlier levels and scores the held-out one — the
+6.71% agent's method, offline.
+
+**The harness has a confound that invalidates its baseline.** `_choose` plays
+`untested[0]`, so proposal rank *is* visit order, while the episode moves toward
+the win — later visits are closer to it, so rank is anti-correlated with
+distance-to-win by construction. lp85 scores 0/215 for *both* arms against a 32%
+chance floor because of it. Rank is unusable as feature or baseline here.
+
+What survived: on tu93, adding a 21-feature board descriptor (colour histogram,
+foreground centroid and spread) moved the model from 28% to **34%** against a
+27% chance floor — 1.8 sd at n=102. Suggestive only. It does locate the missing
+ingredient, though: `oracle_rank.features` describes the *action*, so for a
+simple action it carries only the id and the model can learn "action 2 is
+usually good" but never "in this state, action 2". That is precisely what a
+learned grid representation supplies.
+
+Four bugs were found and fixed inside this experiment before the confound
+surfaced — a hardcoded rank, duplicated (state, action) rows from frontier
+re-traversal, the raw board in place of the settled one, and a recomputed
+proposal order that did not match the agent's. Treat any number from it as
+provisional.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
