@@ -211,10 +211,12 @@ def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> tuple[np.ndarra
         if prim not in order:
             continue  # not rankable by the order the agent actually used
         rank = order.index(prim)
-        X.append(
-            R.features(prim, rank, arr, step["available"], R.cell_index(arr))
-            + state_features(arr)
-        )
+        # Rank is poison here and is kept only to be reported, never learned
+        # from: `_choose` plays untested[0], so rank IS visit order, and the
+        # episode moves toward the win — a later visit is genuinely closer, so
+        # rank is anti-correlated with distance by construction.
+        feat = R.features(prim, 0, arr, step["available"], R.cell_index(arr))
+        X.append(feat + state_features(arr))
         y.append(d)
         ranks.append(float(rank))
         g.append(by_sig.setdefault(step["sig"], len(by_sig)))
@@ -226,15 +228,28 @@ def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> tuple[np.ndarra
     )
 
 
-def top1(pred: np.ndarray, true: np.ndarray, group: np.ndarray) -> tuple[int, int]:
-    """States where the best-predicted action is genuinely the closest to the win."""
+def top1(
+    pred: np.ndarray, true: np.ndarray, group: np.ndarray, seed: int = 0
+) -> tuple[int, int]:
+    """States where the best-predicted action is genuinely the closest to the win.
+
+    Ties are broken at random, not by position. Rows arrive in the order the
+    agent first tried each action, and that order is anti-correlated with
+    distance-to-win, so `argmin`'s first-index bias scores a model that predicts
+    a constant at *zero* rather than at chance — lp85 read 0/215 against a 32%
+    floor for exactly that reason.
+    """
+    rng = np.random.default_rng(seed)
     hit = seen = 0
     for gid in np.unique(group):
         m = group == gid
         if m.sum() < 2:  # nothing to rank
             continue
         seen += 1
-        hit += int(true[m][int(np.argmin(pred[m]))] == true[m].min())
+        p = pred[m]
+        best = np.flatnonzero(p == p.min())
+        pick = int(rng.choice(best))
+        hit += int(true[m][pick] == true[m].min())
     return hit, seen
 
 
@@ -275,7 +290,7 @@ def main(
         model = GradientBoostingRegressor(random_state=0)
         model.fit(Xtr, ytr)
         hit, seen = top1(model.predict(Xte), yte, gte)
-        # Baseline: the order the agent already uses — lowest proposal rank wins.
+        # Rank cannot be a baseline here (see rows()); chance is the floor.
         bhit, _ = top1(rte, yte, gte)
         tot_hit += hit
         tot_seen += seen

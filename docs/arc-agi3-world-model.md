@@ -741,8 +741,46 @@ learned grid representation supplies.
 Four bugs were found and fixed inside this experiment before the confound
 surfaced — a hardcoded rank, duplicated (state, action) rows from frontier
 re-traversal, the raw board in place of the settled one, and a recomputed
-proposal order that did not match the agent's. Treat any number from it as
-provisional.
+proposal order that did not match the agent's.
+
+### The redesigned harness, and what it says
+
+Rebuilt to remove the confounds rather than patched around them:
+
+- **rank is no longer a feature or a baseline** anywhere — it is visit order;
+- **ties break at random**, not by position. Row order is the order the agent
+  first tried each action, which is anti-correlated with distance, so
+  `argmin`'s first-index bias scored a constant predictor at *zero* rather than
+  at chance;
+- **a chance floor is reported beside every arm**, so "beats baseline" is
+  judged against something absolute;
+- `oracle_rank.py` grew a **within-game** split — train on a game's earlier
+  levels, score its last — on labels that come from BFS shortest paths and so
+  were never contaminated by the agent's own wandering.
+
+The result is a negative.
+
+| harness | baseline | model | chance |
+| --- | --- | --- | --- |
+| oracle labels, cross-game | 19% | 22% | — |
+| oracle labels, **within-game** | 11% | **11%** | **13%** |
+| trajectory labels, tu93 | 28% | **35%** | 27% |
+| trajectory labels, lp85 | 0% | **0%** | 32% |
+
+Within-game training on unbiased labels sits *at* the chance floor on 53
+decisions across three games — too little data to conclude much, but no support
+either. The one positive, tu93 at 35% against a 27% floor, comes from the
+trajectory harness where labels are plentiful.
+
+lp85 anti-transfers outright: the mean *within-group* correlation between
+predicted and true distance is **-0.433** across 215 states — the model ranks
+the closest action last. Training levels carry distances of 1-66 (mean 37.9)
+against the held-out level's 1-27 (mean 13.8). **Level-to-level transfer inside
+one game can be negative**, which is a real obstacle to the retrain-per-level
+design and not an artefact.
+
+The board descriptor that lifted tu93 in the confounded harness changed nothing
+cross-game: 19% -> 22% with and without it, the same five lp85 decisions.
 
 ## Four changes measured, four rejected
 
