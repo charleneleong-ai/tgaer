@@ -920,6 +920,41 @@ from random (26% against a 25% chance floor, n=138).
 winning board in the prompt. Phase 1 is cheap precisely because that is thin
 evidence.
 
+## Ablation: what each mechanism is actually worth (2026-09-25)
+
+Eleven *additions* have been measured and reverted; nothing had ever been
+removed. `ablate.py` switches each mechanism off over five seeds and judges it
+with `ab.py`'s verdict against the unchanged agent.
+
+| mechanism off | RHAE | delta | per-game |
+| --- | --- | --- | --- |
+| `USE_PROBE` | 0.3520% | **+0.1959pp** | ls20 5/5 -> 0/5, **g50t 0/5 -> 5/5** |
+| `USE_GOAL_INDUCTION` | 0.1843% | +0.0281pp | nothing regressed |
+| `USE_NAV` | 0.1561% | **+0.0000pp** | **byte-identical** |
+| `USE_INERT` | 0.1421% | -0.0140pp | ar25 lost |
+| `USE_AFFORDANCE` | 0.1382% | -0.0180pp | ar25, ls20 lost |
+| `USE_CHURN_MASK` | 0.1354% | -0.0207pp | ar25 lost |
+| `USE_FRONTIER` | 0.1281% | -0.0280pp | ar25, tu93 lost |
+
+**`nav` is dead code.** Switching it off is byte-identical on all five seeds and
+it never fires on any of the 25 games. Free to delete.
+
+**Removing `probe` is worth +0.1959pp and is a trade.** Every seed shifts by
+exactly that amount with an unchanged sd, so it is systematic, not luck: probe
+builds the move lattice, so without it `nav` and `affordance` can never fire and
+the agent falls back to pure frontier exploration. **g50t unlocks in 5/5 seeds
+and ls20 dies in 5/5.** `ab.py` rejects it on the no-regression rule — the rule
+exists because exactly this kind of trade has failed to reproduce before — but
+no previous trade was +0.1959pp, five times the 0.0396pp bar, and deterministic
+on both sides.
+
+**The four "earns its place" verdicts rest on per-game regressions, not on
+deltas.** Every one of those deltas is *inside* the 0.0396pp noise bar. What
+keeps them is that removing each costs a game outright. `_inert` in particular —
+whose docstring has asked since #29 for a re-measurement after the chrome mask —
+is worth -0.0140pp and one game. That is a thin case for a mechanism carrying
+this much machinery.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
