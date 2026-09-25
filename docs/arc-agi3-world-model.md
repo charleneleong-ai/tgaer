@@ -1069,6 +1069,44 @@ but it sits on a plateau — 0, 1, 2 and 3 all beat 4 — rather than at a tuned
 optimum, and a plateau is the shape that survives a distribution shift. The
 adaptive alternative was the principled answer and the measurement rejected it.
 
+## Re-ablated against the new baseline, and the verdicts invert (2026-09-25)
+
+The first ablation measured every mechanism against `PROBE_LIMIT=4`. That
+baseline no longer exists, and four of its five verdicts rested on ar25 being
+lost — the game that changed most, now clearing in ~39 actions by pure frontier
+instead of ~570. Re-run against the shipped agent (0.3520%):
+
+| mechanism off | RHAE | delta | regressions | first ablation |
+| --- | --- | --- | --- | --- |
+| `USE_INERT` | 0.1343% | **-0.2177pp** | ar25, g50t | -0.0140pp, ar25 |
+| `USE_FRONTIER` | 0.1869% | **-0.1651pp** | g50t, tu93 | -0.0280pp |
+| `USE_AFFORDANCE` | 0.2795% | -0.0725pp | ar25 | -0.0180pp |
+| `USE_CHURN_MASK` | 0.3316% | -0.0204pp | none | -0.0207pp, ar25 |
+| `USE_GOAL_INDUCTION` | 0.3802% | +0.0281pp | none | +0.0281pp |
+
+**`_inert` goes from the thinnest case to the strongest**, -0.0140pp to
+-0.2177pp, and removing it now costs ar25 *and* g50t. Its docstring has asked
+since #29 for a re-measurement after the chrome mask; this is it. The mechanism
+follows: with probing capped the agent leans on pure frontier exploration, and
+`_inert` is what stops it re-taking dead actions — ar25's 39-action solve
+depends on it.
+
+Three mechanisms are now strongly justified where all four previously rested on
+a single game each with deltas inside the noise bar. **Reading the first
+ablation against the current agent would have been wrong**, which is the same
+stale-baseline error the door-inducer thread nearly repeated.
+
+**Neither "REMOVABLE" is removed.** Both sit inside the 0.0560pp bar, so they
+are "no evidence" rather than free. `USE_GOAL_INDUCTION` in particular is
+*adaptive* — it learns a goal colour from that game's own winning click at
+runtime — rather than a constant fitted to the public 25, and adaptive
+mechanisms are the ones most likely to carry to an out-of-distribution set.
+
+The rule this suggests: **prune tuned constants aggressively, keep adaptive
+mechanisms unless they demonstrably hurt.** Capping the probe was a constant
+selected on 25 games and removing it paid; goal induction adapts per game and
+should not be cut on a result inside noise.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
