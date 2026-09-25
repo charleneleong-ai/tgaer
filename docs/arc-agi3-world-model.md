@@ -936,8 +936,31 @@ with `ab.py`'s verdict against the unchanged agent.
 | `USE_CHURN_MASK` | 0.1354% | -0.0207pp | ar25 lost |
 | `USE_FRONTIER` | 0.1281% | -0.0280pp | ar25, tu93 lost |
 
-**`nav` is dead code.** Switching it off is byte-identical on all five seeds and
-it never fires on any of the 25 games. Free to delete.
+**`nav` never fires, but it is not dead code — its precondition is broken.**
+Switching it off is byte-identical on all five seeds, and a door is induced on
+**0%** of steps across ten games. Deleting it fails five tests, which build
+synthetic key/door boards where it does drive the step, so the suite encodes a
+belief that it matters.
+
+The reason it never runs is a located bug. `_nav_move` needs `_det.door`, set
+only by `_observe_door`, which runs **only on a level-up** and requires a colour
+that *vanished* between the two frames:
+
+```
+ls20 level-up: avatar=12  colours gone=[]  adjacent-to-avatar=[5, 9, 12]  overlap=[]
+tu93 level-up: avatar=6   colours gone=[]  adjacent-to-avatar=[0, 5, 6]   overlap=[]
+```
+
+`gone` is empty at every level-up on every game, because a level-up replaces the
+board and the palette carries over. On ls20 the door colour is **9** —
+`LS20_DEFAULT.door` — and it is adjacent to the avatar at that exact moment. The
+inducer is looking straight at the door and rejecting it on a test that cannot
+hold where it is called. It is called once per level-up, with the avatar known,
+and finds no candidate every time (1, 1, 1 and 2 calls on ls20, ar25, sp80,
+tu93).
+
+The mechanism is right in spirit — a door vanishes when you enter it *mid-level*
+— and wired to the wrong event. **Do not delete `nav`; fix the inducer.**
 
 **Removing `probe` is worth +0.1959pp and is a trade.** Every seed shifts by
 exactly that amount with an unchanged sd, so it is systematic, not luck: probe
