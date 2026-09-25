@@ -999,9 +999,22 @@ two-sigma bar.
 | sp80 | 0.1965% | 0.0345% | -0.0065pp | 1 -> 1 |
 
 ar25 clears the *same* level roughly 14.6x faster against a 32-action human
-baseline, which is worth more on its own than losing ls20 costs. The change is
-net positive with g50t discarded entirely — and efficiency on a game already won
-is where the +2.203pp of measured headroom lives.
+baseline, and efficiency on a game already won is where the +2.203pp of measured
+headroom lives.
+
+**But the result does depend on g50t, and an earlier note here said otherwise.**
+Counting both losses rather than only ls20: ar25's +0.0745pp against -0.0215pp
+leaves **+0.0530pp without g50t, which is inside the 0.0560pp two-sigma bar**.
+So 73% of the gain comes from one game unlocking, and discarding it leaves a
+change that is positive but not measurably so. That is the concentration pattern
+RRSI's critic exists to reject as benchmark-specific.
+
+What still argues for it: the sweep plateau, the fully deterministic per-game
+effect (every game 5/5 or 0/5, no partial flips), and a 10:1 magnitude
+asymmetry — +0.2174pp of gains against -0.0215pp of losses, two games each way.
+If the hidden set holds ar25/g50t-like and ls20/sp80-like games in similar
+proportion the asymmetry carries; if it does not, the losses stand and the gains
+may not.
 
 **`ab.py` fails this on the no-regression rule, and it was promoted anyway.**
 ls20 goes 5/5 seeds to 0/5, and it goes at every value below four — it is the
