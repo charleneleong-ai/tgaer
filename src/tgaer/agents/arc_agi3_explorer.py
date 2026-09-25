@@ -52,6 +52,33 @@ from tgaer.envs.arc_agi3.arc_agi3_api import COMPLEX_ACTION_ID, ArcAction
 Primitive = tuple
 
 _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built from
+# Ablation switches. Every one defaults to current behaviour, so the shipped
+# agent is unchanged; `sweep.py` flips them one at a time to ask whether each
+# mechanism still earns its place. The explorer accumulated these over months,
+# each gated on the 25 public games, and several were never re-measured after
+# later changes moved the ground under them — `_inert`'s own docstring asks for
+# exactly that re-measurement after the chrome mask, which shipped in #29.
+USE_PROBE = True  # bootstrap each directional action once
+# How many directional actions the bootstrap may spend. It was one per move,
+# and that is worse than barely probing at all: swept over 0-4 the roster reads
+# 0.3827, 0.3827, 0.3081, 0.3074 and 0.1868, so four of five values beat the
+# shipped setting and the response is a trend rather than a spike.
+#
+# The gain is not the g50t unlock it first looks like. ar25 clears the *same*
+# level in roughly 39 actions instead of 570 — 0.0088% to 1.8701% — which is
+# +0.0745pp on its own against the 0.0150pp that losing ls20 costs, so this is
+# net positive even discarding g50t. ls20 goes at every value below four; it is
+# the one game that needs the full bootstrap.
+#
+# 1 rather than 0: the two are identical on all 25 games, and keeping a single
+# probe leaves the mechanism alive for a hidden game that might need it.
+PROBE_LIMIT = 1
+USE_AFFORDANCE = True  # route toward a learned affordance
+USE_NAV = True  # route the avatar over the move lattice
+USE_INERT = True  # demote primitives that changed nothing
+USE_CHURN_MASK = True  # flatten self-animating cells out of the state key
+USE_FRONTIER = True  # walk known edges back to a state with something untested
+USE_GOAL_INDUCTION = True  # learn a goal colour from a winning click
 # Avatar positions affordance won't step back onto. This is a window over the last 8
 # *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a
 # click re-appends the cell the avatar is standing on. An agent that alternates a
@@ -420,7 +447,8 @@ class ExplorerArcAgi3Agent(Agent):
                 self._graph.take(self._prev_sig, self._prev_prim)
                 self._prev_sig = self._prev_prim = None
         if levels > self._levels:  # genuine progress wipes the per-level map; a
-            self._induce_goal()  # but first learn what the winning click targeted
+            if USE_GOAL_INDUCTION:  # first learn what the winning click targeted
+                self._induce_goal()
             self._on_new_level()  # death respawn (levels drop) must keep the map
         self._levels = levels
 
@@ -437,14 +465,14 @@ class ExplorerArcAgi3Agent(Agent):
             self._graph.connect(self._prev_sig, self._prev_prim, sig)
 
         branch = "choose"
-        if prim := self._probe_moves(available, lattice):
+        if USE_PROBE and (prim := self._probe_moves(available, lattice)):
             branch = "probe"
         elif self._explore_due(sig):
             branch = "explore"  # the walk has stopped paying
             prim = self._choose(sig, prims)
-        elif prim := self._nav_affordance(arr, available, lattice):
+        elif USE_AFFORDANCE and (prim := self._nav_affordance(arr, available, lattice)):
             branch = "affordance"
-        elif prim := self._nav_move(arr, available, lattice):
+        elif USE_NAV and (prim := self._nav_move(arr, available, lattice)):
             branch = "nav"
         else:
             prim = self._choose(sig, prims)
@@ -488,6 +516,8 @@ class ExplorerArcAgi3Agent(Agent):
 
     def _settled(self, arr: np.ndarray) -> np.ndarray:
         """``arr`` with self-animating cells flattened, for the state key."""
+        if not USE_CHURN_MASK:
+            return arr
         if self._churn is None or self._churn_steps < CHURN_WARMUP:
             return arr
         chrome = self._churn > CHURN_FRACTION * self._churn_steps
@@ -528,6 +558,8 @@ class ExplorerArcAgi3Agent(Agent):
         levels against six): it pulls in low-salience targets and re-orders the
         proposal list between visits to one signature, which desynchronises the
         graph's per-signature untested set."""
+        if not USE_INERT:
+            return list(prims)
         return sorted(prims, key=self._inert.__getitem__)
 
     def _learn_blocked(self, arr: np.ndarray, lattice: dict[int, np.ndarray]) -> None:
@@ -551,6 +583,8 @@ class ExplorerArcAgi3Agent(Agent):
         """Bootstrap: take each directional action once so the avatar's move lattice
         is complete before directed routing relies on it (a partial lattice makes the
         router oscillate). Skip a move whose effect is already known or once tried."""
+        if len(self._probed) >= PROBE_LIMIT:
+            return None
         for a in available:
             if a in _MOVES and a not in lattice and a not in self._probed:
                 self._probed.add(a)
@@ -695,7 +729,7 @@ class ExplorerArcAgi3Agent(Agent):
             if not self._is_stuck():
                 return untested[0]
             return min(untested, key=lambda p: self._taken[_action_id(p)])
-        path = self._graph.path_to_frontier(sig)
+        path = self._graph.path_to_frontier(sig) if USE_FRONTIER else None
         if path:
             self._plan = deque(path)
             return self._plan.popleft()

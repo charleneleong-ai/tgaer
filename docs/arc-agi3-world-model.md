@@ -694,6 +694,381 @@ read the two inert points as "2/6 values gain"; judged against the 0.030pp noise
 floor the same sweep is NONE. Both are fixed, and both were found by running the
 instrument on a change already known to be bad — worth repeating deliberately.
 
+## State fragmentation: the shipped key is already the best one (2026-09-24)
+
+`frame_signature`'s own TODO warns it keys on every in-field pixel — "live ls20:
+741 signatures for 30 avatar cells, blinding the StateGraph frontier to
+revisits". Copying the 6.71% Preview agent's coarser object key looked like the
+fix. It is not: measured against the agent's *real* signature (the settled
+board, animation masked, inside its field box), coarsening is strictly worse.
+
+| game | shipped pixel key | object key | shape+centroid |
+| --- | --- | --- | --- |
+| lp85 | **431 states, 291 rankable** | 733, 146 | 733, 146 |
+| tu93 | **156 states, 147 rankable** | 721, 46 | 721, 46 |
+| ls20 | 562, 153 | 562, 153 | 562, 153 |
+
+"Rankable" is states where two or more distinct actions were tried — what a
+value model can learn from and what the frontier needs to see a revisit.
+Ambiguous transitions are **1 in ~2600** across all three, so every key is
+effectively Markov; the shipped one simply merges more. The chrome mask is
+doing the work the object key was supposed to do, and object tuples do not
+benefit from it because every animated pixel still perturbs a component.
+
+**Fragmentation is not the blocker.** An earlier reading of "728 states, 28
+rankable" came from measuring the raw board rather than the settled one.
+
+## The in-episode value model, and why its harness does not answer the question
+
+`value_model.py` back-labels a cleared level by distance-to-win over the graph
+the agent walked, trains on earlier levels and scores the held-out one — the
+6.71% agent's method, offline.
+
+**The harness has a confound that invalidates its baseline.** `_choose` plays
+`untested[0]`, so proposal rank *is* visit order, while the episode moves toward
+the win — later visits are closer to it, so rank is anti-correlated with
+distance-to-win by construction. lp85 scores 0/215 for *both* arms against a 32%
+chance floor because of it. Rank is unusable as feature or baseline here.
+
+What survived: on tu93, adding a 21-feature board descriptor (colour histogram,
+foreground centroid and spread) moved the model from 28% to **34%** against a
+27% chance floor — 1.8 sd at n=102. Suggestive only. It does locate the missing
+ingredient, though: `oracle_rank.features` describes the *action*, so for a
+simple action it carries only the id and the model can learn "action 2 is
+usually good" but never "in this state, action 2". That is precisely what a
+learned grid representation supplies.
+
+Four bugs were found and fixed inside this experiment before the confound
+surfaced — a hardcoded rank, duplicated (state, action) rows from frontier
+re-traversal, the raw board in place of the settled one, and a recomputed
+proposal order that did not match the agent's.
+
+### The redesigned harness, and what it says
+
+Rebuilt to remove the confounds rather than patched around them:
+
+- **rank is no longer a feature or a baseline** anywhere — it is visit order;
+- **ties break at random**, not by position. Row order is the order the agent
+  first tried each action, which is anti-correlated with distance, so
+  `argmin`'s first-index bias scored a constant predictor at *zero* rather than
+  at chance;
+- **a chance floor is reported beside every arm**, so "beats baseline" is
+  judged against something absolute;
+- `oracle_rank.py` grew a **within-game** split — train on a game's earlier
+  levels, score its last — on labels that come from BFS shortest paths and so
+  were never contaminated by the agent's own wandering.
+
+The result is a negative.
+
+| harness | baseline | model | chance |
+| --- | --- | --- | --- |
+| oracle labels, cross-game | 19% | 22% | — |
+| oracle labels, **within-game** | 11% | **11%** | **13%** |
+| trajectory labels, tu93 | 28% | **35%** | 27% |
+| trajectory labels, lp85 | 0% | **0%** | 32% |
+
+Within-game training on unbiased labels sits *at* the chance floor on 53
+decisions across three games — too little data to conclude much, but no support
+either. The one positive, tu93 at 35% against a 27% floor, comes from the
+trajectory harness where labels are plentiful.
+
+lp85 anti-transfers outright: the mean *within-group* correlation between
+predicted and true distance is **-0.433** across 215 states — the model ranks
+the closest action last. Training levels carry distances of 1-66 (mean 37.9)
+against the held-out level's 1-27 (mean 13.8). **Level-to-level transfer inside
+one game can be negative**, which is a real obstacle to the retrain-per-level
+design and not an artefact.
+
+The board descriptor that lifted tu93 in the confounded harness changed nothing
+cross-game: 19% -> 22% with and without it, the same five lp85 decisions.
+
+### More oracle depth does not unlock it
+
+Re-ran the oracle at 4x the expansion budget and 2x the per-level deadline
+(`--levels 8 --budget 60000 --per-game 300`). **281 labels against 172, and every
+added label is tu93** — 3 levels and 47 labels becoming 8 levels and 156. The
+other ten games moved by exactly zero. Their level 2 is not reachable by
+uninformed BFS at any budget worth spending, which is a different wall from the
+one tu93 hit.
+
+With tu93 training on 135 decisions across 7 levels and tested on its 8th — the
+split this design actually calls for — the model scores **exactly the baseline**:
+
+| within-game | decisions | baseline | model | chance |
+| --- | --- | --- | --- | --- |
+| tu93 (8 levels) | 21 | 33% | **33%** | 25% |
+| m0r0 | 23 | 9% | 9% | 6% |
+| ar25 | 11 | 0% | 0% | 6% |
+| pooled | 55 | 16% | **16%** | 13% |
+
+Model and baseline agree exactly in all three games, which is the finding rather
+than a coincidence: `rank` remains a feature here, so with hand-crafted features
+the best the ranker finds is to re-learn the ordering it already had. Data was
+not the binding constraint.
+
+Holding out only the last level wasted most of tu93, so the split became
+**forward-chaining** — for each level k, train on levels < k and score k, which
+is also the online situation. That scores 138 of tu93's decisions instead of 21,
+and the answer is unambiguous:
+
+| within-game, forward-chained | scored | baseline | model | chance |
+| --- | --- | --- | --- | --- |
+| tu93 (8 levels) | 138 | 26% | 27% | **25%** |
+| m0r0 | 23 | 9% | 9% | 6% |
+| ar25 | 11 | 0% | 0% | 6% |
+| pooled | 172 | 22% | 23% | **21%** |
+
+At n=138 the chance floor has an sd of 3.7 points, so 32% is the bar for a 2 sd
+result. The baseline sits **+0.27 sd** above chance and the model **+0.54 sd**.
+**Neither the shipped proposal order nor a learned ranker is distinguishable
+from picking at random on our deepest game.** That is a statement about
+`proposals` as much as about the value model: `_choose` consumes an ordering
+that carries no information on tu93.
+
+**What is left untested is the representation**, which is the one thing the
+6.71% agent does differently — a ResNet over the grid rather than a dozen
+summary numbers. Confirmed feasible in-kernel: torch 2.10 and torchvision ship
+in the base image, CUDA 12.8 on an RTX PRO 6000 with 94GiB free, and 20 training
+steps at batch 32 on 64x64 take 1.31s.
+
+## Carrying `_inert` across a level boundary: rejected (2026-09-24)
+
+`_on_new_level` clears `_inert` every time a level falls, which contradicts
+`_inert`'s own rationale — it is deliberately state-key-free because "a cell
+that does nothing here almost never does something two states later", and
+`_det`'s move lattice already persists across levels. The measured cost looked
+like relearning: lp85 clears level 1 in **10 actions against a 17-action human
+baseline** (above baseline, hitting the 1.15 cap) and then spends 364, 100 and
+777 on levels 2-4.
+
+Keeping it fails.
+
+| | mean | sd | seeds |
+| --- | --- | --- | --- |
+| baseline | 0.1561% | 0.0280 | 0.1868 x2, 0.1357 x3 |
+| keep `_inert` | 0.1357% | **0.0000** | 0.1357 x5 |
+
+delta **-0.0204pp** against a 2 sd bar of 0.0396 — inside noise, so no evidence
+either way on the headline. Two things argue against pursuing it regardless.
+
+The candidate's **sd collapses to zero**: carried-forward inert counts dominate
+the salted tie-break and the agent goes deterministic again, which would destroy
+the variance estimate the bench depends on. The colour-demotion change failed
+with the same signature. And it reaches the better of the two score clusters on
+**0 of 5 seeds** where the baseline reaches it on 2 of 5 — not significant at
+n=5 (p ~= 0.08), but pointing the same way as the negative delta.
+
+## Scope: LLM-as-programmer for a per-game heuristic (2026-09-24)
+
+Eleven agent changes have been measured and reverted. Every one tuned the
+existing policy; none changed what kind of agent it is. This is the one
+remaining direction with a component already validated, and it is the only one
+that **adapts per game at runtime** — which matters because the private set is
+out-of-distribution by design, and that is exactly what defeated the static
+ranker (21% -> 21% on the 88% of decisions that are simple ids).
+
+**What is already known, and what is not.**
+
+| | status |
+| --- | --- |
+| `is_goal` | 9/9 on lp85 once the prompt showed a winning board |
+| `distance` | matched M0's *privileged* heuristic, 5 real actions on lp85 L1 |
+| `simulate` | **failed** — 0.1% of moved objects against 46% for echoing the input |
+| source-free | **yes** — `build_prompt` sends the start board, transitions as diffs, and the objects a solved board has that the start lacks. No game file is read |
+| generality | **unknown** — `distance` was validated on lp85 L1 only, n=1 |
+
+**The design follows from `simulate` failing.** With no forward model there is no
+offline search, so `distance` cannot be used to plan. It can be used as a
+*progress signal*: take an action for real, recompute distance on the new frame,
+and keep or abandon the direction. That converts the explorer's blind novelty
+search into hill-climbing, and a progress signal is precisely what it lacks —
+`_choose` plays `untested[0]`, and on tu93 that ordering is indistinguishable
+from random (26% against a 25% chance floor, n=138).
+
+**Phases, each with a kill criterion, cheapest first.**
+
+1. **Does `distance` generalise past lp85?** Generate one per game for the 11
+   oracle games; walk each oracle trajectory and measure the fraction of steps
+   where distance strictly decreases. 281 labelled steps already exist, the
+   metric is noiseless, and no agent runs. *Kill if fewer than half the games
+   are monotone on most steps.*
+2. **Does greedy-on-distance beat the explorer, given a fork?** At each state
+   fork every proposal and take the minimum. An upper bound, since the kernel
+   has no forkable game. *Kill if it does not beat the explorer's actions-to-
+   clear by 2x on games we already clear.*
+3. **Does it survive without the fork?** Hill-climb with real actions: act,
+   recompute, abandon on a worsening. *Kill if worse than the explorer.*
+4. **Gate with `ab.py`**, 5 seeds, the usual 2 sd and per-game depth bars.
+5. **Kernel integration.**
+
+**Costs and risks, stated before starting.**
+
+- The explorer build currently ships **no model**. Reinstating vLLM costs the
+  10-15 minutes of install and weight load that dropping it saved, plus codegen
+  for ~110 games. At 30s each that is ~1.2h of a 7.5h budget. There is slack —
+  we spend 6000 actions per game where 16590 are affordable — but it is real.
+- **The bootstrap problem is the main risk.** The prompt is far stronger when it
+  can show a winning board, and we clear only 5 of 25 public games. On a game
+  never won, it falls to the "infer the goal from structure" branch, which is
+  unvalidated. This is the same wall the value model hit.
+- Generated code can crash or hang; it needs a timeout and a fall-back to the
+  current policy per game.
+- The kernel runs vLLM 0.19 against 0.26 locally, a divergence that has cost
+  builds before.
+
+**Honest prior.** `distance` worked once, on one level of one game, with a
+winning board in the prompt. Phase 1 is cheap precisely because that is thin
+evidence.
+
+## Ablation: what each mechanism is actually worth (2026-09-25)
+
+Eleven *additions* have been measured and reverted; nothing had ever been
+removed. `ablate.py` switches each mechanism off over five seeds and judges it
+with `ab.py`'s verdict against the unchanged agent.
+
+| mechanism off | RHAE | delta | per-game |
+| --- | --- | --- | --- |
+| `USE_PROBE` | 0.3520% | **+0.1959pp** | ls20 5/5 -> 0/5, **g50t 0/5 -> 5/5** |
+| `USE_GOAL_INDUCTION` | 0.1843% | +0.0281pp | nothing regressed |
+| `USE_NAV` | 0.1561% | **+0.0000pp** | **byte-identical** |
+| `USE_INERT` | 0.1421% | -0.0140pp | ar25 lost |
+| `USE_AFFORDANCE` | 0.1382% | -0.0180pp | ar25, ls20 lost |
+| `USE_CHURN_MASK` | 0.1354% | -0.0207pp | ar25 lost |
+| `USE_FRONTIER` | 0.1281% | -0.0280pp | ar25, tu93 lost |
+
+**`nav` never fires, but it is not dead code — its precondition is broken.**
+Switching it off is byte-identical on all five seeds, and a door is induced on
+**0%** of steps across ten games. Deleting it fails five tests, which build
+synthetic key/door boards where it does drive the step, so the suite encodes a
+belief that it matters.
+
+The reason it never runs is a located bug. `_nav_move` needs `_det.door`, set
+only by `_observe_door`, which runs **only on a level-up** and requires a colour
+that *vanished* between the two frames:
+
+```
+ls20 level-up: avatar=12  colours gone=[]  adjacent-to-avatar=[5, 9, 12]  overlap=[]
+tu93 level-up: avatar=6   colours gone=[]  adjacent-to-avatar=[0, 5, 6]   overlap=[]
+```
+
+`gone` is empty at every level-up on every game, because a level-up replaces the
+board and the palette carries over. On ls20 the door colour is **9** —
+`LS20_DEFAULT.door` — and it is adjacent to the avatar at that exact moment. The
+inducer is looking straight at the door and rejecting it on a test that cannot
+hold where it is called. It is called once per level-up, with the avatar known,
+and finds no candidate every time (1, 1, 1 and 2 calls on ls20, ar25, sp80,
+tu93).
+
+The mechanism is right in spirit — a door vanishes when you enter it *mid-level*
+— and wired to the wrong event. **Do not delete `nav`; fix the inducer.**
+
+**Removing `probe` is worth +0.1959pp and is a trade.** Every seed shifts by
+exactly that amount with an unchanged sd, so it is systematic, not luck: probe
+builds the move lattice, so without it `nav` and `affordance` can never fire and
+the agent falls back to pure frontier exploration. **g50t unlocks in 5/5 seeds
+and ls20 dies in 5/5.** `ab.py` rejects it on the no-regression rule — the rule
+exists because exactly this kind of trade has failed to reproduce before — but
+no previous trade was +0.1959pp, five times the 0.0396pp bar, and deterministic
+on both sides.
+
+**The four "earns its place" verdicts rest on per-game regressions, not on
+deltas.** Every one of those deltas is *inside* the 0.0396pp noise bar. What
+keeps them is that removing each costs a game outright. `_inert` in particular —
+whose docstring has asked since #29 for a re-measurement after the chrome mask —
+is worth -0.0140pp and one game. That is a thin case for a mechanism carrying
+this much machinery.
+
+## Promoted: the bootstrap probe was costing more than it bought (2026-09-25)
+
+The ablation's largest signal, followed through. `_probe_moves` spent one action
+per directional move to seed the lattice; `PROBE_LIMIT` caps that, and swept
+0-4 the roster reads **0.3827, 0.3827, 0.3081, 0.3074, 0.1868**. Four of five
+values beat the shipped setting and the response is a trend, so `sweep.py`
+returns **STABLE** — the first such verdict in this project.
+
+Confirmed over five seeds: **0.1561% -> 0.3520%, +0.1959pp**, against a 0.0560pp
+two-sigma bar.
+
+**The gain is not the unlock it first looks like.** Per game:
+
+| game | base | PROBE_LIMIT=1 | delta | levels |
+| --- | --- | --- | --- | --- |
+| **ar25** | 0.0088% | **1.8701%** | +0.0745pp | 1 -> 1, **~570 actions -> ~39** |
+| g50t | 0.0000% | 3.5714% | +0.1429pp | 0 -> 1, at its cap |
+| ls20 | 0.3738% | 0.0000% | -0.0150pp | 1 -> 0 |
+| sp80 | 0.1965% | 0.0345% | -0.0065pp | 1 -> 1 |
+
+ar25 clears the *same* level roughly 14.6x faster against a 32-action human
+baseline, and efficiency on a game already won is where the +2.203pp of measured
+headroom lives.
+
+**But the result does depend on g50t, and an earlier note here said otherwise.**
+Counting both losses rather than only ls20: ar25's +0.0745pp against -0.0215pp
+leaves **+0.0530pp without g50t, which is inside the 0.0560pp two-sigma bar**.
+So 73% of the gain comes from one game unlocking, and discarding it leaves a
+change that is positive but not measurably so. That is the concentration pattern
+RRSI's critic exists to reject as benchmark-specific.
+
+What still argues for it: the sweep plateau, the fully deterministic per-game
+effect (every game 5/5 or 0/5, no partial flips), and a 10:1 magnitude
+asymmetry — +0.2174pp of gains against -0.0215pp of losses, two games each way.
+If the hidden set holds ar25/g50t-like and ls20/sp80-like games in similar
+proportion the asymmetry carries; if it does not, the losses stand and the gains
+may not.
+
+**`ab.py` fails this on the no-regression rule, and it was promoted anyway.**
+ls20 goes 5/5 seeds to 0/5, and it goes at every value below four — it is the
+one game that needs the full bootstrap. The rule exists because a trade "will
+not reproduce on the hidden set", but it was written for *lucky* trades; the
+sweep establishes this is a mechanism. Recorded as a deliberate override rather
+than a pass, because the hidden set is out-of-distribution by design and the
+balance there is unknown.
+
+`PROBE_LIMIT = 1` rather than 0: identical on all 25 games, and one surviving
+probe leaves the mechanism available to a hidden game that needs it.
+
+## Why ls20 needs the full bootstrap, and why the general fix is worse (2026-09-25)
+
+ls20 is the one game lost by capping the probe, so it was worth asking what it
+uses the bootstrap for. Instrumented at both settings:
+
+| | `PROBE_LIMIT=4` | `PROBE_LIMIT=1` |
+| --- | --- | --- |
+| clears | step 68 | **never** |
+| lattice reaches 4 | step 5 | **never** (tops out at 3) |
+| affordance fires | 165x | 126x |
+
+**ls20 needs all four directions.** With a partial lattice its router can never
+navigate. ar25 is the opposite: it clears by frontier in ~39 actions and the
+lattice only diverts it.
+
+That suggests deferring the probe rather than capping it — let a game the
+frontier solves finish first, and still bootstrap one that needs routing. The
+obvious form, `PROBE_AFTER = N` steps, is exactly the overfitting this project
+keeps finding: a number chosen so ar25's 39-action solve lands first, fitted to
+the public 25 while the scored set is out-of-distribution by construction.
+
+So the adaptive form was measured instead — probe only once `_is_stuck()`
+reports the board has stopped yielding unseen states, reusing the existing stall
+detector and adding no tuned constant. **It is strictly worse:**
+
+| | baseline | `PROBE_LIMIT=1` | demand-driven |
+| --- | --- | --- | --- |
+| mean | 0.1561% | **0.3520%** | 0.3508% |
+| ar25 | 0.0088% | 1.8701% | 1.8701% |
+| g50t | 0.0000% | 3.5714% | 3.5714% |
+| ls20 | 0.3738% | 0.0000% | 0.0000% |
+| tu93 | 0.0357% | 0.0357% | **0.0044%** |
+
+Same gains, ls20 still lost, and tu93 now loses a level too — deferring the
+probe means tu93's lattice arrives too late for its second level. Reverted.
+
+**What this says about generalising.** The benefit is not "probe when needed",
+it is "probe less". `PROBE_LIMIT` is still a constant selected on the public 25,
+but it sits on a plateau — 0, 1, 2 and 3 all beat 4 — rather than at a tuned
+optimum, and a plateau is the shape that survives a distribution shift. The
+adaptive alternative was the principled answer and the measurement rejected it.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of

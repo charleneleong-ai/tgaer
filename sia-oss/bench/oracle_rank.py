@@ -58,6 +58,31 @@ N_FEATURES = 12
 app = typer.Typer(add_completion=False)
 
 
+def state_features(arr: np.ndarray) -> list[float]:
+    """A compact description of the board itself.
+
+    `features` below describes the *action*: for a click it reads the cell under
+    it, for a simple action it carries only the id. So within one state every
+    simple action looks alike apart from its id, and a model can learn "action 2
+    is usually good" but never "in this state, action 2". These let it condition
+    on the board.
+    """
+    n = float(arr.size)
+    hist = np.bincount(arr.ravel().astype(np.int64), minlength=16)[:16] / n
+    bg = int(np.bincount(arr.ravel().astype(np.int64)).argmax())
+    fg = np.argwhere(arr != bg)
+    if len(fg):
+        pos = [
+            float(fg[:, 0].mean()) / arr.shape[0],
+            float(fg[:, 1].mean()) / arr.shape[1],
+            float(fg[:, 0].std()) / arr.shape[0],
+            float(fg[:, 1].std()) / arr.shape[1],
+        ]
+    else:
+        pos = [0.0, 0.0, 0.0, 0.0]
+    return [*hist.tolist(), len(fg) / n, *pos]
+
+
 def cell_index(arr: np.ndarray) -> dict[tuple[int, int], tuple[int, int, int]]:
     """Cell -> (component size, bounding-box area, colour count on the board)."""
     index: dict[tuple[int, int], tuple[int, int, int]] = {}
@@ -115,8 +140,8 @@ def features(
     return f
 
 
-def build(game_id: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Candidate-level rows for one game: (features, positive, decision index)."""
+def build(game_id: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Candidate rows for one game: (features, positive, decision, level)."""
     data = np.load(LABELS / f"{game_id}.npz")
     arc = arc_agi.Arcade(
         operation_mode=OperationMode.OFFLINE,
@@ -131,6 +156,7 @@ def build(game_id: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     X: list[list[float]] = []
     y: list[int] = []
     group: list[int] = []
+    level: list[int] = []
     for i in range(len(data["kind"])):
         arr = M.grid(fd)
         kind = int(data["kind"][i])
@@ -147,28 +173,137 @@ def build(game_id: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         for rank, prim in enumerate(prims):
             move = (int(prim[1]), int(prim[2])) if prim[0] == "click" else int(prim[1])
             same = np.array_equal(M.grid(M.act(copy.deepcopy(game), move)), goal)
-            X.append(features(prim, rank, arr, available, index))
+            X.append(features(prim, rank, arr, available, index) + state_features(arr))
             y.append(int(same))
             group.append(i)
+            level.append(int(data["level"][i]))
         fd = M.act(game, win)
-    return np.asarray(X, float), np.asarray(y, int), np.asarray(group, int)
+    return (
+        np.asarray(X, float),
+        np.asarray(y, int),
+        np.asarray(group, int),
+        np.asarray(level, int),
+    )
 
 
 def top1(scores: np.ndarray, y: np.ndarray, group: np.ndarray) -> tuple[int, int]:
     """Decisions where the highest-scored candidate is a winning one."""
+    rng = np.random.default_rng(0)
     hit = seen = 0
     for g in np.unique(group):
         m = group == g
         if not y[m].any():  # uncoverable decision; no ranking can win it
             continue
         seen += 1
-        hit += int(y[m][int(np.argmax(scores[m]))] == 1)
+        # Break ties at random: candidate order is the proposal order, so
+        # argmax's first-index bias would silently score a constant predictor
+        # as though it had learned the shipped ranking.
+        s_g = scores[m]
+        best = np.flatnonzero(s_g == s_g.max())
+        hit += int(y[m][int(rng.choice(best))] == 1)
     return hit, seen
+
+
+def chance(y: np.ndarray, group: np.ndarray) -> float:
+    """Recall@1 from picking uniformly among a decision's candidates.
+
+    The floor every arm has to clear. Without it a ranker that has learned
+    nothing still reports a respectable number wherever candidate lists are
+    short.
+    """
+    rates = []
+    for g in np.unique(group):
+        m = group == g
+        if not y[m].any():
+            continue
+        rates.append(float(y[m].sum()) / int(m.sum()))
+    return float(np.mean(rates)) if rates else 0.0
+
+
+def within_game(per_game: dict[str, tuple]) -> None:
+    """Train on a game's earlier levels and score its last — the 6.71% agent's
+    setting, on labels that never came from the agent's own wandering.
+
+    Leave-one-*game*-out cannot work for simple actions: an id means something
+    different in every game. Within one game it can, which is why that agent
+    retrains per episode rather than shipping a prior.
+    """
+    hit = seen = base = 0
+    floors: list[tuple[float, int]] = []
+    logger.info(
+        "{:6} {:>6} {:>9} {:>12} {:>12} {:>9}",
+        "game",
+        "levels",
+        "decisions",
+        "baseline@1",
+        "model@1",
+        "chance",
+    )
+    for game_id, (X, y, g, lv) in per_game.items():
+        levels = sorted(set(lv.tolist()))
+        if len(levels) < 2:
+            continue
+        # Forward-chaining: for each level k, train on levels < k and score k.
+        # Forward-only because that is the online situation — an agent reaching
+        # level k has seen every earlier level and none of the later ones.
+        # Holding out only the last level wastes the rest: tu93 carries 156
+        # decisions across eight levels and its last holds 21 of them.
+        g_hit = g_base = g_seen = 0
+        g_floor: list[tuple[float, int]] = []
+        for k in levels[1:]:
+            tr, te = lv < k, lv == k
+            if not y[tr].any() or not y[te].any():
+                continue
+            model = LogisticRegression(max_iter=2000, class_weight="balanced")
+            model.fit(X[tr], y[tr])
+            m_hit, n = top1(model.decision_function(X[te]), y[te], g[te])
+            b_hit, _ = top1(-X[te][:, 1], y[te], g[te])
+            g_hit += m_hit
+            g_base += b_hit
+            g_seen += n
+            g_floor.append((chance(y[te], g[te]), n))
+        if not g_seen:
+            continue
+        floor = sum(f * n for f, n in g_floor) / g_seen
+        hit += g_hit
+        base += g_base
+        seen += g_seen
+        n = g_seen
+        b_hit, m_hit = g_base, g_hit
+        floors.append((floor, n))
+        logger.info(
+            "{:6} {:6} {:9} {:11.0%} {:11.0%} {:9.0%}",
+            game_id,
+            len(levels),
+            n,
+            b_hit / max(n, 1),
+            m_hit / max(n, 1),
+            floor,
+        )
+    if not seen:
+        logger.warning("no game has two labelled levels to split")
+        return
+    pooled = sum(f * n for f, n in floors) / max(sum(n for _, n in floors), 1)
+    line = logger.success if hit > base else logger.error
+    line(
+        "within-game held-out level: baseline {}/{} ({:.0%}) -> model {}/{} "
+        "({:.0%}), against a {:.0%} chance floor",
+        base,
+        seen,
+        base / seen,
+        hit,
+        seen,
+        hit / seen,
+        pooled,
+    )
 
 
 @app.command()
 def main(
     games: str = typer.Option("", help="Comma-separated subset; default all labelled."),
+    within: bool = typer.Option(
+        True, help="Also split within each game, train on earlier levels."
+    ),
 ) -> None:
     """Fit per fold on every other game, score on the held-out one."""
     require_starter()
@@ -184,10 +319,16 @@ def main(
         raise typer.Exit(1)
 
     base_hit = base_n = mod_hit = mod_n = 0
+    floors: list[tuple[float, int]] = []
     logger.info(
-        "{:6} {:>9} {:>12} {:>12}", "held", "decisions", "baseline@1", "model@1"
+        "{:6} {:>9} {:>12} {:>12} {:>9}",
+        "held",
+        "decisions",
+        "baseline@1",
+        "model@1",
+        "chance",
     )
-    for held, (Xh, yh, gh) in per_game.items():
+    for held, (Xh, yh, gh, _lv) in per_game.items():
         rest = [v for k, v in per_game.items() if k != held]
         Xtr = np.vstack([r[0] for r in rest])
         ytr = np.concatenate([r[1] for r in rest])
@@ -196,13 +337,20 @@ def main(
         # Baseline is the shipped order: rank 0 wins, so score by -rank.
         b_hit, n = top1(-Xh[:, 1], yh, gh)
         m_hit, _ = top1(model.decision_function(Xh), yh, gh)
+        floor = chance(yh, gh)
         base_hit += b_hit
         mod_hit += m_hit
         base_n += n
         mod_n += n
         logger.info(
-            "{:6} {:9} {:11.0%} {:11.0%}", held, n, b_hit / max(n, 1), m_hit / max(n, 1)
+            "{:6} {:9} {:11.0%} {:11.0%} {:9.0%}",
+            held,
+            n,
+            b_hit / max(n, 1),
+            m_hit / max(n, 1),
+            floor,
         )
+        floors.append((floor, n))
     verdict = logger.success if mod_hit > base_hit else logger.error
     verdict(
         "leave-one-game-out recall@1: baseline {}/{} ({:.0%}) -> model {}/{} ({:.0%})",
@@ -213,6 +361,8 @@ def main(
         mod_n,
         mod_hit / mod_n,
     )
+    if within:
+        within_game(per_game)
 
 
 if __name__ == "__main__":
