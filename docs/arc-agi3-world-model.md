@@ -978,6 +978,42 @@ whose docstring has asked since #29 for a re-measurement after the chrome mask �
 is worth -0.0140pp and one game. That is a thin case for a mechanism carrying
 this much machinery.
 
+## Promoted: the bootstrap probe was costing more than it bought (2026-09-25)
+
+The ablation's largest signal, followed through. `_probe_moves` spent one action
+per directional move to seed the lattice; `PROBE_LIMIT` caps that, and swept
+0-4 the roster reads **0.3827, 0.3827, 0.3081, 0.3074, 0.1868**. Four of five
+values beat the shipped setting and the response is a trend, so `sweep.py`
+returns **STABLE** — the first such verdict in this project.
+
+Confirmed over five seeds: **0.1561% -> 0.3520%, +0.1959pp**, against a 0.0560pp
+two-sigma bar.
+
+**The gain is not the unlock it first looks like.** Per game:
+
+| game | base | PROBE_LIMIT=1 | delta | levels |
+| --- | --- | --- | --- | --- |
+| **ar25** | 0.0088% | **1.8701%** | +0.0745pp | 1 -> 1, **~570 actions -> ~39** |
+| g50t | 0.0000% | 3.5714% | +0.1429pp | 0 -> 1, at its cap |
+| ls20 | 0.3738% | 0.0000% | -0.0150pp | 1 -> 0 |
+| sp80 | 0.1965% | 0.0345% | -0.0065pp | 1 -> 1 |
+
+ar25 clears the *same* level roughly 14.6x faster against a 32-action human
+baseline, which is worth more on its own than losing ls20 costs. The change is
+net positive with g50t discarded entirely — and efficiency on a game already won
+is where the +2.203pp of measured headroom lives.
+
+**`ab.py` fails this on the no-regression rule, and it was promoted anyway.**
+ls20 goes 5/5 seeds to 0/5, and it goes at every value below four — it is the
+one game that needs the full bootstrap. The rule exists because a trade "will
+not reproduce on the hidden set", but it was written for *lucky* trades; the
+sweep establishes this is a mechanism. Recorded as a deliberate override rather
+than a pass, because the hidden set is out-of-distribution by design and the
+balance there is unknown.
+
+`PROBE_LIMIT = 1` rather than 0: identical on all 25 games, and one surviving
+probe leaves the mechanism available to a hidden game that needs it.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of

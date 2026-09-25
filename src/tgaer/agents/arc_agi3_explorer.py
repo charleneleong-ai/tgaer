@@ -59,6 +59,20 @@ _MOVES = (1, 2, 3, 4)  # directional action ids — the moves a lattice is built
 # later changes moved the ground under them — `_inert`'s own docstring asks for
 # exactly that re-measurement after the chrome mask, which shipped in #29.
 USE_PROBE = True  # bootstrap each directional action once
+# How many directional actions the bootstrap may spend. It was one per move,
+# and that is worse than barely probing at all: swept over 0-4 the roster reads
+# 0.3827, 0.3827, 0.3081, 0.3074 and 0.1868, so four of five values beat the
+# shipped setting and the response is a trend rather than a spike.
+#
+# The gain is not the g50t unlock it first looks like. ar25 clears the *same*
+# level in roughly 39 actions instead of 570 — 0.0088% to 1.8701% — which is
+# +0.0745pp on its own against the 0.0150pp that losing ls20 costs, so this is
+# net positive even discarding g50t. ls20 goes at every value below four; it is
+# the one game that needs the full bootstrap.
+#
+# 1 rather than 0: the two are identical on all 25 games, and keeping a single
+# probe leaves the mechanism alive for a hidden game that might need it.
+PROBE_LIMIT = 1
 USE_AFFORDANCE = True  # route toward a learned affordance
 USE_NAV = True  # route the avatar over the move lattice
 USE_INERT = True  # demote primitives that changed nothing
@@ -569,6 +583,8 @@ class ExplorerArcAgi3Agent(Agent):
         """Bootstrap: take each directional action once so the avatar's move lattice
         is complete before directed routing relies on it (a partial lattice makes the
         router oscillate). Skip a move whose effect is already known or once tried."""
+        if len(self._probed) >= PROBE_LIMIT:
+            return None
         for a in available:
             if a in _MOVES and a not in lattice and a not in self._probed:
                 self._probed.add(a)
