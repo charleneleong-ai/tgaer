@@ -1014,6 +1014,48 @@ balance there is unknown.
 `PROBE_LIMIT = 1` rather than 0: identical on all 25 games, and one surviving
 probe leaves the mechanism available to a hidden game that needs it.
 
+## Why ls20 needs the full bootstrap, and why the general fix is worse (2026-09-25)
+
+ls20 is the one game lost by capping the probe, so it was worth asking what it
+uses the bootstrap for. Instrumented at both settings:
+
+| | `PROBE_LIMIT=4` | `PROBE_LIMIT=1` |
+| --- | --- | --- |
+| clears | step 68 | **never** |
+| lattice reaches 4 | step 5 | **never** (tops out at 3) |
+| affordance fires | 165x | 126x |
+
+**ls20 needs all four directions.** With a partial lattice its router can never
+navigate. ar25 is the opposite: it clears by frontier in ~39 actions and the
+lattice only diverts it.
+
+That suggests deferring the probe rather than capping it — let a game the
+frontier solves finish first, and still bootstrap one that needs routing. The
+obvious form, `PROBE_AFTER = N` steps, is exactly the overfitting this project
+keeps finding: a number chosen so ar25's 39-action solve lands first, fitted to
+the public 25 while the scored set is out-of-distribution by construction.
+
+So the adaptive form was measured instead — probe only once `_is_stuck()`
+reports the board has stopped yielding unseen states, reusing the existing stall
+detector and adding no tuned constant. **It is strictly worse:**
+
+| | baseline | `PROBE_LIMIT=1` | demand-driven |
+| --- | --- | --- | --- |
+| mean | 0.1561% | **0.3520%** | 0.3508% |
+| ar25 | 0.0088% | 1.8701% | 1.8701% |
+| g50t | 0.0000% | 3.5714% | 3.5714% |
+| ls20 | 0.3738% | 0.0000% | 0.0000% |
+| tu93 | 0.0357% | 0.0357% | **0.0044%** |
+
+Same gains, ls20 still lost, and tu93 now loses a level too — deferring the
+probe means tu93's lattice arrives too late for its second level. Reverted.
+
+**What this says about generalising.** The benefit is not "probe when needed",
+it is "probe less". `PROBE_LIMIT` is still a constant selected on the public 25,
+but it sits on a plateau — 0, 1, 2 and 3 all beat 4 — rather than at a tuned
+optimum, and a plateau is the shape that survives a distribution shift. The
+adaptive alternative was the principled answer and the measurement rejected it.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
