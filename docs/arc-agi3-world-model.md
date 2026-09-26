@@ -1183,6 +1183,44 @@ mechanisms unless they demonstrably hurt.** Capping the probe was a constant
 selected on 25 games and removing it paid; goal induction adapts per game and
 should not be cut on a result inside noise.
 
+## The field_box crop is load-bearing; the chrome mask alone is not (2026-09-26)
+
+`frame_signature` crops to the field box *and* `_settled` masks chrome, two
+mechanisms for one job — keeping HUD churn out of the state key. Since the crop is
+[what blinds five games](#field_box-blinds-the-state-signature-on-the-five-stuck-games),
+the obvious test is whether the mask alone carries it. It does not.
+
+| arm | RHAE | sd over 5 seeds |
+| --- | --- | --- |
+| baseline | 0.3520% | 0.0280 |
+| `USE_FIELD_CROP = False` | **0.1859%** | **0.0000** |
+
+`-0.1661pp` on a pooled sd of `0.0198pp`, and **g50t, sp80 and tu93 all stop
+scoring in every seed**. That makes the crop the most load-bearing mechanism
+measured on this agent — ahead of `_inert` at `-0.2177pp` only because that
+ablation was taken against a different baseline.
+
+Whole-board keying fails for the reason `frame_signature`'s own TODO predicts: it
+keys on every pixel, so incidental per-frame churn the mask does not catch
+fragments one position into many states (live ls20: 741 signatures for 30 avatar
+cells). The frontier then never runs out of "unseen" states, so it never routes,
+and a cycle is indistinguishable from progress. The crop is not merely a HUD
+filter — **it is the denoiser**, and it works by throwing away most of the board.
+
+**The five blind games are closed to signature-level fixes.** Three attempts now:
+whole-board `_field` changed no level count on any of the five; whole-board
+signature costs three scoring games; and the crop cannot be both narrow enough to
+denoise ls20 and wide enough to see tr87's play area, because on tr87 **0% of the
+changing cells are inside the box**. A per-game adaptive box is the only remaining
+shape, and it would have to re-key the graph as it grows — the exact fragmentation
+that just cost three games. Park this line.
+
+**What the two failures share is the diagnostic.** Both this and the regressive-edge
+attempt land at `~0.186%` with `sd = 0.0000` — the same floor, where only ar25 and
+lp85 still score. A candidate sd of exactly zero across five seeds is now a known
+signature of "the change removed the agent's ability to discriminate states", not
+of a stable improvement. Treat `sd -> 0` as a failure indicator in its own right.
+
 ## Deferring "irreversible" edges costs three games (2026-09-26)
 
 Online-graph-exploration theory says exploration cost on an unknown *directed*
