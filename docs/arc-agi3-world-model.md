@@ -1183,6 +1183,100 @@ mechanisms unless they demonstrably hurt.** Capping the probe was a constant
 selected on 25 games and removing it paid; goal induction adapts per game and
 should not be cut on a result inside noise.
 
+## The field_box crop is load-bearing; the chrome mask alone is not (2026-09-26)
+
+`frame_signature` crops to the field box *and* `_settled` masks chrome, two
+mechanisms for one job — keeping HUD churn out of the state key. Since the crop is
+[what blinds five games](#field_box-blinds-the-state-signature-on-the-five-stuck-games),
+the obvious test is whether the mask alone carries it. It does not.
+
+| arm | RHAE | sd over 5 seeds |
+| --- | --- | --- |
+| baseline | 0.3520% | 0.0280 |
+| `USE_FIELD_CROP = False` | **0.1859%** | **0.0000** |
+
+`-0.1661pp` on a pooled sd of `0.0198pp`, and **g50t, sp80 and tu93 all stop
+scoring in every seed**. That makes the crop the most load-bearing mechanism
+measured on this agent — ahead of `_inert` at `-0.2177pp` only because that
+ablation was taken against a different baseline.
+
+Whole-board keying fails for the reason `frame_signature`'s own TODO predicts: it
+keys on every pixel, so incidental per-frame churn the mask does not catch
+fragments one position into many states (live ls20: 741 signatures for 30 avatar
+cells). The frontier then never runs out of "unseen" states, so it never routes,
+and a cycle is indistinguishable from progress. The crop is not merely a HUD
+filter — **it is the denoiser**, and it works by throwing away most of the board.
+
+**The five blind games are closed to signature-level fixes.** Three attempts now:
+whole-board `_field` changed no level count on any of the five; whole-board
+signature costs three scoring games; and the crop cannot be both narrow enough to
+denoise ls20 and wide enough to see tr87's play area, because on tr87 **0% of the
+changing cells are inside the box**. A per-game adaptive box is the only remaining
+shape, and it would have to re-key the graph as it grows — the exact fragmentation
+that just cost three games. Park this line.
+
+**What the two failures share is the diagnostic.** Both this and the regressive-edge
+attempt land at `~0.186%` with `sd = 0.0000` — the same floor, where only ar25 and
+lp85 still score. A candidate sd of exactly zero across five seeds is now a known
+signature of "the change removed the agent's ability to discriminate states", not
+of a stable improvement. Treat `sd -> 0` as a failure indicator in its own right.
+
+## Deferring "irreversible" edges costs three games (2026-09-26)
+
+Online-graph-exploration theory says exploration cost on an unknown *directed*
+graph is governed by deficiency `d`, the edges needed to make it Eulerian, so the
+principled policy is to explore irreversible actions last. The published 3rd-place
+ARC-AGI-3 graph explorer lost 16 -> 12 private levels to one instance of this: a
+reset action recorded as a self-edge on the start node, which it then kept
+re-selecting. Two detectors were tried and **both measured worse**; the mechanism
+is reverted.
+
+| arm | RHAE | sd over 5 seeds |
+| --- | --- | --- |
+| baseline | 0.3520% | 0.0280 |
+| defer regressive edges | **0.1861%** | **0.0000** |
+
+`-0.1659pp` against a pooled sd of `0.0198pp` — 8.4 sd, and the gate names three
+regressions: **g50t stops scoring in all 5 seeds, sp80 stops scoring, tu93 drops
+2 levels to 1.** Losing g50t alone undoes most of the roster's score.
+
+**Why it fails: on these games, returning to an earlier state is how play works.**
+The demotion is per primitive, so a single observation of "this discarded
+progress somewhere" deprioritises the action everywhere — including where it is
+the winning move. A candidate sd of exactly `0.0000` is the tell: the demotion
+overrode the seeded tie-break entirely, so all five seeds played one trajectory.
+The mechanism did not add caution, it replaced the search.
+
+**The theory is not wrong; the evidence for it is absent here.** Deficiency counts
+edges that *cannot be undone*, and the graph holds almost no evidence of those —
+early on, every newly-discovered state has no known path back, so the test either
+fires on everything or waits for a return route that a frontier walk supplies
+anyway. Both proxies tried are proxies for reachability, and both misread ordinary
+structure:
+
+- **Return to the remembered level-start signature.** Fires on a legitimate hub.
+  It also carried a real bug worth recording: the anchor is captured while
+  `_settled` is still unmasked, inside the first `CHURN_WARMUP = 20` steps, then
+  compared against chrome-masked frames, so on any board with chrome a genuine
+  return can never equal it. Silently dead on exactly the games that score.
+- **A drop of more than one step in graph depth.** First-discovery depth is not
+  shallowness, so a shortcut into an early-discovered node reads as a reset.
+
+Note what the published bug actually was: a self-edge, i.e. an action that changes
+nothing. `_learn_inert` already owns that case, and owns it better — it keys on
+byte-identity rather than on a signature that
+[the crop can collapse](#field_box-blinds-the-state-signature-on-the-five-stuck-games).
+The lesson generalises the earlier one about tuned constants: **prune proxies as
+aggressively as constants.** A mechanism justified by theory still has to be
+measured on the quantity the theory names, and "came back to somewhere older" is
+not "cannot get back".
+
+**What would justify retrying:** instrument edges with no known return path after
+a full 6000-action run and count them against the ones these proxies marked. If
+that set is large and the proxies caught a small arbitrary slice, a reachability
+test is worth building. If it is near-empty, there is nothing here to defer and
+the deficiency argument simply does not bind on this roster.
+
 ## `field_box` blinds the state signature on the five stuck games (2026-09-26)
 
 The five games reachability found exhausted are **not inert** — almost everything

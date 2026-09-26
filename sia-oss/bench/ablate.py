@@ -43,6 +43,7 @@ TOGGLES = (
     "USE_CHURN_MASK",
     "USE_FRONTIER",
     "USE_GOAL_INDUCTION",
+    "USE_FIELD_CROP",
 )
 
 app = typer.Typer(add_completion=False)

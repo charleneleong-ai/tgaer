@@ -79,6 +79,7 @@ USE_INERT = True  # demote primitives that changed nothing
 USE_CHURN_MASK = True  # flatten self-animating cells out of the state key
 USE_FRONTIER = True  # walk known edges back to a state with something untested
 USE_GOAL_INDUCTION = True  # learn a goal colour from a winning click
+USE_FIELD_CROP = True  # key the signature on the field box, not the whole board
 # Avatar positions affordance won't step back onto. This is a window over the last 8
 # *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a
 # click re-appends the cell the avatar is standing on. An agent that alternates a
@@ -453,7 +454,12 @@ class ExplorerArcAgi3Agent(Agent):
         self._levels = levels
 
         field = self._field(arr)
-        sig = frame_signature(self._settled(arr), field)
+        # The crop and the chrome mask both exist to keep HUD churn out of the
+        # key. Off, the mask alone carries it, and the box only picks candidates.
+        sig = frame_signature(
+            self._settled(arr),
+            field if USE_FIELD_CROP else (np.zeros(2, int), np.array(arr.shape) - 1),
+        )
         # Before register(), so "seen before" still means what it says.
         fresh = int(not self._graph.seen(sig))
         self._novelty.append(fresh)
