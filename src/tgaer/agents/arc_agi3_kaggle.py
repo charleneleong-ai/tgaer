@@ -2442,11 +2442,26 @@ class ExplorerAgent(MyAgent):
     # were still arriving: on the local roster 600 -> 6000 actions took 6
     # levels to 14, over 5 games to 8.
     #
-    # 6000 x 110 games at the measured 3811 actions/min is ~2.9h, leaving
-    # margin for slower hidden games; is_done()'s global deadline remains the
-    # real safety valve. The LLM agent keeps 400: at 1051 actions/min the same
-    # budget would need 10.5h and blow the deadline.
-    MAX_ACTIONS = 6000
+    # 12000 rather than 6000, and the argument is derived from the scorer rather
+    # than measured on the public roster — which is the point, because a 2.25x
+    # local gain moved the public score by zero, so local RHAE cannot justify a
+    # submission change.
+    #
+    # `evaluate.py` scores env = min(cap, weighted) with
+    # weighted = sum over cleared levels of l * min(1.15, (baseline_l/ours_l)^2).
+    # A cleared level's action count is fixed when it clears, so extra budget
+    # cannot degrade it, and clearing one more level adds a non-negative term to
+    # `weighted` while raising `cap`. **env_score is therefore monotone
+    # non-decreasing in the action budget**: actions spent failing score nothing
+    # and cost nothing.
+    #
+    # The kernel's own projection on the v76 run was 16000 actions per game over
+    # 110 games in 7.5h, so 6000 used 37% of what was affordable. 12000 doubles
+    # it with margin for hidden games slower than the roster; is_done()'s global
+    # deadline remains the safety valve, and truncation is graceful — levels
+    # already cleared keep their counts. The LLM agent keeps 400: at 1051
+    # actions/min the same budget would need 10.5h and blow the deadline.
+    MAX_ACTIONS = 12000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

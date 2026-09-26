@@ -1105,6 +1105,46 @@ but it sits on a plateau — 0, 1, 2 and 3 all beat 4 — rather than at a tuned
 optimum, and a plateau is the shape that survives a distribution shift. The
 adaptive alternative was the principled answer and the measurement rejected it.
 
+## Reachability: the 19 non-scoring games split in two (2026-09-26)
+
+`reachability.py` reads the agent's own `StateGraph` after a 6000-action run and
+asks whether a game that scores nothing has anything left to explore. The answer
+partitions them, and neither half is a budget problem in the way the budget
+argument assumed.
+
+**Five games have exhausted everything reachable**, with state spaces so small
+the agent can barely act:
+
+| game | states | untested |
+| --- | --- | --- |
+| vc33 | **1** | 0 |
+| tr87 | **1** | 0 |
+| ft09 | **2** | 0 |
+| dc22 | 9 | 0 |
+| tn36 | 62 | 0 |
+
+One or two reachable states means essentially nothing the agent proposes changes
+the board. That matches what was already known from the other direction — tr87 is
+click-inert, and ft09 and vc33 are the games whose winning click is not
+proposable. **More budget cannot reach them**; the candidate generator is the
+binding constraint.
+
+**Fourteen games have thousands of untested pairs**, but far more than brute
+force can cover: cd82 holds 2728 states and **31378 untested pairs** at 6000
+actions, cn04 40610, r11l 33078. Doubling the budget roughly doubles coverage and
+is still monotone-safe, but it will not exhaust these — and the oracle clears
+cd82 in **five actions**, so a short winning path exists inside a space the
+search wanders without finding.
+
+**This corrects the premise behind the budget change.** State spaces measured at
+900 steps (tu93 156, lp85 431, ls20 562) grow into the thousands by 6000, so
+"exhaustive coverage is affordable" is false at scale — the chrome-masked
+signature still fragments. The budget increase remains justified by the scorer
+being monotone in it, but it should not be expected to unlock these games.
+
+What the partition does say is that **search direction, not search volume, is the
+constraint on the 14** — consistent with recall@1 sitting at 18% overall and at
+the chance floor on tu93.
 ## Re-ablated against the new baseline, and the verdicts invert (2026-09-25)
 
 The first ablation measured every mechanism against `PROBE_LIMIT=4`. That
@@ -1142,6 +1182,50 @@ The rule this suggests: **prune tuned constants aggressively, keep adaptive
 mechanisms unless they demonstrably hurt.** Capping the probe was a constant
 selected on 25 games and removing it paid; goal induction adapts per game and
 should not be cut on a result inside noise.
+
+## `field_box` blinds the state signature on the five stuck games (2026-09-26)
+
+The five games reachability found exhausted are **not inert** — almost everything
+the agent does moves their board:
+
+| game | available | agent proposes -> live | dense clicks -> live |
+| --- | --- | --- | --- |
+| vc33 | [6] | 7 -> **7** | 1024 -> **1024** |
+| tr87 | [1,2,3,4] | 4 -> **4** | — |
+| ft09 | [6] | 12 -> 4 | 1024 -> 72 |
+| dc22 | [1,2,3,4,6] | 16 -> **16** | 1024 -> **1024** |
+| tn36 | [6] | 12 -> **12** | 1024 -> **1024** |
+
+vc33 has 1024 working clicks out of 1024 and reachability reported **one** state.
+The chrome mask is not the cause — signature counts are identical with it off.
+The cause is the **crop**: `frame_signature` keys on `field_box`, the modal
+colour's extent, and that extent misses where the game happens.
+
+| game | field_box | cells that ever change | inside the box |
+| --- | --- | --- | --- |
+| **tr87** | rows 0-33, cols 0-63 | 241 | **0 (0%)** |
+| **vc33** | rows 1-63, cols 0-51 | 64 | **0 (0%)** |
+| dc22 | rows 10-53, cols 0-31 | 100 | 36 (36%) |
+| ft09 | rows 0-62, cols 0-63 | 88 | 36 (41%) |
+| tn36 | whole board | 61 | 61 (100%) |
+
+tr87 visits **523 distinct boards and hashes them all to one signature**; vc33
+51 boards to one. The frontier is blind by construction, so there is nothing for
+it to explore and no amount of budget or search direction helps.
+
+**This is one root cause with two symptoms.** The earlier note that vc33's
+winning button sits at col 60, outside the field box ending at col 51, is the
+same defect seen from the candidate side: the crop both hides winning actions
+from `in_field` and collapses the state key.
+
+**Perception is necessary but not sufficient.** Patching `_field` to return the
+whole board changes no level count on any of the five — they still clear nothing
+in 600 actions. Seeing more states is not the same as finding the goal, so this
+is a prerequisite for the other mechanisms rather than a fix on its own. A real
+fix should be adaptive — widen the box to contain the cells observed to change,
+which is self-correcting and needs no constant — rather than dropping the crop
+globally, since the crop exists to keep HUD churn out of the key for the games
+that do score.
 
 ## Four changes measured, four rejected
 
