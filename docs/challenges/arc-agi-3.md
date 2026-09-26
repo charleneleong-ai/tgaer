@@ -64,6 +64,49 @@ bottom quartile. Frontier LLMs score 0.25–0.37% on this benchmark, so the
 leaderboard is far above frontier-model performance; competitors get there by
 extreme optimisation, not by a better prompt.
 
+## Levers measured and closed (2026-09-26/27)
+
+Everything below was gated at 5 seeds against a `0.030pp` noise floor and a pooled-sd
+no-regression rule. One shipped.
+
+| lever | result | verdict |
+| --- | --- | --- |
+| action budget 6000 -> 12000 | `+0.0001pp`, one extra level (ar25) | shipped, [#38](https://github.com/charleneleong-ai/tgaer/pull/38) |
+| defer irreversible edges (deficiency theory) | `-0.1659pp`, g50t + sp80 + tu93 lost | rejected, [#40](https://github.com/charleneleong-ai/tgaer/pull/40) |
+| drop the `field_box` crop | `-0.1661pp`, same three lost | rejected, [#40](https://github.com/charleneleong-ai/tgaer/pull/40) |
+| re-validate the avatar latch | tu93 2 levels -> 1 | rejected |
+| `(colour, size)` class compression | candidates collapse only 1.4x median | not built |
+| colour-agnostic role inference | `+0.0000pp`, **bit-identical** | shipped, [#41](https://github.com/charleneleong-ai/tgaer/pull/41) |
+
+**Four of five mechanism levers are closed, and the one change worth defending moved
+local RHAE by exactly nothing.** That is the loop working: each rejection came from
+the gate, at roughly 8 sd, and three of them had published theory behind them.
+
+What the failures establish, which is worth more than the fix would have been:
+
+- **The crop is the denoiser, not a HUD filter.** Whole-board keying fragments one
+  position into hundreds of states, so the frontier never exhausts and a cycle reads
+  as progress. The five signature-blind games are therefore closed to signature-level
+  fixes.
+- **`sd -> 0` is a failure signature.** Both rejected mechanisms landed at `~0.186%`
+  with a candidate sd of exactly zero across five seeds — the change had destroyed
+  state discrimination, leaving one trajectory. A tight variance is not stability.
+- **Navigation is not always better than blind search.** Giving tu93 a correct avatar
+  made it worse; its frontier walk beats its own navigation, and the mis-pinned
+  avatar was accidentally protecting it.
+- **Cost is state fragmentation, not candidate breadth.** The agent weighs only
+  21-101 distinct candidates per frame yet spends 1463-1707 actions, because the graph
+  re-tests candidates at every new signature. That is why `_inert` — the one mechanism
+  generalising per primitive *across* states — is the most load-bearing part of the
+  agent at `-0.2177pp`.
+
+**Eight constants remain fitted to these 25 games** (`PROBE_LIMIT`, `MIN_NOVELTY`,
+`WALK_WINDOW`, `STUCK_WINDOW`, `FIELD_SWITCH_MARGIN`, `CHURN_FRACTION`,
+`CHURN_WARMUP`, `_RECENT_CELLS`). `MIN_NOVELTY = 0.15` sits inside a 0.11-0.18 gap
+measured on five games, which is capacity fitted to noise. Deleting an *inert* one
+would be a free out-of-distribution win; `_RECENT_CELLS` was swept first and is not
+inert (0 reads 0.3155% against 0.3520%), so no free deletion there.
+
 ## The result that governs the rest
 
 **A 2.25× local gain moved the public score by zero.** Coupled metrics would have
