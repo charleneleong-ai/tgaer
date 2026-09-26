@@ -978,6 +978,42 @@ whose docstring has asked since #29 for a re-measurement after the chrome mask �
 is worth -0.0140pp and one game. That is a thin case for a mechanism carrying
 this much machinery.
 
+## The local bench does not predict the score — tested directly (2026-09-25)
+
+**Read this before proposing anything gated on local RHAE.**
+
+The probe cap was the first change in this project to pass every local bar: a
+`sweep.py` **STABLE** verdict across a plateau, +0.1959pp over five seeds at 3.5x
+the noise bar, deterministic per game, and confirmed in the kernel at 9 levels
+over 7 games against v75's 8 over 6. It was submitted as v76.
+
+| version | agent | local RHAE | public |
+| --- | --- | --- | --- |
+| v75 | baseline | 0.1561% | 0.13 |
+| v76 | `PROBE_LIMIT=1` | **0.3520%** | **0.13** |
+
+**Local more than doubled. Public moved zero.**
+
+This is not a null inside noise. If the metrics were coupled, a 2.25x local gain
+should have taken public to roughly 0.29 — about **six times the 0.027 noise
+bar** on the public metric. The predicted effect was large and entirely absent.
+
+**Why.** 73% of the local gain was g50t unlocking and the rest was ar25's
+efficiency, both selected on the public 25 — the set the ARC-AGI-3 paper calls
+"intentionally out-of-distribution relative to the public set" precisely to
+resist this. The change helped exactly the games it was chosen on.
+
+**The plateau argument did not save it.** `PROBE_LIMIT` 0, 1, 2 and 3 all beat 4,
+which is the STABLE shape this repo treats as evidence of a mechanism rather than
+a lucky value. It still did not transfer. **A plateau is insufficient evidence of
+transfer**, which is the strongest generalisation heuristic we had.
+
+**What follows.** The local instrumentation is correct for what it measures and
+it caught eleven bad changes; it cannot identify which good changes matter. Do
+not gate a submission on local RHAE. The remaining distance is architectural —
+the leaderboard runs 7-19% against our 0.13 over 3284 teams, and that is not a
+candidate-ordering problem.
+
 ## Promoted: the bootstrap probe was costing more than it bought (2026-09-25)
 
 The ablation's largest signal, followed through. `_probe_moves` spent one action
@@ -1068,6 +1104,44 @@ it is "probe less". `PROBE_LIMIT` is still a constant selected on the public 25,
 but it sits on a plateau — 0, 1, 2 and 3 all beat 4 — rather than at a tuned
 optimum, and a plateau is the shape that survives a distribution shift. The
 adaptive alternative was the principled answer and the measurement rejected it.
+
+## Re-ablated against the new baseline, and the verdicts invert (2026-09-25)
+
+The first ablation measured every mechanism against `PROBE_LIMIT=4`. That
+baseline no longer exists, and four of its five verdicts rested on ar25 being
+lost — the game that changed most, now clearing in ~39 actions by pure frontier
+instead of ~570. Re-run against the shipped agent (0.3520%):
+
+| mechanism off | RHAE | delta | regressions | first ablation |
+| --- | --- | --- | --- | --- |
+| `USE_INERT` | 0.1343% | **-0.2177pp** | ar25, g50t | -0.0140pp, ar25 |
+| `USE_FRONTIER` | 0.1869% | **-0.1651pp** | g50t, tu93 | -0.0280pp |
+| `USE_AFFORDANCE` | 0.2795% | -0.0725pp | ar25 | -0.0180pp |
+| `USE_CHURN_MASK` | 0.3316% | -0.0204pp | none | -0.0207pp, ar25 |
+| `USE_GOAL_INDUCTION` | 0.3802% | +0.0281pp | none | +0.0281pp |
+
+**`_inert` goes from the thinnest case to the strongest**, -0.0140pp to
+-0.2177pp, and removing it now costs ar25 *and* g50t. Its docstring has asked
+since #29 for a re-measurement after the chrome mask; this is it. The mechanism
+follows: with probing capped the agent leans on pure frontier exploration, and
+`_inert` is what stops it re-taking dead actions — ar25's 39-action solve
+depends on it.
+
+Three mechanisms are now strongly justified where all four previously rested on
+a single game each with deltas inside the noise bar. **Reading the first
+ablation against the current agent would have been wrong**, which is the same
+stale-baseline error the door-inducer thread nearly repeated.
+
+**Neither "REMOVABLE" is removed.** Both sit inside the 0.0560pp bar, so they
+are "no evidence" rather than free. `USE_GOAL_INDUCTION` in particular is
+*adaptive* — it learns a goal colour from that game's own winning click at
+runtime — rather than a constant fitted to the public 25, and adaptive
+mechanisms are the ones most likely to carry to an out-of-distribution set.
+
+The rule this suggests: **prune tuned constants aggressively, keep adaptive
+mechanisms unless they demonstrably hurt.** Capping the probe was a constant
+selected on 25 games and removing it paid; goal induction adapts per game and
+should not be cut on a result inside noise.
 
 ## Four changes measured, four rejected
 
