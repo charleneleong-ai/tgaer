@@ -1110,6 +1110,50 @@ What the partition does say is that **search direction, not search volume, is th
 constraint on the 14** — consistent with recall@1 sitting at 18% overall and at
 the chance floor on tu93.
 
+## `field_box` blinds the state signature on the five stuck games (2026-09-26)
+
+The five games reachability found exhausted are **not inert** — almost everything
+the agent does moves their board:
+
+| game | available | agent proposes -> live | dense clicks -> live |
+| --- | --- | --- | --- |
+| vc33 | [6] | 7 -> **7** | 1024 -> **1024** |
+| tr87 | [1,2,3,4] | 4 -> **4** | — |
+| ft09 | [6] | 12 -> 4 | 1024 -> 72 |
+| dc22 | [1,2,3,4,6] | 16 -> **16** | 1024 -> **1024** |
+| tn36 | [6] | 12 -> **12** | 1024 -> **1024** |
+
+vc33 has 1024 working clicks out of 1024 and reachability reported **one** state.
+The chrome mask is not the cause — signature counts are identical with it off.
+The cause is the **crop**: `frame_signature` keys on `field_box`, the modal
+colour's extent, and that extent misses where the game happens.
+
+| game | field_box | cells that ever change | inside the box |
+| --- | --- | --- | --- |
+| **tr87** | rows 0-33, cols 0-63 | 241 | **0 (0%)** |
+| **vc33** | rows 1-63, cols 0-51 | 64 | **0 (0%)** |
+| dc22 | rows 10-53, cols 0-31 | 100 | 36 (36%) |
+| ft09 | rows 0-62, cols 0-63 | 88 | 36 (41%) |
+| tn36 | whole board | 61 | 61 (100%) |
+
+tr87 visits **523 distinct boards and hashes them all to one signature**; vc33
+51 boards to one. The frontier is blind by construction, so there is nothing for
+it to explore and no amount of budget or search direction helps.
+
+**This is one root cause with two symptoms.** The earlier note that vc33's
+winning button sits at col 60, outside the field box ending at col 51, is the
+same defect seen from the candidate side: the crop both hides winning actions
+from `in_field` and collapses the state key.
+
+**Perception is necessary but not sufficient.** Patching `_field` to return the
+whole board changes no level count on any of the five — they still clear nothing
+in 600 actions. Seeing more states is not the same as finding the goal, so this
+is a prerequisite for the other mechanisms rather than a fix on its own. A real
+fix should be adaptive — widen the box to contain the cells observed to change,
+which is self-correcting and needs no constant — rather than dropping the crop
+globally, since the crop exists to keep HUD churn out of the key for the games
+that do score.
+
 ## Four changes measured, four rejected
 
 Every one came from a correct measurement, and the gate plus sweep refused all of
