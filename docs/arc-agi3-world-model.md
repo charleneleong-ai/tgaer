@@ -1183,6 +1183,62 @@ mechanisms unless they demonstrably hurt.** Capping the probe was a constant
 selected on 25 games and removing it paid; goal induction adapts per game and
 should not be cut on a result inside noise.
 
+## Deferring "irreversible" edges costs three games (2026-09-26)
+
+Online-graph-exploration theory says exploration cost on an unknown *directed*
+graph is governed by deficiency `d`, the edges needed to make it Eulerian, so the
+principled policy is to explore irreversible actions last. The published 3rd-place
+ARC-AGI-3 graph explorer lost 16 -> 12 private levels to one instance of this: a
+reset action recorded as a self-edge on the start node, which it then kept
+re-selecting. Two detectors were tried and **both measured worse**; the mechanism
+is reverted.
+
+| arm | RHAE | sd over 5 seeds |
+| --- | --- | --- |
+| baseline | 0.3520% | 0.0280 |
+| defer regressive edges | **0.1861%** | **0.0000** |
+
+`-0.1659pp` against a pooled sd of `0.0198pp` — 8.4 sd, and the gate names three
+regressions: **g50t stops scoring in all 5 seeds, sp80 stops scoring, tu93 drops
+2 levels to 1.** Losing g50t alone undoes most of the roster's score.
+
+**Why it fails: on these games, returning to an earlier state is how play works.**
+The demotion is per primitive, so a single observation of "this discarded
+progress somewhere" deprioritises the action everywhere — including where it is
+the winning move. A candidate sd of exactly `0.0000` is the tell: the demotion
+overrode the seeded tie-break entirely, so all five seeds played one trajectory.
+The mechanism did not add caution, it replaced the search.
+
+**The theory is not wrong; the evidence for it is absent here.** Deficiency counts
+edges that *cannot be undone*, and the graph holds almost no evidence of those —
+early on, every newly-discovered state has no known path back, so the test either
+fires on everything or waits for a return route that a frontier walk supplies
+anyway. Both proxies tried are proxies for reachability, and both misread ordinary
+structure:
+
+- **Return to the remembered level-start signature.** Fires on a legitimate hub.
+  It also carried a real bug worth recording: the anchor is captured while
+  `_settled` is still unmasked, inside the first `CHURN_WARMUP = 20` steps, then
+  compared against chrome-masked frames, so on any board with chrome a genuine
+  return can never equal it. Silently dead on exactly the games that score.
+- **A drop of more than one step in graph depth.** First-discovery depth is not
+  shallowness, so a shortcut into an early-discovered node reads as a reset.
+
+Note what the published bug actually was: a self-edge, i.e. an action that changes
+nothing. `_learn_inert` already owns that case, and owns it better — it keys on
+byte-identity rather than on a signature that
+[the crop can collapse](#field_box-blinds-the-state-signature-on-the-five-stuck-games).
+The lesson generalises the earlier one about tuned constants: **prune proxies as
+aggressively as constants.** A mechanism justified by theory still has to be
+measured on the quantity the theory names, and "came back to somewhere older" is
+not "cannot get back".
+
+**What would justify retrying:** instrument edges with no known return path after
+a full 6000-action run and count them against the ones these proxies marked. If
+that set is large and the proxies caught a small arbitrary slice, a reachability
+test is worth building. If it is near-empty, there is nothing here to defer and
+the deficiency argument simply does not bind on this roster.
+
 ## `field_box` blinds the state signature on the five stuck games (2026-09-26)
 
 The five games reachability found exhausted are **not inert** — almost everything
