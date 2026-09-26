@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from tgaer.agents.arc_agi3_empirical import EmpiricalPlannerAgent
 from tgaer.agents.arc_agi3_grid import LS20_DEFAULT, Semantics
@@ -355,3 +356,66 @@ class TestAgentIntegrationExtended:
 class TestDispatchWiring:
     def test_empirical_kind_registered(self):
         assert dispatch._ARC_AGI3_AGENTS["empirical"] is EmpiricalPlannerAgent
+
+
+class TestColourAgnosticRoles:
+    """Role inference must not assume which colour index is the floor."""
+
+    @staticmethod
+    def _board(
+        avatar_rc: tuple[int, int],
+        floor: int = 7,
+        wall: int = 2,
+        extra: dict[tuple[int, int], int] | None = None,
+    ) -> np.ndarray:
+        """A field whose floor and wall are not the public roster's 3 and 4."""
+        g = np.full((10, 10), floor, dtype=int)
+        g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = wall
+        g[avatar_rc] = 12
+        for rc, v in (extra or {}).items():
+            g[rc] = v
+        return g
+
+    def _pin(self, det: EmpiricalSemantics, floor: int, wall: int) -> None:
+        for action, (before, after) in ((1, ((2, 2), (3, 2))), (2, ((3, 2), (2, 2)))):
+            for _ in range(2):
+                det.observe(
+                    self._board(before, floor, wall),
+                    action,
+                    self._board(after, floor, wall),
+                    0,
+                )
+        assert det.avatar == 12
+
+    @pytest.mark.parametrize(("floor", "wall"), [(7, 2), (11, 5)])
+    def test_a_key_coloured_like_the_old_hardcoded_floor_is_found(
+        self, floor: int, wall: int
+    ) -> None:
+        # Colour 3 was skipped outright as "floor". Where the floor is something
+        # else, a vanishing 3 beside the avatar is a key and must read as one.
+        det = EmpiricalSemantics()
+        self._pin(det, floor, wall)
+        prev = self._board((2, 2), floor, wall, {(2, 3): 3})
+        det.observe(prev, 1, self._board((2, 2), floor, wall), 0)
+        assert det.keys == (3,)
+
+    @pytest.mark.parametrize(("floor", "wall"), [(7, 2), (11, 5)])
+    def test_a_door_coloured_like_the_old_hardcoded_wall_is_found(
+        self, floor: int, wall: int
+    ) -> None:
+        det = EmpiricalSemantics()
+        self._pin(det, floor, wall)
+        prev = self._board((2, 2), floor, wall, {(2, 3): 4})
+        det.observe(prev, 1, self._board((2, 2), floor, wall), 1)  # level-up
+        assert det.door == 4
+
+    def test_the_floor_is_never_consulted(self) -> None:
+        # Vanishing is the whole test, so a key sitting on the modal colour's own
+        # index is still found — there is no floor lookup left to fool.
+        det = EmpiricalSemantics()
+        self._pin(det, 7, 2)
+        prev = self._board((2, 2), 7, 2, {(2, 3): 7})
+        cur = self._board((2, 2), 7, 2)
+        cur[2, 3] = 9  # the 7 at (2,3) is replaced, but 7 remains the floor
+        det.observe(prev, 1, cur, 0)
+        assert det.keys == ()  # 7 did not vanish from the frame, so it is no key

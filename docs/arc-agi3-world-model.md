@@ -1183,11 +1183,51 @@ mechanisms unless they demonstrably hurt.** Capping the probe was a constant
 selected on 25 games and removing it paid; goal induction adapts per game and
 should not be cut on a result inside noise.
 
+## Role inference was keyed on public-set colour indices (2026-09-26)
+
+`_observe_key` and `_observe_door` named colours 3 and 4 as floor and wall:
+
+```python
+if v in (3, 4, self._avatar):        # _observe_key
+for r, c in np.argwhere(prev != 3):  # _observe_door
+if v in (4, self._avatar) ...
+```
+
+Colour indices are per game. These are fitted to the 25 public games, and the
+private set is documented as *intentionally* out-of-distribution — so a key
+coloured 3 or a door coloured 4 there was skipped in silence. Both guards were
+also near-redundant locally: each loop already requires the value to have
+**vanished between frames**, and floor and wall do not.
+
+Removed. The 5-seed A/B is **bit-identical** — `['0.3827', '0.3827', '0.3316',
+'0.3316', '0.3316']` on both arms, `+0.0000pp` — which is the useful part of the
+result: it *proves* the literals were inert on this roster, so the change carries
+no local risk and whatever it is worth is worth on colours these games never show.
+
+**This is the first change here whose expected local result was flat.** Local RHAE
+cannot score it, by construction. It ships on the generality argument, and the
+[decoupling already measured](#the-local-bench-does-not-predict-the-score--tested-directly-2026-09-25)
+is the reason that is the right call rather than an excuse.
+
+Follow-up from the same audit: `_observe_door` never needed the floor at all, since
+vanishing is the whole test. The two methods now share one `_vanished_near()` scan,
+which also drops a ~2000-cell `np.argwhere` that existed to rediscover a one- or
+two-element set already in hand. One widened false positive is accepted knowingly:
+a destructible single-cell wall the avatar steps onto now reads as a key. That was
+already true of 14 of 16 colour indices, so this makes behaviour uniform rather
+than opening a new class, and `keys` only clears two caches and forms a skip set.
+
+`LS20_DEFAULT` in `arc_agi3_grid.py` carries the same defect at whole-role-table
+scale (`avatar=12, keys=(0,1), door=9, walls=(4,11)`), as does a bare `(11,)` wall
+literal in `KeyDoorController._plan`. Neither is reachable from the shipped
+explorer — only the research baselines construct them — so the "no hardcoded
+colours" claim is scoped to the explorer's live path, not the repo.
+
 ## The field_box crop is load-bearing; the chrome mask alone is not (2026-09-26)
 
 `frame_signature` crops to the field box *and* `_settled` masks chrome, two
 mechanisms for one job — keeping HUD churn out of the state key. Since the crop is
-[what blinds five games](#field_box-blinds-the-state-signature-on-the-five-stuck-games),
+[what blinds five games](#field_box-blinds-the-state-signature-on-the-five-stuck-games-2026-09-26),
 the obvious test is whether the mask alone carries it. It does not.
 
 | arm | RHAE | sd over 5 seeds |
@@ -1265,7 +1305,7 @@ structure:
 Note what the published bug actually was: a self-edge, i.e. an action that changes
 nothing. `_learn_inert` already owns that case, and owns it better — it keys on
 byte-identity rather than on a signature that
-[the crop can collapse](#field_box-blinds-the-state-signature-on-the-five-stuck-games).
+[the crop can collapse](#field_box-blinds-the-state-signature-on-the-five-stuck-games-2026-09-26).
 The lesson generalises the earlier one about tuned constants: **prune proxies as
 aggressively as constants.** A mechanism justified by theory still has to be
 measured on the quantity the theory names, and "came back to somewhere older" is

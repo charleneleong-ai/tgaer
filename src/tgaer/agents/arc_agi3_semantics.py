@@ -128,30 +128,31 @@ class EmpiricalSemantics:
             np.any(np.abs(av_cells[:, 0] - r) + np.abs(av_cells[:, 1] - c) <= 1)
         )
 
-    def _observe_key(self, prev: np.ndarray, cur: np.ndarray) -> None:
+    def _vanished_near(self, prev: np.ndarray, cur: np.ndarray) -> list[int]:
+        """Values present in ``prev``, absent in ``cur``, that sat beside the avatar.
+
+        No colour is named: vanishing is the whole test, and floor and wall do not
+        vanish within a level."""
         av = self._avatar_cells(prev)
         if not len(av):
-            return
-        gone = set(np.unique(prev)) - set(np.unique(cur))
-        for v in gone:
-            if v in (3, 4, self._avatar):  # floor / wall / avatar are not keys
-                continue
-            near = any(self._any_adjacent(av, r, c) for r, c in cells(prev, int(v)))
-            if near:
-                self._keys.add(int(v))
+            return []
+        gone = (
+            {int(v) for v in np.unique(prev)}
+            - {int(v) for v in np.unique(cur)}
+            - {self._avatar}
+        )
+        return [
+            v
+            for v in sorted(gone)
+            if any(self._any_adjacent(av, r, c) for r, c in cells(prev, v))
+        ]
+
+    def _observe_key(self, prev: np.ndarray, cur: np.ndarray) -> None:
+        self._keys.update(self._vanished_near(prev, cur))
 
     def _observe_door(self, prev: np.ndarray, cur: np.ndarray) -> None:
-        av = self._avatar_cells(prev)
-        if not len(av):
-            return
-        gone = set(np.unique(prev)) - set(np.unique(cur))
-        for r, c in np.argwhere(prev != 3):  # non-floor cells adjacent to avatar
-            v = int(prev[r, c])
-            if v in (4, self._avatar) or v in self._keys:
-                continue
-            if v not in gone:  # must have vanished (not just a static decoration)
-                continue
-            if self._any_adjacent(av, r, c):
+        for v in self._vanished_near(prev, cur):
+            if v not in self._keys:
                 self._door = v
                 return
 
