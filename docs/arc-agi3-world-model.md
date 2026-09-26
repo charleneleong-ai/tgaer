@@ -1105,6 +1105,46 @@ but it sits on a plateau — 0, 1, 2 and 3 all beat 4 — rather than at a tuned
 optimum, and a plateau is the shape that survives a distribution shift. The
 adaptive alternative was the principled answer and the measurement rejected it.
 
+## Reachability: the 19 non-scoring games split in two (2026-09-26)
+
+`reachability.py` reads the agent's own `StateGraph` after a 6000-action run and
+asks whether a game that scores nothing has anything left to explore. The answer
+partitions them, and neither half is a budget problem in the way the budget
+argument assumed.
+
+**Five games have exhausted everything reachable**, with state spaces so small
+the agent can barely act:
+
+| game | states | untested |
+| --- | --- | --- |
+| vc33 | **1** | 0 |
+| tr87 | **1** | 0 |
+| ft09 | **2** | 0 |
+| dc22 | 9 | 0 |
+| tn36 | 62 | 0 |
+
+One or two reachable states means essentially nothing the agent proposes changes
+the board. That matches what was already known from the other direction — tr87 is
+click-inert, and ft09 and vc33 are the games whose winning click is not
+proposable. **More budget cannot reach them**; the candidate generator is the
+binding constraint.
+
+**Fourteen games have thousands of untested pairs**, but far more than brute
+force can cover: cd82 holds 2728 states and **31378 untested pairs** at 6000
+actions, cn04 40610, r11l 33078. Doubling the budget roughly doubles coverage and
+is still monotone-safe, but it will not exhaust these — and the oracle clears
+cd82 in **five actions**, so a short winning path exists inside a space the
+search wanders without finding.
+
+**This corrects the premise behind the budget change.** State spaces measured at
+900 steps (tu93 156, lp85 431, ls20 562) grow into the thousands by 6000, so
+"exhaustive coverage is affordable" is false at scale — the chrome-masked
+signature still fragments. The budget increase remains justified by the scorer
+being monotone in it, but it should not be expected to unlock these games.
+
+What the partition does say is that **search direction, not search volume, is the
+constraint on the 14** — consistent with recall@1 sitting at 18% overall and at
+the chance floor on tu93.
 ## Re-ablated against the new baseline, and the verdicts invert (2026-09-25)
 
 The first ablation measured every mechanism against `PROBE_LIMIT=4`. That
