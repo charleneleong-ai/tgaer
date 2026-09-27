@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import math
 import sys
+from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -63,3 +64,49 @@ def effect_signature(
         frozenset(before - after),
         bucket(changed),
     )
+
+
+def class_keys(ctx: Ctx) -> list[Key]:
+    """Most specific first. Back-off is what lets a rule fire somewhere new."""
+    _, action, colour, size = ctx
+    keys: list[Key] = []
+    if colour is not None and size is not None:
+        keys.append((action, colour, size))
+    if colour is not None:
+        keys.append((action, colour))
+    keys.append((action,))
+    return keys
+
+
+def state_keys(ctx: Ctx) -> list[Key]:
+    """Per state, no generalisation — the control arm."""
+    sig, action, colour, size = ctx
+    return [(sig, action, colour, size)]
+
+
+def marginal_keys(ctx: Ctx) -> list[Key]:
+    """One bucket for the whole game: predicting the commonest effect."""
+    return [()]
+
+
+class EffectModel:
+    """Counts effects per key and predicts the mode, backing off when unseen."""
+
+    def __init__(self, keys: Callable[[Ctx], list[Key]]) -> None:
+        self._keys = keys
+        self._counts: dict[Key, Counter[Effect]] = {}
+
+    def predict(self, ctx: Ctx) -> tuple[Effect | None, int]:
+        for level, key in enumerate(self._keys(ctx)):
+            counter = self._counts.get(key)
+            if counter:
+                return counter.most_common(1)[0][0], level
+        return None, -1
+
+    def observe(self, ctx: Ctx, effect: Effect) -> None:
+        for key in self._keys(ctx):
+            self._counts.setdefault(key, Counter())[effect] += 1
+
+    def seen(self, ctx: Ctx) -> bool:
+        keys = self._keys(ctx)
+        return bool(keys) and keys[0] in self._counts
