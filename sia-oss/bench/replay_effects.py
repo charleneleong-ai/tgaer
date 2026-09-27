@@ -110,3 +110,54 @@ class EffectModel:
     def seen(self, ctx: Ctx) -> bool:
         keys = self._keys(ctx)
         return bool(keys) and keys[0] in self._counts
+
+
+def inert_view(effect: Effect) -> tuple[bool]:
+    """What `_inert` knows: whether anything changed at all."""
+    return (effect[4] == 0,)
+
+
+class Prequential:
+    """Predict with the model as it stands, score, then learn. No split, no leakage."""
+
+    def __init__(self) -> None:
+        self._arms: dict[str, EffectModel] = {
+            "class": EffectModel(class_keys),
+            "state": EffectModel(state_keys),
+            "marginal": EffectModel(marginal_keys),
+        }
+        self._inert = EffectModel(class_keys)
+        self._hits: Counter[str] = Counter()
+        self._levels: Counter[int] = Counter()
+        self._first_hits = 0
+        self._first_n = 0
+        self.n = 0
+
+    def step(self, ctx: Ctx, effect: Effect) -> None:
+        fresh = not self._arms["class"].seen(ctx)
+        for name, model in self._arms.items():
+            got, level = model.predict(ctx)
+            if got == effect:
+                self._hits[name] += 1
+                if name == "class" and fresh:
+                    self._first_hits += 1
+            if name == "class":
+                self._levels[level] += 1
+        got_inert, _ = self._inert.predict(ctx)
+        if got_inert is not None and inert_view(got_inert) == inert_view(effect):
+            self._hits["inert"] += 1
+        if fresh:
+            self._first_n += 1
+
+        for model in self._arms.values():
+            model.observe(ctx, effect)
+        self._inert.observe(ctx, effect)
+        self.n += 1
+
+    def report(self) -> dict[str, float]:
+        n = max(self.n, 1)
+        out = {k: self._hits[k] / n for k in ("class", "state", "inert", "marginal")}
+        out["first_sighting"] = self._first_hits / max(self._first_n, 1)
+        for level in (0, 1, 2):
+            out[f"backoff_{level}"] = self._levels[level] / n
+        return out

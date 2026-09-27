@@ -139,3 +139,64 @@ class TestEffectModel:
         assert not m.seen(("s1", 6, 5, 2))
         m.observe(("s1", 6, 5, 2), self._eff(4))
         assert m.seen(("s1", 6, 5, 2))
+
+
+class TestPrequential:
+    @staticmethod
+    def _eff(churn: int) -> Any:
+        return (False, None, frozenset(), frozenset(), churn)
+
+    def test_the_first_transition_is_a_miss_not_a_crash(self) -> None:
+        p = re_.Prequential()
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        assert p.n == 1
+        assert p.report()["class"] == 0.0
+
+    def test_a_deterministic_rule_is_learned_after_first_sighting(self) -> None:
+        p = re_.Prequential()
+        for _ in range(11):
+            p.step(("s1", 6, 5, 2), self._eff(4))
+        assert p.report()["class"] == pytest.approx(10 / 11)
+
+    def test_an_inconsistent_rule_does_not_beat_its_own_purity(self) -> None:
+        p = re_.Prequential()
+        for i in range(100):
+            p.step(("s1", 6, 5, 2), self._eff(4 if i % 4 else 9))
+        assert p.report()["class"] <= 0.76
+
+    def test_class_beats_state_when_the_rule_generalises(self) -> None:
+        p = re_.Prequential()
+        for i in range(20):
+            p.step((f"s{i}", 6, 5, 2), self._eff(4))
+        r = p.report()
+        assert r["class"] > r["state"]
+        assert r["state"] == 0.0
+
+    def test_a_single_effect_game_gives_marginal_parity_and_no_zero_division(
+        self,
+    ) -> None:
+        p = re_.Prequential()
+        for i in range(10):
+            p.step((f"s{i}", 1, None, None), self._eff(0))
+        r = p.report()
+        assert r["marginal"] == pytest.approx(r["class"])
+
+    def test_the_inert_arm_only_judges_whether_anything_changed(self) -> None:
+        p = re_.Prequential()
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        p.step(("s1", 6, 5, 2), self._eff(9))
+        r = p.report()
+        assert r["inert"] > r["class"]
+
+    def test_first_sighting_accuracy_is_reported_separately(self) -> None:
+        p = re_.Prequential()
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        assert 0.0 <= p.report()["first_sighting"] <= 1.0
+
+    def test_backoff_levels_are_reported_as_shares(self) -> None:
+        p = re_.Prequential()
+        for _ in range(4):
+            p.step(("s1", 6, 5, 2), self._eff(4))
+        r = p.report()
+        assert sum(r[k] for k in ("backoff_0", "backoff_1", "backoff_2")) <= 1.0
