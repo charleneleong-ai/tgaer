@@ -29,9 +29,14 @@ Key = tuple[Any, ...]
 CLICK_ACTION = 6  # the API's click is action id 6; not a colour, so not roster-fitted
 
 
+CHURN_UNKNOWN = -1  # shapes differed; distinct from 0, which means "nothing changed"
+
+
 def bucket(n: int) -> int:
-    """0 is reserved for "none"; everything else is a log2 band."""
-    return 0 if n <= 0 else 1 + int(math.log2(n))
+    """0 means nothing; negative passes through as the unknown sentinel."""
+    if n < 0:
+        return CHURN_UNKNOWN
+    return 0 if n == 0 else 1 + int(math.log2(n))
 
 
 def centroid(arr: np.ndarray, value: int) -> tuple[float, float] | None:
@@ -126,11 +131,16 @@ class Prequential:
             "state": EffectModel(state_keys),
             "marginal": EffectModel(marginal_keys),
         }
+        # Its own predictor over the binary label — NOT the class arm projected,
+        # which would make inert >= class an identity rather than a measurement.
         self._inert = EffectModel(class_keys)
         self._hits: Counter[str] = Counter()
         self._levels: Counter[int] = Counter()
         self._first_hits = 0
         self._first_n = 0
+        self._marginal_fresh_hits = 0
+        # Per most-specific-key effect tallies, for the modal-predictor ceiling.
+        self._key_effects: dict[Key, Counter[Effect]] = {}
         self.n = 0
 
     def step(self, ctx: Ctx, effect: Effect) -> None:
@@ -144,20 +154,42 @@ class Prequential:
             if name == "class":
                 self._levels[level] += 1
         got_inert, _ = self._inert.predict(ctx)
-        if got_inert is not None and inert_view(got_inert) == inert_view(effect):
+        if got_inert is not None and got_inert == inert_view(effect):
             self._hits["inert"] += 1
         if fresh:
             self._first_n += 1
+            got_m, _ = self._arms["marginal"].predict(ctx)
+            if got_m == effect:
+                self._marginal_fresh_hits += 1
 
         for model in self._arms.values():
             model.observe(ctx, effect)
-        self._inert.observe(ctx, effect)
+        self._inert.observe(ctx, inert_view(effect))
+        self._key_effects.setdefault(class_keys(ctx)[0], Counter())[effect] += 1
         self.n += 1
+
+    def ceiling(self, min_obs: int = 20) -> float:
+        """Best a modal-per-key predictor could do: mean purity of well-sampled keys.
+
+        Without this the report cannot separate "the model is weak" from "the target
+        is impure", and the residual loss is read as the former.
+        """
+        pure = [
+            c.most_common(1)[0][1] / sum(c.values())
+            for c in self._key_effects.values()
+            if sum(c.values()) >= min_obs
+        ]
+        return sum(pure) / len(pure) if pure else 0.0
 
     def report(self) -> dict[str, float]:
         n = max(self.n, 1)
         out = {k: self._hits[k] / n for k in ("class", "state", "inert", "marginal")}
         out["first_sighting"] = self._first_hits / max(self._first_n, 1)
+        # Same subset as first_sighting, so the spec's comparison is like-for-like.
+        out["marginal_fresh"] = self._marginal_fresh_hits / max(self._first_n, 1)
+        out["first_n"] = float(self._first_n)
+        out["ceiling"] = self.ceiling()
+        out["abstain"] = self._levels[-1] / n
         for level in (0, 1, 2):
             out[f"backoff_{level}"] = self._levels[level] / n
         return out
@@ -213,14 +245,96 @@ def context_of(prim: tuple[Any, ...], arr: np.ndarray, sig: Any) -> Ctx:
     )
 
 
-SUITE = "tu93,s5i5,ar25,sp80,ls20,m0r0,lp85,g50t"
+def raw_signature(settled: np.ndarray, box: Any) -> tuple[tuple[int, int], bytes]:
+    """Fallback state key: the whole settled frame.
+
+    `main()` substitutes the agent's own `frame_signature`, so the bench keys states
+    exactly as the agent does. This default exists so `Replay` is constructible — and
+    therefore testable — without importing the harness.
+    """
+    return settled.shape, settled.tobytes()
+
+
+class Replay:
+    """Walks one game's frames, scoring each transition prequentially.
+
+    A module-level class rather than a closure so it can be tested against doubles:
+    every defect that has invalidated a run of this tool lived in the hook.
+    """
+
+    def __init__(
+        self, signature: Callable[[np.ndarray, Any], Any] = raw_signature
+    ) -> None:
+        self.pre = Prequential()
+        self.errors = 0
+        self._signature = signature
+        self._p: dict[str, Any] = {}
+
+    def observe(self, obs: Any, actor: Any) -> None:
+        """Never raise into the agent: it would be swallowed and replaced by a
+        random action, so the run would print plausible numbers for a random
+        agent. Count instead, and let the caller refuse to publish."""
+        try:
+            self._observe(obs or {}, actor)
+        except Exception:
+            self.errors += 1
+            self._p.clear()
+
+    def _observe(self, obs: dict[str, Any], actor: Any) -> None:
+        frame = obs.get("frame") or []
+        if not frame:
+            return
+        arr = np.asarray(frame[-1], dtype=np.int16)
+        inner = getattr(actor, "_explorer", actor)
+        levels = int(obs.get("levels_completed", 0))
+        settled = inner._settled(arr)
+        # Score the transition INTO this frame, including a terminal one: the
+        # GAME_OVER frame is the genuine successor of the fatal action. What is not
+        # a successor is the post-reset frame, so the chain is cut below.
+        if self._p:
+            self.pre.step(
+                self._p["ctx"],
+                effect_signature(
+                    self._p["settled"],
+                    settled,
+                    levels > self._p["levels"],
+                    inner._det.avatar,
+                ),
+            )
+        if obs.get("terminal"):
+            self._p.clear()  # the harness overrides this frame's prim with RESET
+            return
+        prim = (getattr(actor, "trace", {}) or {}).get("prim")
+        if prim is None:
+            self._p.clear()
+            return
+        # Effects are measured on settled frames so chrome cannot read as churn;
+        # contexts key on the raw board, since the colour under a click is what the
+        # agent actually clicked.
+        self._p = {
+            "settled": settled,
+            "levels": levels,
+            "ctx": context_of(
+                tuple(prim), arr, self._signature(settled, inner._field(arr))
+            ),
+        }
+
+
+SUITE = ""  # empty means every game in environment_files/
+
+
+def roster() -> list[str]:
+    """All 25 games, not the subset the agent already clears: a stage-2 decision
+    taken on the clearing subset is selection-biased, and the non-clearing games are
+    the closest local proxy for the out-of-distribution private set."""
+    return sorted(p.name for p in (REPO / "environment_files").iterdir() if p.is_dir())
 
 
 def main(games: str = SUITE, max_steps: int = 600, seed: int = 0) -> None:
     """Score the effect model prequentially along the explorer's own trajectory.
 
-    Every harness import lives here: at module level they would run during test
-    collection and shadow this repo's tests/ with the vendored one.
+    Every harness import lives here: at module level they put the vendored agents
+    directory on sys.path, whose own tests/ shadows this repo's.
     """
     import arc_runner
     from loguru import logger
@@ -240,80 +354,66 @@ def main(games: str = SUITE, max_steps: int = 600, seed: int = 0) -> None:
 
     require_starter()
     logger.info(
-        "{:6} {:>6} {:>7} {:>7} {:>7} {:>9} {:>6}",
+        "{:6} {:>5} {:>6} {:>6} {:>6} {:>6} {:>6} {:>7} {:>7} {:>5}",
         "game",
         "n",
         "class",
+        "ceil",
         "state",
         "inert",
-        "marginal",
+        "marg",
         "first",
+        "m_fresh",
+        "fr_n",
     )
-    for game_id in games.split(","):
+    for game_id in (games or ",".join(roster())).split(","):
         arc = arc_agi.Arcade(
             operation_mode=OperationMode.OFFLINE,
             environments_dir=str(REPO / "environment_files"),
         )
-        pre = Prequential()
-        prev: dict[str, Any] = {}
-
-        def hook(
-            step: int, obs: Any, env: Any, actor: Any, _p: dict[str, Any] = prev
-        ) -> None:
-            obs = obs or {}
-            frame = obs.get("frame") or []
-            if not frame:
-                return
-            arr = np.asarray(frame[-1], dtype=np.int16)
-            inner = getattr(actor, "_explorer", actor)
-            levels = int(obs.get("levels_completed", 0))
-            settled = inner._settled(arr)
-            # Effects are measured on settled frames: chrome must not read as churn.
-            # Contexts key on the raw board, because the colour under a click is what
-            # the agent actually clicked.
-            if _p and is_transition(obs):
-                eff = effect_signature(
-                    _p["settled"], settled, levels > _p["levels"], inner._det.avatar
-                )
-                pre.step(_p["ctx"], eff)
-            prim = (getattr(actor, "trace", {}) or {}).get("prim")
-            if prim is None:
-                _p.clear()
-                return
-            sig = frame_signature(settled, inner._field(arr))
-            _p.update(
-                settled=settled, levels=levels, ctx=context_of(tuple(prim), arr, sig)
-            )
-
+        rep = Replay(signature=frame_signature)
         try:
-            play(
+            res = play(
                 load_agent_class(None, "explorer"),
                 game_id,
                 arc,
                 None,
                 max_steps,
                 seed=seed,
-                on_step=hook,
+                on_step=lambda step, obs, env, actor: rep.observe(obs, actor),
             )
-        except Exception as exc:  # a broken game must not abort the sweep
+        except Exception as exc:
             logger.error("{}: {}: {}", game_id, type(exc).__name__, exc)
             continue
-        r = pre.report()
+        # A printed row is a claim this tool has verified it is entitled to make.
+        swallowed = int(
+            (res or {}).get("decisions", {}).get("choose_action_exception", 0)
+        )
+        problems = []
+        if (res or {}).get("error"):
+            problems.append(f"env error {res['error']}")
+        if rep.errors:
+            problems.append(f"{rep.errors} hook errors")
+        if swallowed:
+            problems.append(f"{swallowed} swallowed agent exceptions")
+        if not rep.pre.n:
+            problems.append("no transitions scored")
+        if problems:
+            logger.error("{}: NOT REPORTED — {}", game_id, "; ".join(problems))
+            continue
+        r = rep.pre.report()
         logger.info(
-            "{:6} {:>6} {:>6.1%} {:>7.1%} {:>7.1%} {:>9.1%} {:>6.1%}",
+            "{:6} {:>5} {:>5.1%} {:>6.1%} {:>6.1%} {:>6.1%} {:>6.1%} {:>7.1%} {:>7.1%} {:>5.0f}",
             game_id,
-            pre.n,
+            rep.pre.n,
             r["class"],
+            r["ceiling"],
             r["state"],
             r["inert"],
             r["marginal"],
             r["first_sighting"],
-        )
-        logger.info(
-            "        back-off: specific {:.0%}  colour {:.0%}  action {:.0%}",
-            r["backoff_0"],
-            r["backoff_1"],
-            r["backoff_2"],
+            r["marginal_fresh"],
+            r["first_n"],
         )
 
 

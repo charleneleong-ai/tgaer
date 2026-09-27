@@ -245,3 +245,141 @@ class TestHarnessGlue:
         call = src.split("effect_signature(")[-1].split(")")[0]
         assert "settled" in call
         assert "arr" not in call.replace("settled", "")
+
+
+class _Actor:
+    """Minimal stand-in for the explorer, enough to drive Replay."""
+
+    def __init__(self, prim: tuple[Any, ...] | None, avatar: int | None = 12) -> None:
+        self.trace = {"prim": prim} if prim is not None else {}
+
+        class _Det:
+            pass
+
+        self._det = _Det()
+        self._det.avatar = avatar
+
+    def _settled(self, arr: np.ndarray) -> np.ndarray:
+        return arr
+
+    def _field(self, arr: np.ndarray) -> Any:
+        return (np.array([0, 0]), np.array([arr.shape[0] - 1, arr.shape[1] - 1]))
+
+
+def _obs(board: np.ndarray, levels: int = 0, terminal: bool = False) -> dict[str, Any]:
+    o: dict[str, Any] = {"frame": [board.tolist()], "levels_completed": levels}
+    if terminal:
+        o["terminal"] = True
+    return o
+
+
+class TestInertArmIndependence:
+    """C2: inert must be its own predictor, not the class arm projected."""
+
+    @staticmethod
+    def _eff(churn: int) -> Any:
+        return (False, None, frozenset(), frozenset(), churn)
+
+    def test_inert_predicts_the_majority_label_not_the_modal_effect_projected(
+        self,
+    ) -> None:
+        # Modal FULL effect is the inert one (3 of 9), but the majority BINARY
+        # label is "changed" (6 of 9). A clone-of-class arm returns (True,) here;
+        # a real binary predictor returns (False,).
+        p = re_.Prequential()
+        ctx = ("s1", 6, 5, 2)
+        seq = [0, 0, 0, 4, 4, 9, 9, 16, 16]
+        for churn in seq:
+            p.step(ctx, self._eff(churn))
+        assert p._inert.predict(ctx)[0] == (False,)
+        assert re_.inert_view(p._arms["class"].predict(ctx)[0]) == (True,)
+
+    def test_inert_can_therefore_score_below_class(self) -> None:
+        # Impossible while inert is a clone; the point of the fix.
+        p = re_.Prequential()
+        ctx = ("s1", 6, 5, 2)
+        for churn in (0, 0, 0, 4, 4, 9, 9, 16, 16):
+            p.step(ctx, self._eff(churn))
+        for _ in range(6):
+            p.step(ctx, self._eff(0))
+        r = p.report()
+        assert r["inert"] < 1.0
+
+
+class TestShapeMismatchSentinel:
+    """I2: a total shape change must not read as "nothing happened"."""
+
+    def test_a_mismatched_shape_is_not_inert(self) -> None:
+        a = np.zeros((4, 4), dtype=np.int16)
+        b = np.zeros((5, 5), dtype=np.int16)
+        eff = re_.effect_signature(a, b, False, None)
+        assert eff[4] != 0
+        assert re_.inert_view(eff) != (True,)
+
+
+class TestReportCompleteness:
+    """C3 + I3: the decisive metrics need their denominators and a ceiling."""
+
+    @staticmethod
+    def _eff(churn: int) -> Any:
+        return (False, None, frozenset(), frozenset(), churn)
+
+    def test_the_first_sighting_denominator_is_reported(self) -> None:
+        p = re_.Prequential()
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        assert p.report()["first_n"] == 1
+
+    def test_marginal_is_also_reported_on_the_fresh_subset(self) -> None:
+        p = re_.Prequential()
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        assert "marginal_fresh" in p.report()
+
+    def test_the_abstain_share_is_reported(self) -> None:
+        p = re_.Prequential()
+        p.step(("s1", 6, 5, 2), self._eff(4))
+        assert p.report()["abstain"] == 1.0
+
+    def test_per_key_purity_ceiling_is_reported(self) -> None:
+        # Two effects 50/50 at one key: a modal predictor can never exceed 0.5.
+        p = re_.Prequential()
+        for i in range(20):
+            p.step(("s1", 6, 5, 2), self._eff(4 if i % 2 else 9))
+        assert p.report()["ceiling"] == pytest.approx(0.5, abs=0.06)
+
+
+class TestReplay:
+    """I5 + C1 + I1: the hook is the component that already invalidated a run."""
+
+    def test_a_hook_error_is_counted_and_never_raised(self) -> None:
+        r = re_.Replay()
+        r.observe(_obs(_grid((2, 2))), _Actor(("click", 0, 0)))
+        # A prim the harness never produces: 1-tuple. Must count, not propagate.
+        r.observe(_obs(_grid((2, 3))), _Actor(("bogus",)))
+        assert r.errors >= 1
+
+    def test_the_transition_into_a_terminal_frame_is_scored(self) -> None:
+        r = re_.Replay()
+        r.observe(_obs(_grid((2, 2))), _Actor(("act", 1)))
+        r.observe(_obs(_grid((5, 5)), terminal=True), _Actor(("act", 1)))
+        assert r.pre.n == 1
+
+    def test_the_transition_out_of_a_terminal_frame_is_not_scored(self) -> None:
+        r = re_.Replay()
+        r.observe(_obs(_grid((2, 2))), _Actor(("act", 1)))
+        r.observe(_obs(_grid((5, 5)), terminal=True), _Actor(("act", 1)))
+        r.observe(_obs(_grid((2, 2))), _Actor(("act", 1)))
+        assert r.pre.n == 1  # still 1: the reset is not a successor
+
+    def test_a_missing_prim_breaks_the_chain(self) -> None:
+        r = re_.Replay()
+        r.observe(_obs(_grid((2, 2))), _Actor(("act", 1)))
+        r.observe(_obs(_grid((2, 3))), _Actor(None))
+        r.observe(_obs(_grid((2, 4))), _Actor(("act", 1)))
+        assert r.pre.n == 1  # first pair only
+
+    def test_a_level_advance_is_carried_into_the_effect(self) -> None:
+        r = re_.Replay()
+        r.observe(_obs(_grid((2, 2)), levels=0), _Actor(("act", 1)))
+        r.observe(_obs(_grid((2, 3)), levels=1), _Actor(("act", 1)))
+        assert r.pre.n == 1
