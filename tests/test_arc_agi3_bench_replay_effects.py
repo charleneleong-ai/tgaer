@@ -200,3 +200,48 @@ class TestPrequential:
             p.step(("s1", 6, 5, 2), self._eff(4))
         r = p.report()
         assert sum(r[k] for k in ("backoff_0", "backoff_1", "backoff_2")) <= 1.0
+
+
+class TestHarnessGlue:
+    def test_a_respawn_frame_is_not_a_transition(self) -> None:
+        # The agent excludes these; scoring them teaches that a reset is an ordinary
+        # effect. This is the one that silently poisons the model if missed.
+        assert not re_.is_transition({"terminal": True})
+        assert re_.is_transition({})
+        assert re_.is_transition({"terminal": False})
+
+    def test_a_click_context_carries_colour_and_component_size(self) -> None:
+        arr = _grid(None, {(5, 5): 7, (5, 6): 7})
+        ctx = re_.context_of(("click", 5, 5), arr, "sig")
+        assert ctx[0] == "sig"
+        assert ctx[2] == 7
+        assert ctx[3] == re_.bucket(2)
+
+    def test_size_is_the_clicked_component_not_every_cell_of_that_colour(self) -> None:
+        # Two separate 1-cell blobs of colour 7: the clicked one has size 1, not 2.
+        arr = _grid(None, {(2, 2): 7, (8, 8): 7})
+        assert re_.context_of(("click", 2, 2), arr, "sig")[3] == re_.bucket(1)
+
+    def test_a_simple_action_context_has_no_colour_or_size(self) -> None:
+        ctx = re_.context_of(("act", 3), _grid((2, 2)), "sig")
+        assert ctx[1] == 3
+        assert ctx[2] is None and ctx[3] is None
+
+    def test_an_out_of_bounds_click_yields_no_colour(self) -> None:
+        ctx = re_.context_of(("click", 99, 99), _grid((2, 2)), "sig")
+        assert ctx[2] is None and ctx[3] is None
+
+    def test_importing_the_module_loads_no_games(self) -> None:
+        # main() owns every harness call; import must stay side-effect free.
+        head = (BENCH / "replay_effects.py").read_text().split("def main(")[0]
+        for harness in ("require_starter", "Arcade(", "arc_runner", "load_agent_class"):
+            assert harness not in head, harness
+
+    def test_the_hook_scores_settled_frames_not_raw_ones(self) -> None:
+        # The load-bearing chrome guard: effect_signature cannot enforce its own
+        # caller, so pin the caller. Raw frames here would let chrome register as
+        # churn and make every effect look distinct.
+        src = (BENCH / "replay_effects.py").read_text()
+        call = src.split("effect_signature(")[-1].split(")")[0]
+        assert "settled" in call
+        assert "arr" not in call.replace("settled", "")
