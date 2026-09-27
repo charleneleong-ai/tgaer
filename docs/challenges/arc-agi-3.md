@@ -39,6 +39,25 @@ The ARC-AGI-3 paper states the public set is *"a demonstration interface"* and
 the private set is *"intentionally out-of-distribution relative to the public
 set"* to resist overfitting. **Our local bench is the demo set.**
 
+**The leaderboard never scores our roster.** `arc_agi3_kaggle.py` runs one thread
+per game, "110 in the competition rerun" — the 55 semi-private plus the 55 fully
+private — and Kaggle splits that one parquet into its two columns:
+
+| column | scores | available |
+| --- | --- | --- |
+| `publicScore` | ~55 semi-private games, never seen locally | per submission, 1/day |
+| `privateScore` | ~55 fully private games | withheld until the close |
+
+So `publicScore` **is** an out-of-distribution reading, not a re-score of the demo
+set. That makes the decoupling result stronger than first stated: a 2.25x gain on
+the dev set moved a 55-game held-out score by zero. Local RHAE is a regression
+guard; `publicScore` is the objective, at one reading per day.
+
+Scores oscillate in a 0.13–0.14 band across agents that differ greatly locally
+(v75 0.1561% and v76 0.3520% both scored 0.13; v73 0.1879% scored 0.14), and the
+reported granularity is 0.01. **Treat a single 0.01 step as noise**, not a lift;
+establishing one needs same-build repeats.
+
 ## Current results
 
 Local, 25 games, 5 seeds at 600 actions:
@@ -54,7 +73,8 @@ Kaggle public:
 
 | submission | agent | local RHAE | public |
 | --- | --- | --- | --- |
-| v76 | explorer, `PROBE_LIMIT=1` | 0.3520% | **0.13** |
+| v77 | explorer, 12000 actions + colour-agnostic roles | 0.3520% | **0.14** |
+| v76 | explorer, `PROBE_LIMIT=1` | 0.3520% | 0.13 |
 | v75 | explorer, baseline | 0.1561% | 0.13 |
 | v73 | explorer | 0.1879% | 0.14 |
 | v54 | 27B LLM agent | — | **0.17** (best ever) |
