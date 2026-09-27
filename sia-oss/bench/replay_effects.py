@@ -161,3 +161,163 @@ class Prequential:
         for level in (0, 1, 2):
             out[f"backoff_{level}"] = self._levels[level] / n
         return out
+
+
+def component_size(arr: np.ndarray, row: int, col: int) -> int:
+    """Cells in the 4-connected same-colour blob containing (row, col).
+
+    Local rather than `arc_agi3_grid.components`, so this module imports nothing
+    from the harness: that import pulls the vendored agents directory onto
+    sys.path, whose own tests/ shadows this repo's.
+    """
+    colour = arr[row, col]
+    stack = [(row, col)]
+    seen = {(row, col)}
+    while stack:
+        r, c = stack.pop()
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nr, nc = r + dr, c + dc
+            if (nr, nc) in seen:
+                continue
+            if (
+                0 <= nr < arr.shape[0]
+                and 0 <= nc < arr.shape[1]
+                and arr[nr, nc] == colour
+            ):
+                seen.add((nr, nc))
+                stack.append((nr, nc))
+    return len(seen)
+
+
+def is_transition(obs: dict[str, Any]) -> bool:
+    """A respawn frame is a fresh level start, not a successor of the last action."""
+    return not obs.get("terminal")
+
+
+def context_of(prim: tuple[Any, ...], arr: np.ndarray, sig: Any) -> Ctx:
+    """Key parts for one primitive: colour and size only when a click resolves.
+
+    A click primitive is ``("click", row, col)`` — three elements, matching
+    `to_arc`, which reads prim[1] as row and prim[2] as col.
+    """
+    if prim[0] != "click":
+        return (sig, int(prim[1]), None, None)
+    row, col = int(prim[1]), int(prim[2])
+    if not (0 <= row < arr.shape[0] and 0 <= col < arr.shape[1]):
+        return (sig, CLICK_ACTION, None, None)
+    return (
+        sig,
+        CLICK_ACTION,
+        int(arr[row, col]),
+        bucket(component_size(arr, row, col)),
+    )
+
+
+SUITE = "tu93,s5i5,ar25,sp80,ls20,m0r0,lp85,g50t"
+
+
+def main(games: str = SUITE, max_steps: int = 600, seed: int = 0) -> None:
+    """Score the effect model prequentially along the explorer's own trajectory.
+
+    Every harness import lives here: at module level they would run during test
+    collection and shadow this repo's tests/ with the vendored one.
+    """
+    import arc_runner
+    from loguru import logger
+
+    arc_runner._load_local(
+        "tgaer.agents.arc_agi3_explorer",
+        str(REPO / "src" / "tgaer" / "agents" / "arc_agi3_explorer.py"),
+    )
+    from tgaer.agents.arc_agi3_explorer import frame_signature
+    from tgaer.evaluation.arc_agi3_score_local import (
+        OperationMode,
+        arc_agi,
+        load_agent_class,
+        play,
+        require_starter,
+    )
+
+    require_starter()
+    logger.info(
+        "{:6} {:>6} {:>7} {:>7} {:>7} {:>9} {:>6}",
+        "game",
+        "n",
+        "class",
+        "state",
+        "inert",
+        "marginal",
+        "first",
+    )
+    for game_id in games.split(","):
+        arc = arc_agi.Arcade(
+            operation_mode=OperationMode.OFFLINE,
+            environments_dir=str(REPO / "environment_files"),
+        )
+        pre = Prequential()
+        prev: dict[str, Any] = {}
+
+        def hook(
+            step: int, obs: Any, env: Any, actor: Any, _p: dict[str, Any] = prev
+        ) -> None:
+            obs = obs or {}
+            frame = obs.get("frame") or []
+            if not frame:
+                return
+            arr = np.asarray(frame[-1], dtype=np.int16)
+            inner = getattr(actor, "_explorer", actor)
+            levels = int(obs.get("levels_completed", 0))
+            settled = inner._settled(arr)
+            # Effects are measured on settled frames: chrome must not read as churn.
+            # Contexts key on the raw board, because the colour under a click is what
+            # the agent actually clicked.
+            if _p and is_transition(obs):
+                eff = effect_signature(
+                    _p["settled"], settled, levels > _p["levels"], inner._det.avatar
+                )
+                pre.step(_p["ctx"], eff)
+            prim = (getattr(actor, "trace", {}) or {}).get("prim")
+            if prim is None:
+                _p.clear()
+                return
+            sig = frame_signature(settled, inner._field(arr))
+            _p.update(
+                settled=settled, levels=levels, ctx=context_of(tuple(prim), arr, sig)
+            )
+
+        try:
+            play(
+                load_agent_class(None, "explorer"),
+                game_id,
+                arc,
+                None,
+                max_steps,
+                seed=seed,
+                on_step=hook,
+            )
+        except Exception as exc:  # a broken game must not abort the sweep
+            logger.error("{}: {}: {}", game_id, type(exc).__name__, exc)
+            continue
+        r = pre.report()
+        logger.info(
+            "{:6} {:>6} {:>6.1%} {:>7.1%} {:>7.1%} {:>9.1%} {:>6.1%}",
+            game_id,
+            pre.n,
+            r["class"],
+            r["state"],
+            r["inert"],
+            r["marginal"],
+            r["first_sighting"],
+        )
+        logger.info(
+            "        back-off: specific {:.0%}  colour {:.0%}  action {:.0%}",
+            r["backoff_0"],
+            r["backoff_1"],
+            r["backoff_2"],
+        )
+
+
+if __name__ == "__main__":
+    import typer
+
+    typer.run(main)
