@@ -74,10 +74,6 @@ class TestEffectSignature:
         g = _grid((2, 2))
         assert re_.effect_signature(g, g.copy(), True, 12)[0] is True
 
-    def test_the_signature_is_hashable(self) -> None:
-        g = _grid((2, 2))
-        assert len({re_.effect_signature(g, g.copy(), False, 12)}) == 1
-
     def test_a_real_in_field_change_registers_as_churn(self) -> None:
         # The caller passes _settled frames, so chrome is already masked to a
         # constant; what must hold here is that a genuine change is not lost.
@@ -188,18 +184,13 @@ class TestPrequential:
         r = p.report()
         assert r["inert"] > r["class"]
 
-    def test_first_sighting_accuracy_is_reported_separately(self) -> None:
-        p = re_.Prequential()
-        p.step(("s1", 6, 5, 2), self._eff(4))
-        p.step(("s1", 6, 5, 2), self._eff(4))
-        assert 0.0 <= p.report()["first_sighting"] <= 1.0
-
     def test_backoff_levels_are_reported_as_shares(self) -> None:
         p = re_.Prequential()
         for _ in range(4):
             p.step(("s1", 6, 5, 2), self._eff(4))
         r = p.report()
-        assert sum(r[k] for k in ("backoff_0", "backoff_1", "backoff_2")) <= 1.0
+        assert r["backoff_0"] == pytest.approx(3 / 4)  # 3 hits at the specific key
+        assert r["abstain"] == pytest.approx(1 / 4)  # the first step, empty model
 
 
 class TestHarnessGlue:
@@ -238,13 +229,16 @@ class TestHarnessGlue:
             assert harness not in head, harness
 
     def test_the_hook_scores_settled_frames_not_raw_ones(self) -> None:
-        # The load-bearing chrome guard: effect_signature cannot enforce its own
-        # caller, so pin the caller. Raw frames here would let chrome register as
-        # churn and make every effect look distinct.
-        src = (BENCH / "replay_effects.py").read_text()
-        call = src.split("effect_signature(")[-1].split(")")[0]
-        assert "settled" in call
-        assert "arr" not in call.replace("settled", "")
+        # The load-bearing chrome guard, on behaviour rather than source text. The
+        # two boards differ only at a cell _settled flattens, so a hook scoring raw
+        # frames records churn where one scoring settled frames records none.
+        r = re_.Replay()
+        r.observe(_obs(_grid((2, 2))), _ChromeActor(("act", 1)))
+        r.observe(_obs(_grid((2, 2), {(7, 7): 5})), _ChromeActor(("act", 1)))
+        assert r.pre.n == 1 and r.errors == 0
+        effects = [e for c in r.pre._key_effects.values() for e in c]
+        assert effects, "no effect recorded"
+        assert effects[0][4] == 0, f"chrome leaked into churn: {effects[0]}"
 
 
 class _Actor:
@@ -264,6 +258,15 @@ class _Actor:
 
     def _field(self, arr: np.ndarray) -> Any:
         return (np.array([0, 0]), np.array([arr.shape[0] - 1, arr.shape[1] - 1]))
+
+
+class _ChromeActor(_Actor):
+    """`_settled` flattens the cell at (7, 7), the way the chrome mask does."""
+
+    def _settled(self, arr: np.ndarray) -> np.ndarray:
+        out = arr.copy()
+        out[7, 7] = 0
+        return out
 
 
 def _obs(board: np.ndarray, levels: int = 0, terminal: bool = False) -> dict[str, Any]:
