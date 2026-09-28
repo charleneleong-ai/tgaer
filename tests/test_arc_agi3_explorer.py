@@ -789,6 +789,10 @@ class TestStuckPolicySwitch:
     def _agent(self, novelty: list[int], levels: int = 0) -> ExplorerArcAgi3Agent:
         agent = ExplorerArcAgi3Agent()
         agent._novelty.extend(novelty)
+        # The observe path keeps this as a running maximum of the window rate; these
+        # tests inject the window directly, so mirror it here.
+        if len(agent._novelty) >= ExplorerArcAgi3Agent.STUCK_WINDOW:
+            agent._novelty_peak = sum(agent._novelty) / len(agent._novelty)
         agent._levels = levels
         agent._taken.update({1: 40, 2: 500, 3: 9, 4: 12, 5: 2})
         agent._graph.register("s", self.PRIMS)
@@ -916,3 +920,35 @@ class TestChromeMaskedSignature:
         agent.act(_obs(_board(), levels=1))
         board = self._ticking(0)
         assert np.array_equal(agent._settled(board), board)
+
+
+class TestNoveltyIsJudgedAgainstTheGame:
+    """The stuck test reads a fall from this game's own ceiling, not a fixed number."""
+
+    WINDOW = ExplorerArcAgi3Agent.STUCK_WINDOW
+
+    def _agent(self, peak, rate):
+        agent = ExplorerArcAgi3Agent()
+        agent._novelty.extend([1] * round(rate * self.WINDOW))
+        agent._novelty.extend([0] * (self.WINDOW - round(rate * self.WINDOW)))
+        agent._novelty_peak = peak
+        return agent
+
+    def test_a_collapse_from_a_high_ceiling_is_stuck_though_it_beats_the_old_constant(
+        self,
+    ):
+        """Rate 0.20 is above MIN_NOVELTY = 0.15, so the fitted threshold called this
+        game healthy. Against its own 0.90 ceiling it has plainly stopped."""
+        agent = self._agent(peak=0.90, rate=0.20)
+        assert agent._is_stuck()
+
+    def test_a_game_that_never_explored_much_is_not_stuck_at_its_own_level(self):
+        """Rate 0.16 barely cleared the fitted threshold; against its own 0.18
+        ceiling this game is still doing what it always did."""
+        agent = self._agent(peak=0.18, rate=0.16)
+        assert not agent._is_stuck()
+
+    def test_a_window_with_no_new_state_at_all_is_stuck(self):
+        agent = self._agent(peak=0.0, rate=0.0)
+        assert agent._is_stuck()
+
