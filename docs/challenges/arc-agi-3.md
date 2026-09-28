@@ -157,6 +157,27 @@ the agent spends **80–98%** of them returning to boards it has already seen.
 `tu93` level 3 burns 4538 actions at 98% revisit with only 4 distinct
 primitives available — a closed loop, not exploration.
 
+### Unlatching the escape hatch is not the fix (rejected 2026-09-28)
+
+`_is_stuck()` gates a switch that reorders untested primitives by least-taken
+action id, and `self._levels > 0` disabled it for the rest of the run after the
+first clear. Scoping it per level instead — so a barren level re-enables it —
+looked free: the switch was narrowed because it costs `ls20` and `sc25`, and both
+clear zero levels, so neither can reach that guard.
+
+Gated over 5 seeds: **−0.0012pp against a 0.0279pp pooled sd**, wall clock 0.98x
+— but `tu93` went from **scoring in 5/5 seeds to 0/5**, so it fails on regression,
+not on noise. The switch helps *discovery* and hurts *exploitation*: enabling it
+after a clear diverts tu93 off the route that wins its later levels. The guard was
+encoding a real boundary, not an over-tight fence.
+
+`sk48`, previously a zero, began clearing a level in 1 of 5 seeds — the switch
+does unlock something — but at 0.0059% env it is worth nothing.
+
+The number worth keeping: tu93's two cleared levels were worth **0.0357% against
+a 6.667% cap — 0.5% capture — so destroying both cost 0.036pp**, inside the noise
+floor. Level count and RHAE are fully decoupled on the slow games.
+
 ## Effect prediction is closed: a perfect oracle is 5x below the noise floor
 
 The replay effect model measured a real regularity — `(action, colour, size)` predicts the
