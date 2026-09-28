@@ -151,26 +151,34 @@ class TestThroughputGuard:
 
     @staticmethod
     def _runs(seconds: list[float]) -> list[dict[str, Any]]:
-        return [{"rhae": 0.35, "levels": {}, "elapsed": s, "games": 25} for s in seconds]
+        return [
+            {"rhae": 0.35, "levels": {}, "elapsed": s, "games": 25} for s in seconds
+        ]
 
-    def test_equal_speed_passes(self) -> None:
-        ok, msg = ab.throughput_verdict(self._runs([100, 100]), self._runs([101, 99]), 600)
-        assert ok, msg
+    @pytest.mark.parametrize(
+        ("cand_secs", "why"),
+        [
+            ([101, 99], "equal speed"),
+            ([110, 110], "1.1x, inside tolerance"),
+            ([50, 50], "faster"),
+        ],
+    )
+    def test_a_candidate_within_tolerance_passes(
+        self, cand_secs: list[float], why: str
+    ) -> None:
+        ok, msg = ab.throughput_verdict(
+            self._runs([100, 100]), self._runs(cand_secs), 600
+        )
+        assert ok, f"{why}: {msg}"
 
     def test_a_four_times_slower_candidate_fails(self) -> None:
         # The measured shape of the real defect: recomputing flood fills per step
         # made act ~3.9x slower while RHAE was unchanged.
-        ok, msg = ab.throughput_verdict(self._runs([100, 100]), self._runs([390, 400]), 600)
+        ok, msg = ab.throughput_verdict(
+            self._runs([100, 100]), self._runs([390, 400]), 600
+        )
         assert not ok
         assert "slower" in msg
-
-    def test_a_small_slowdown_is_tolerated(self) -> None:
-        ok, _ = ab.throughput_verdict(self._runs([100, 100]), self._runs([110, 110]), 600)
-        assert ok
-
-    def test_a_faster_candidate_passes(self) -> None:
-        ok, _ = ab.throughput_verdict(self._runs([100, 100]), self._runs([50, 50]), 600)
-        assert ok
 
     def test_the_projection_reaches_the_kernel_budget(self) -> None:
         # 25 games x 600 steps in 100s -> 6.7ms/action -> 12000 actions = 0.022h.
