@@ -80,6 +80,11 @@ USE_CHURN_MASK = True  # flatten self-animating cells out of the state key
 USE_FRONTIER = True  # walk known edges back to a state with something untested
 USE_GOAL_INDUCTION = True  # learn a goal colour from a winning click
 USE_FIELD_CROP = True  # key the signature on the field box, not the whole board
+USE_RELATIVE_NOVELTY = True  # judge novelty against this game's own best, not 0.15
+# A game is stuck once its window falls to this share of the best it ever managed.
+# Scale-free on purpose: MIN_NOVELTY = 0.15 was fitted inside a 0.11-0.18 gap over
+# five of the 25 roster games, and the roster is never scored.
+NOVELTY_DROP = 0.5
 # Avatar positions affordance won't step back onto. This is a window over the last 8
 # *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a
 # click re-appends the cell the avatar is standing on. An agent that alternates a
@@ -368,6 +373,9 @@ class ExplorerArcAgi3Agent(Agent):
         self._walk_novelty: deque[int] = deque(maxlen=self.WALK_WINDOW)
         # Novelty of every step, not just navigation, for the stuck test.
         self._novelty: deque[int] = deque(maxlen=self.STUCK_WINDOW)
+        # The best windowed novelty this game ever reached, so the stuck test can
+        # be read as a fall from its own ceiling rather than a fixed number.
+        self._novelty_peak = 0.0
         self._last_branch = ""
         # How often each action id has been taken. proposals() orders simple
         # actions by id and _choose takes an untested one, so without this the
@@ -463,6 +471,10 @@ class ExplorerArcAgi3Agent(Agent):
         # Before register(), so "seen before" still means what it says.
         fresh = int(not self._graph.seen(sig))
         self._novelty.append(fresh)
+        if USE_RELATIVE_NOVELTY and len(self._novelty) >= self.STUCK_WINDOW:
+            self._novelty_peak = max(
+                self._novelty_peak, sum(self._novelty) / len(self._novelty)
+            )
         if self._last_branch == "affordance":
             self._walk_novelty.append(fresh)
         prims = proposals(arr, available, self._goal_values, box=field, salt=self._salt)
@@ -707,7 +719,13 @@ class ExplorerArcAgi3Agent(Agent):
         """No level yet, and the board has stopped yielding unseen states."""
         if self._levels > 0 or len(self._novelty) < self.STUCK_WINDOW:
             return False
-        return sum(self._novelty) / len(self._novelty) < self.MIN_NOVELTY
+        rate = sum(self._novelty) / len(self._novelty)
+        if USE_RELATIVE_NOVELTY:
+            # The peak is a running maximum of this same rate, so it is never below
+            # it. A peak of zero therefore means a whole window without one new
+            # state, which is stuck by any reading.
+            return not self._novelty_peak or rate < NOVELTY_DROP * self._novelty_peak
+        return rate < self.MIN_NOVELTY
 
     def _explore_due(self, sig: Any) -> bool:
         """Whether walking has stopped discovering and owes this state a try.
