@@ -157,26 +157,42 @@ the agent spends **80–98%** of them returning to boards it has already seen.
 `tu93` level 3 burns 4538 actions at 98% revisit with only 4 distinct
 primitives available — a closed loop, not exploration.
 
-### Unlatching the escape hatch is not the fix (rejected 2026-09-28)
+### The post-death switch is load-bearing (two levers rejected 2026-09-28)
 
 `_is_stuck()` gates a switch that reorders untested primitives by least-taken
-action id, and `self._levels > 0` disabled it for the rest of the run after the
-first clear. Scoping it per level instead — so a barren level re-enables it —
-looked free: the switch was narrowed because it costs `ls20` and `sc25`, and both
-clear zero levels, so neither can reach that guard.
+action id, and `self._levels > 0` disabled it once a level had been cleared.
 
-Gated over 5 seeds: **−0.0012pp against a 0.0279pp pooled sd**, wall clock 0.98x
-— but `tu93` went from **scoring in 5/5 seeds to 0/5**, so it fails on regression,
-not on noise. The switch helps *discovery* and hurts *exploitation*: enabling it
-after a clear diverts tu93 off the route that wins its later levels. The guard was
-encoding a real boundary, not an over-tight fence.
+**Lever A — scope the switch per level.** Clear the novelty window on a new board
+and drop the run guard. Gated over 5 seeds: −0.0012pp against a 0.0279pp pooled
+sd, wall clock 0.98x, but **`tu93` went from scoring in 5/5 seeds to 0/5**. Fails
+on regression, not noise.
 
-`sk48`, previously a zero, began clearing a level in 1 of 5 seeds — the switch
-does unlock something — but at 0.0059% env it is worth nothing.
+**Lever B — give a respawned board a fresh window.** A death lowers
+`levels_completed`, so it never reaches `_on_new_level` and the window keeps the
+dead level's staleness. Clearing it looked like a plain bug fix, and `_is_stuck`
+was left byte-identical to baseline. It produced **the same five per-seed numbers
+as lever A** (0.3813, 0.3813, 0.3313, 0.3301, 0.3301) and the same tu93 collapse.
 
-The number worth keeping: tu93's two cleared levels were worth **0.0357% against
-a 6.667% cap — 0.5% capture — so destroying both cost 0.036pp**, inside the noise
-floor. Level count and RHAE are fully decoupled on the slow games.
+Both candidates shared that one line, so **the guard rescoping was inert and the
+respawn window clear is the whole effect**. On `main` a death reopens the
+`_levels > 0` gate while the window is still stale, so the switch fires
+immediately on the respawned board — and **tu93's three levels depend on it**.
+What reads as stale-evidence contamination is doing real work: *after a death,
+prefer the action used least*, because death means the route was wrong.
+
+Do not "fix" the respawn window. The mechanism worth testing instead is the
+deliberate form — a bounded countdown forcing the switch on for N steps after
+every death, independent of `_levels` and of the window, so it also fires where
+the accident misses.
+
+Two process lessons. When two candidates share a line, attribute the effect to the
+shared line before the differing one. And a staleness bug in this agent may be
+load-bearing, so gate the fix rather than assuming it is free.
+
+The number worth keeping from lever A: tu93's two cleared levels were worth
+**0.0357% against a 6.667% cap — 0.5% capture — so destroying both cost
+0.036pp**, inside the noise floor. Level count and RHAE are fully decoupled on the
+slow games.
 
 ## Effect prediction is closed: a perfect oracle is 5x below the noise floor
 
