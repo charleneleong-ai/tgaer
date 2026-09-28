@@ -143,3 +143,45 @@ class TestSetConstant:
         f.write_text("A = 1\n")
         with pytest.raises(SystemExit, match="NOPE"):
             sweep.set_constant(f, "NOPE", "1")
+
+
+class TestThroughputGuard:
+    """RHAE counts actions, not seconds, so the score gate is blind to a
+    change that blows the submission deadline. This is the missing half."""
+
+    @staticmethod
+    def _runs(seconds: list[float]) -> list[dict[str, Any]]:
+        return [{"rhae": 0.35, "levels": {}, "elapsed": s, "games": 25} for s in seconds]
+
+    def test_equal_speed_passes(self) -> None:
+        ok, msg = ab.throughput_verdict(self._runs([100, 100]), self._runs([101, 99]), 600)
+        assert ok, msg
+
+    def test_a_four_times_slower_candidate_fails(self) -> None:
+        # The measured shape of the real defect: recomputing flood fills per step
+        # made act ~3.9x slower while RHAE was unchanged.
+        ok, msg = ab.throughput_verdict(self._runs([100, 100]), self._runs([390, 400]), 600)
+        assert not ok
+        assert "slower" in msg
+
+    def test_a_small_slowdown_is_tolerated(self) -> None:
+        ok, _ = ab.throughput_verdict(self._runs([100, 100]), self._runs([110, 110]), 600)
+        assert ok
+
+    def test_a_faster_candidate_passes(self) -> None:
+        ok, _ = ab.throughput_verdict(self._runs([100, 100]), self._runs([50, 50]), 600)
+        assert ok
+
+    def test_the_projection_reaches_the_kernel_budget(self) -> None:
+        # 25 games x 600 steps in 100s -> 6.7ms/action -> 12000 actions = 0.022h.
+        assert ab.kernel_hours(100.0, 25, 600) == pytest.approx(0.0222, abs=0.001)
+
+    def test_a_projection_over_the_budget_fails_even_without_a_baseline_change(
+        self,
+    ) -> None:
+        # Both arms equally slow: no relative regression, but neither can finish.
+        # 15000 local actions in 40000s is 2.67s/action; x12000 = 8.9h > 7.5h.
+        slow = [40000.0, 40000.0]
+        ok, msg = ab.throughput_verdict(self._runs(slow), self._runs(slow), 600)
+        assert not ok
+        assert "budget" in msg

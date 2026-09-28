@@ -126,6 +126,42 @@ What the failures establish, which is worth more than the fix would have been:
 measured on five games, which is capacity fitted to noise. Deleting an *inert* one
 would be a free out-of-distribution win; `_RECENT_CELLS` was swept first and is not
 inert (0 reads 0.3155% against 0.3520%), so no free deletion there.
+## What we optimise, and against what bar
+
+**The objective is `publicScore`, not local RHAE.** The scored rerun plays 110 games
+and Kaggle splits that parquet in two; `publicScore` is ~55 semi-private games we have
+never seen, and our 25-game roster is never scored at all. So:
+
+| signal | role | cadence |
+| --- | --- | --- |
+| `publicScore` | **the objective** — a genuine held-out reading | 1 per day |
+| local RHAE | regression guard only, never the target | minutes |
+| wall clock | deadline guard — RHAE cannot see it | minutes |
+| `privateScore` | unavailable until the competition closes | never, mid-competition |
+
+`privateScore` is blank on every completed submission, so a final private lift cannot
+be verified before the close. A semi-private lift is the strongest evidence available,
+and that is what the loop targets.
+
+**A change is worth a submission slot only if it clears all three guards:**
+
+1. **No local regression.** `ab.py` at 5 seeds, no game losing depth or frequency.
+   Local RHAE *gain* is not required — a change argued off-roster can be flat here and
+   still be right, as the colour-agnostic fix was (bit-identical, twice).
+2. **No wall-clock regression.** `ab.py`'s `throughput_verdict` fails a candidate more
+   than `1.25x` slower than baseline, or either arm projecting past the kernel's 7.5h.
+   This exists because RHAE counts actions, not seconds: one change left RHAE untouched
+   while costing `1.96h` of the budget, and the score gate could not see it.
+3. **An argument that survives without a local score.** Fewer fitted constants, no
+   public-set literals, a mechanism rather than a case. Dev-set gain
+   [anti-correlates with out-of-distribution gain](#the-local-bench-does-not-predict-the-score--tested-directly-2026-09-25),
+   so a large local win is a reason for suspicion, not confidence.
+
+**The `publicScore` noise bar is being measured.** Scores oscillate 0.13–0.14 across
+agents that differ 2.25x locally, and the reported granularity is 0.01 — so until a
+same-build repeat quantifies the spread, no single 0.01 step can be read as a lift.
+That repeat is what today's slot was spent on. Until it lands, treat any 0.01 move as
+noise.
 
 ## The result that governs the rest
 

@@ -26,6 +26,7 @@ import re
 import statistics as st
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import typer
@@ -42,12 +43,20 @@ MIN_FREQ_DROP = 2
 # regression. Frequency alone is blind to depth: the colour-demotion change took
 # lp85 from 4 levels to 1 while still scoring in 5/5 seeds.
 MIN_LEVEL_DROP = 1.0
+# RHAE counts actions, not seconds, so the score gate cannot see a change that
+# blows the submission deadline. One did: recomputing per-step flood fills left
+# RHAE untouched while making `act` ~3.9x slower, which would have cost 1.96h of
+# the kernel's 7.5h. These two numbers are the missing half of the gate.
+MAX_SLOWDOWN = 1.25
+KERNEL_ACTIONS = 12000  # ExplorerAgent.MAX_ACTIONS in the scored rerun
+KERNEL_BUDGET_H = 7.5
 
 app = typer.Typer(add_completion=False)
 
 
 def one_run(explorer: Path, label: str, seed: int, max_steps: int) -> dict:
     """One 25-game measurement; returns {'rhae': float, 'levels': {game: n}}."""
+    started = time.perf_counter()
     proc = subprocess.run(
         [
             sys.executable,
@@ -66,16 +75,22 @@ def one_run(explorer: Path, label: str, seed: int, max_steps: int) -> dict:
         text=True,
         cwd=REPO,
     )
+    elapsed = time.perf_counter() - started
     found = RHAE.findall(proc.stdout + proc.stderr)
     results = BENCH / "runs" / label / "results.json"
     levels: dict[str, int] = {}
     if results.exists():
         data = json.loads(results.read_text())
         levels = {d["game"]: d["levels_completed"] for d in data["details"]}
-        return {"rhae": float(data["rhae"]), "levels": levels}
+        return {
+            "rhae": float(data["rhae"]),
+            "levels": levels,
+            "elapsed": elapsed,
+            "games": len(data["details"]),
+        }
     if not found:
         raise RuntimeError(f"no RHAE from {label}: {proc.stderr[-400:]}")
-    return {"rhae": float(found[-1]), "levels": levels}
+    return {"rhae": float(found[-1]), "levels": levels, "elapsed": elapsed, "games": 25}
 
 
 def arm(explorer: Path, name: str, seeds: list[int], max_steps: int) -> list[dict]:
@@ -85,6 +100,43 @@ def arm(explorer: Path, name: str, seeds: list[int], max_steps: int) -> list[dic
         logger.info("{} seed {}: RHAE={:.4f}%", name, s, run["rhae"])
         out.append(run)
     return out
+
+
+def kernel_hours(elapsed_s: float, games: int, max_steps: int) -> float:
+    """Projected kernel wall-clock for one game at the scored action budget.
+
+    Games run concurrently there, so the deadline is set by the slowest game
+    rather than their sum; per-action cost is what carries over from here.
+    """
+    per_action = elapsed_s / max(games * max_steps, 1)
+    return per_action * KERNEL_ACTIONS / 3600
+
+
+def throughput_verdict(
+    base: list[dict], cand: list[dict], max_steps: int
+) -> tuple[bool, str]:
+    """``(ok, message)`` on wall-clock, which the RHAE comparison cannot see.
+
+    Two independent failures: the candidate being materially slower than the
+    baseline, and either arm projecting past the kernel's budget at all.
+    """
+    bs = [r["elapsed"] for r in base if r.get("elapsed")]
+    cs = [r["elapsed"] for r in cand if r.get("elapsed")]
+    if not bs or not cs:
+        return True, "no timings recorded"
+    bm, cm = st.mean(bs), st.mean(cs)
+    games = max(base[0].get("games", 25), 1)
+    bh, ch = kernel_hours(bm, games, max_steps), kernel_hours(cm, games, max_steps)
+    ratio = cm / bm if bm else 1.0
+    note = f"{ratio:.2f}x wall clock; projected kernel {bh:.2f}h -> {ch:.2f}h"
+    if ratio > MAX_SLOWDOWN:
+        return False, f"{ratio:.2f}x slower than baseline ({note})"
+    if max(bh, ch) > KERNEL_BUDGET_H:
+        return (
+            False,
+            f"projected {max(bh, ch):.2f}h exceeds the {KERNEL_BUDGET_H}h budget",
+        )
+    return True, note
 
 
 def pooled_sd(b: list[float], c: list[float]) -> float:
@@ -189,7 +241,11 @@ def main(
     )
     logger.info("delta {:+.4f}pp against pooled sd {:.4f}pp", delta, sd)
 
+    fast, speed = throughput_verdict(base, cand, max_steps)
+    (logger.info if fast else logger.warning)("wall clock: {}", speed)
+
     passed, regressions, improvements = verdict(base, cand)
+    passed = passed and fast
     for line in improvements:
         logger.success("better   {}", line)
     for line in regressions:
@@ -200,6 +256,8 @@ def main(
     if passed:
         logger.success("PASS — {:+.4f}pp clears 2 sd and no game regressed.", delta)
         return
+    if not fast:
+        logger.error("FAIL — WALL CLOCK: {}. RHAE cannot see this.", speed)
     if regressions:
         logger.error("FAIL — {} game(s) regressed. Do not promote.", len(regressions))
     elif sd and abs(delta) < 2 * sd:
