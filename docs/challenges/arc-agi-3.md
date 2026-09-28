@@ -126,6 +126,42 @@ What the failures establish, which is worth more than the fix would have been:
 measured on five games, which is capacity fitted to noise. Deleting an *inert* one
 would be a free out-of-distribution win; `_RECENT_CELLS` was swept first and is not
 inert (0 reads 0.3155% against 0.3520%), so no free deletion there.
+## Effect prediction is closed: a perfect oracle is 5x below the noise floor
+
+The replay effect model measured a real regularity — `(action, colour, size)` predicts the
+changed-or-not label at 60-100% and generalises across states on 25 of 25 games where a
+per-state key does not. Wiring it into `_inert` so a dead click demotes its twins changed
+the `_live` ordering in 492 of 2756 calls, and moved RHAE by **+0.0000pp, bit-identical on
+all five seeds**.
+
+The reason is structural, and it closes the whole family:
+
+**The value of predicting "this does nothing" is bounded by the cost of finding out, which
+is one action.** Demoting a *known*-dead primitive pays, because it stops the agent
+re-playing it — that is why `USE_INERT` is worth `-0.2177pp` to remove. Predicting an
+*untried* primitive is dead saves only the single action that would have discovered it.
+
+Measured as a ceiling, with a perfect oracle rather than a model:
+
+| game | inert actions / 600 | an oracle could skip | env now | env ceiling | RHAE gain |
+| --- | --- | --- | --- | --- | --- |
+| ar25 | 111 | 22 (3.7%) | 1.8701% | 2.0166% | +0.0059pp |
+| m0r0 | 246 | 9 (1.5%) | 0.0055% | 0.0057% | +0.0000pp |
+| lp85 | 8 | 1 (0.2%) | 4.0605% | 4.0768% | +0.0007pp |
+| g50t | 72 | 0 | 3.5714% | — | +0.0000pp |
+| tu93, s5i5, sp80 | **0** | 0 | — | — | +0.0000pp |
+| | | | | **total** | **+0.0065pp** |
+
+`+0.0065pp` against a `0.0300pp` noise floor. **Three of the seven scoring games have no
+inert actions at all**, so there is nothing there to predict.
+
+**What this closes:** stage 2 of the replay effect model, the class-generalised `_inert`
+variant, and any mechanism whose payoff is "avoid an action that would have taught us the
+same thing". It does not close mechanisms that avoid *expensive* mistakes — a fatal action,
+or a reset that discards a level — because those cost more than one action. That is the
+distinction worth carrying: **a predictive model earns its keep only where being wrong is
+expensive, and on this benchmark a wasted click costs exactly one action.**
+
 ## What we optimise, and against what bar
 
 **The objective is `publicScore`, not local RHAE.** The scored rerun plays 110 games
