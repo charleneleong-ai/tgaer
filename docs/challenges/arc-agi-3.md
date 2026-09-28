@@ -67,7 +67,8 @@ Local, 25 games, 5 seeds at 600 actions:
 | before the probe cap | 0.1561% ± 0.0280 | 6–8 | 5 |
 | **current** | **0.3520% ± 0.0280** | 8 | **6** |
 
-At the 6000-action shipping budget, 3 seeds: 0.1704% ± 0.0296, 9–12 levels.
+At the 6000-action shipping budget, 3 seeds: **0.3663% ± 0.0296**. (The
+0.1704% previously recorded here is the pre-`PROBE_LIMIT` `ship6000-s*` runs.)
 
 Kaggle public:
 
@@ -126,6 +127,36 @@ What the failures establish, which is worth more than the fix would have been:
 measured on five games, which is capacity fitted to noise. Deleting an *inert* one
 would be a free out-of-distribution win; `_RECENT_CELLS` was swept first and is not
 inert (0 reads 0.3155% against 0.3520%), so no free deletion there.
+## The headroom is speed on games already won, not new games
+
+`results.json` carries a per-game `cap`: the score that game would post at
+*perfect* efficiency **on the levels it currently clears**. Averaged over the
+roster it is the ceiling that pure speed can reach without clearing one more
+level. At 6000 actions over 3 seeds that ceiling is **2.0571%** against our
+**0.3663%** — we hold **17.8%** of what our own solved levels are already worth.
+
+| game | levels | env% | cap% | capture | share of ceiling |
+| --- | --- | --- | --- | --- | --- |
+| lp85 | 3/8 | 3.6330 | 19.44 | 18.7% | 37.8% |
+| **tu93** | 3/9 | 0.0455 | 13.33 | **0.3%** | **25.9%** |
+| m0r0 | 1/6 | 0.0024 | 4.76 | 0.1% | 9.3% |
+| sp80 | 1/6 | 0.0345 | 4.76 | 0.7% | 9.3% |
+| g50t | 1/7 | 3.5714 | 3.57 | **100%** | 6.9% |
+| ar25 | 1/8 | 1.8701 | 2.78 | 67.3% | 5.4% |
+| s5i5 | 1/8 | 0.0006 | 2.78 | 0.0% | 5.4% |
+
+**18 of 25 games score zero, and their `cap` is zero too** — an uncleared level
+contributes nothing to the numerator while its weight stays in the denominator,
+so coverage work returns nothing until level 1 actually falls. Everything
+reachable is action efficiency on games already won, and `lp85` + `tu93` are 64%
+of it. `g50t` is already at human speed and `ar25` close, so the two games that
+supply most of today's score have nothing left to give.
+
+`action_budget.py` says where those actions go: on the levels that never clear
+the agent spends **80–98%** of them returning to boards it has already seen.
+`tu93` level 3 burns 4538 actions at 98% revisit with only 4 distinct
+primitives available — a closed loop, not exploration.
+
 ## Effect prediction is closed: a perfect oracle is 5x below the noise floor
 
 The replay effect model measured a real regularity — `(action, colour, size)` predicts the
