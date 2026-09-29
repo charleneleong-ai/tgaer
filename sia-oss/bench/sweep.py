@@ -46,11 +46,17 @@ app = typer.Typer(add_completion=False)
 
 
 def set_constant(path: Path, name: str, value: str) -> None:
-    pattern = re.compile(rf"^{re.escape(name)} = .*$", re.MULTILINE)
+    """Rewrite ``name``'s assignment, whether module-level or a class attribute.
+
+    The indentation is captured and restored: half the explorer's tuned constants
+    live on the agent class, and rewriting one at column zero would move it out of
+    the class rather than change its value.
+    """
+    pattern = re.compile(rf"^(?P<indent>[ \t]*){re.escape(name)} = .*$", re.MULTILINE)
     text = path.read_text()
     if not pattern.search(text):
-        raise SystemExit(f"{name} is not a module-level constant in {path.name}")
-    path.write_text(pattern.sub(f"{name} = {value}", text))
+        raise SystemExit(f"{name} is not an assignable constant in {path.name}")
+    path.write_text(pattern.sub(lambda m: f"{m['indent']}{name} = {value}", text))
 
 
 def measure(label: str) -> tuple[float, int]:
@@ -100,11 +106,11 @@ def stability_verdict(
 @app.command()
 def main(
     constant: str = typer.Option(
-        ..., "--constant", help="Module-level constant to sweep."
+        ..., "--constant", help="Constant to sweep, module-level or on the agent class."
     ),
     values: str = typer.Option(..., "--values", help="Comma-separated values to try."),
     baseline: float = typer.Option(
-        0.4263, "--baseline", help="RHAE to call 'no change' against."
+        0.4210, "--baseline", help="RHAE to call 'no change' against."
     ),
 ) -> None:
     """Try each value, then judge whether any gain is stable or a spike."""
