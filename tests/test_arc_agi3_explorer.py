@@ -5,6 +5,7 @@ from collections import Counter
 from typing import Any
 
 import numpy as np
+import pytest
 
 from tgaer.agents.arc_agi3_explorer import (
     CHURN_WARMUP,
@@ -926,9 +927,14 @@ class TestChromeMaskedSignature:
 
 
 class TestNoveltyIsJudgedAgainstTheGame:
-    """The stuck test reads a fall from this game's own ceiling, not a fixed number."""
+    """The USE_RELATIVE_NOVELTY path: a fall from this game's own ceiling."""
 
     WINDOW = ExplorerArcAgi3Agent.STUCK_WINDOW
+
+    @pytest.fixture(autouse=True)
+    def _relative(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Shipped off since v78 scored 0.13; test the mechanism, not the default."""
+        monkeypatch.setattr("tgaer.agents.arc_agi3_explorer.USE_RELATIVE_NOVELTY", True)
 
     def _agent(self, peak, rate):
         agent = ExplorerArcAgi3Agent()
