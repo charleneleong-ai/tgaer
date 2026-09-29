@@ -80,10 +80,10 @@ USE_CHURN_MASK = True  # flatten self-animating cells out of the state key
 USE_FRONTIER = True  # walk known edges back to a state with something untested
 USE_GOAL_INDUCTION = True  # learn a goal colour from a winning click
 USE_FIELD_CROP = True  # key the signature on the field box, not the whole board
-USE_RELATIVE_NOVELTY = True  # judge novelty against this game's own best, not 0.15
+# Off: shipped as v78 and scored 0.13 against v77's 0.14. Kept behind the flag so the
+# mechanism can be retested; MIN_NOVELTY is live again while it is False.
+USE_RELATIVE_NOVELTY = False
 # A game is stuck once its window falls to this share of the best it ever managed.
-# Scale-free on purpose: MIN_NOVELTY = 0.15 was fitted inside a 0.11-0.18 gap over
-# five of the 25 roster games, and the roster is never scored.
 NOVELTY_DROP = 0.5
 # Avatar positions affordance won't step back onto. This is a window over the last 8
 # *steps*, not 8 distinct cells: the append is unconditional, so a refused move or a

@@ -121,12 +121,55 @@ What the failures establish, which is worth more than the fix would have been:
   generalising per primitive *across* states — is the most load-bearing part of the
   agent at `-0.2177pp`.
 
-**Eight constants remain fitted to these 25 games** (`PROBE_LIMIT`, `MIN_NOVELTY`,
+### Constant tuning is exhausted
+
+All eight fitted constants have now been swept (`PROBE_LIMIT`, `MIN_NOVELTY`,
 `WALK_WINDOW`, `STUCK_WINDOW`, `FIELD_SWITCH_MARGIN`, `CHURN_FRACTION`,
-`CHURN_WARMUP`, `_RECENT_CELLS`). `MIN_NOVELTY = 0.15` sits inside a 0.11-0.18 gap
-measured on five games, which is capacity fitted to noise. Deleting an *inert* one
-would be a free out-of-distribution win; `_RECENT_CELLS` was swept first and is not
-inert (0 reads 0.3155% against 0.3520%), so no free deletion there.
+`CHURN_WARMUP`, `_RECENT_CELLS`). The four class-level ones, swept 2026-09-29
+against a 0.4210% baseline:
+
+| constant | range swept | RHAE on the plateau | cliff |
+| --- | --- | --- | --- |
+| `MIN_NOVELTY` | 0.05-0.30 | 0.4206-0.4215, 9 levels | none found |
+| `WALK_WINDOW` | 12-48 | 0.4207-0.4215, 9 levels | none found |
+| `STUCK_WINDOW` | 48-192 | 0.4208-0.4213, 9 levels | **48**: 0.4198%, 7 levels |
+| `FIELD_SWITCH_MARGIN` | 1.0-2.0 | **0.4210 flat** at 1.0/1.25/1.5 | **2.0**: 0.3314%, 6 levels |
+
+**Every shipped value sits on a plateau, and no value anywhere gains.** Within the
+plateaus the total spread is 0.0017pp, 6% of the 0.0300pp noise floor. Two constants
+have a cliff on one side only:
+
+- `FIELD_SWITCH_MARGIN` is bit-identical at 1.0, 1.25 and 1.5, then costs three levels
+  and 0.09pp at 2.0. The margin binds, but only above 1.5, so the shipped 1.25 sits
+  mid-plateau rather than on a knife edge.
+- `STUCK_WINDOW = 48` gives up two levels (9 -> 7) for 0.0012pp, which shows what RHAE
+  rewards: the levels lost were cleared so inefficiently they were worth almost nothing.
+
+The `VERDICT: STABLE ... worth gating and promoting` lines in the sweep logs are
+artefacts of a stale `--baseline 0.3825` passed on the command line; read against the
+true 0.4210% baseline, **0 of 17 points gain**.
+
+Deleting an inert constant was expected to be a free out-of-distribution win. That
+expectation was tested and failed — see *Relative novelty did not transfer* below.
+`_RECENT_CELLS` is the one constant that is genuinely not inert (0 reads 0.3155%
+against 0.3520%).
+
+### Relative novelty did not transfer
+
+`MIN_NOVELTY = 0.15` sits inside a 0.11-0.18 gap measured on five roster games, which
+is capacity fitted to noise, and the roster is never scored. Replacing it with a
+fraction of each game's own novelty ceiling was locally flat (-0.0002pp, identical
+per-seed level totals) and shipped as **v78 on the off-roster argument alone**.
+
+**It scored 0.13, against v77's 0.14 — which v77's byte-identical repeat also read.**
+The reverted build (`USE_RELATIVE_NOVELTY = False`) is the v77 agent plus
+`CHURN_WARMUP = 30`, so the flag stays rather than being deleted: it keeps the revert
+to one line and leaves the mechanism available to retest.
+
+The wider point is that publicScore has never left `{0.13, 0.14}` across twelve
+submissions, while local RHAE swung 3x and in-kernel levels 7x. Neither instrument can
+resolve a constant-level change, and no constant-level change has produced a
+directional, repeatable gain. The remaining paths are architectural.
 ## The headroom is speed on games already won, not new games
 
 `results.json` carries a per-game `cap`: the score that game would post at
