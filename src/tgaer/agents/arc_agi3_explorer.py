@@ -98,7 +98,7 @@ _RECENT_CELLS = 8
 # fresh state every step, so `untested_at` never empties and a cycle is
 # indistinguishable from progress.
 CHURN_FRACTION = 0.5
-CHURN_WARMUP = 20
+CHURN_WARMUP = 30
 
 
 def frame_signature(
