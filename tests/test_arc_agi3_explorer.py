@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from tgaer.agents.arc_agi3_explorer import (
+    CHURN_WARMUP,
     ExplorerArcAgi3Agent,
     StateGraph,
     click_targets,
@@ -907,8 +908,10 @@ class TestChromeMaskedSignature:
         assert np.array_equal(agent._settled(board), board)
 
     def test_nothing_is_masked_before_the_warmup(self) -> None:
+        """Bound to CHURN_WARMUP rather than a fixed count: the mask must stay off
+        right up to the last step of the warmup, whatever the warmup is set to."""
         agent = ExplorerArcAgi3Agent()
-        for step in range(5):
+        for step in range(CHURN_WARMUP - 1):
             agent.act(_obs(self._ticking(step)))
         board = self._ticking(0)
         assert np.array_equal(agent._settled(board), board)
