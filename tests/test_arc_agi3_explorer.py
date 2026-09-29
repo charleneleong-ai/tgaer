@@ -951,4 +951,3 @@ class TestNoveltyIsJudgedAgainstTheGame:
     def test_a_window_with_no_new_state_at_all_is_stuck(self):
         agent = self._agent(peak=0.0, rate=0.0)
         assert agent._is_stuck()
-
