@@ -8,26 +8,22 @@ distance-to-win over its own state graph and retrains, then plays the next level
 with it. So the honest offline test is leave-one-*level*-out inside one game.
 
 This replays the explorer, rebuilds the transition graph it walked, back-labels
-each cleared level by shortest distance to the winning state, trains on the
-earlier levels and scores the held-out one. Baseline is the shipped proposal
-order, which is what `_choose` consumes today (recall@1 = 18% on the oracle
-labels).
+each cleared level by shortest distance to the winning state, and scores every
+cleared level from a model of the levels before it — the order they become
+available online. Only actions actually taken carry a distance, so nothing here
+is privileged.
 
-Only actions actually taken carry a distance — the same information the agent
-has online, so nothing here is privileged.
-
-**Known flaw, read the numbers with it.** `_choose` plays `untested[0]`, so
-proposal rank *is* visit order: rank 0 is tried on the first visit to a state,
-rank k on the k-th. The episode meanwhile moves toward the win, so a later visit
-is genuinely closer to it. Rank is therefore anti-correlated with
-distance-to-win by construction — which is why lp85 scores 0/215 for *both* arms
-against a 32% chance floor. Rank is unusable here, as a feature and as a
-baseline; compare against chance instead. tu93 avoids the worst of it and reads
-model 34% against 27% chance (1.8 sd, n=102) — suggestive, not established.
+**Read it against chance, per fold.** Proposal rank is not a baseline: `_choose`
+plays `untested[0]`, so rank is visit order, and the episode moves toward the win,
+which anti-correlates rank with distance by construction. The floor is a constant
+prediction's expected hits, and significance is a sign test over (game, seed)
+episodes — states in one level share a board, and levels in one episode share a
+trajectory and nested training sets, so neither is an independent trial.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import sys
 from collections import deque
@@ -66,9 +62,6 @@ from tgaer.evaluation.arc_agi3_score_local import (  # noqa: E402
 os.chdir(REPO)
 
 app = typer.Typer(add_completion=False)
-# Games the explorer clears more than one level of, so there is an earlier level
-# to learn from and a later one to be scored on.
-MULTI_LEVEL = "lp85,tu93,ar25,m0r0"
 
 
 def rollout(game_id: str, max_steps: int, seed: int) -> list[dict[str, Any]]:
@@ -121,6 +114,18 @@ def rollout(game_id: str, max_steps: int, seed: int) -> list[dict[str, Any]]:
         on_step=hook,
     )
     return steps
+
+
+def cleared_segments(steps: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """The trajectory of each level that cleared, in order.
+
+    The last level was still in progress when the rollout ended, so it has no
+    winning state to back-label. Segments of two steps or fewer are too short
+    to rank.
+    """
+    levels = sorted({s["level"] for s in steps})
+    segs = [[s for s in steps if s["level"] == lv] for lv in levels]
+    return [s for s in segs[:-1] if len(s) > 2]
 
 
 def back_label(seg: list[dict[str, Any]]) -> dict[int, float]:
@@ -184,11 +189,10 @@ def state_features(arr: np.ndarray) -> list[float]:
 
 
 def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> tuple[np.ndarray, ...]:
-    """(features, distance, state-group, proposal-rank) per labelled step."""
+    """(features, distance, state-group) per labelled step."""
     X: list[list[float]] = []
     y: list[float] = []
     g: list[int] = []
-    ranks: list[float] = []
     by_sig: dict[Any, int] = {}
     # One row per distinct (state, action). Frontier routing re-walks known
     # edges, so the same pair recurs many times — counting each visit inflates
@@ -205,119 +209,149 @@ def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> tuple[np.ndarra
         seen_pair.add(pair)
         arr = step["arr"]
         prim = tuple(prim)
-        # Where the agent's own ordering put this action. It is both a feature
-        # and the baseline the model has to beat, so it must be the real rank.
-        order = step["order"]
-        if prim not in order:
-            continue  # not rankable by the order the agent actually used
-        rank = order.index(prim)
-        # Rank is poison here and is kept only to be reported, never learned
-        # from: `_choose` plays untested[0], so rank IS visit order, and the
-        # episode moves toward the win — a later visit is genuinely closer, so
-        # rank is anti-correlated with distance by construction.
+        if prim not in step["order"]:
+            continue  # kept so the row set matches earlier runs of this bench
         feat = R.features(prim, 0, arr, step["available"], R.cell_index(arr))
         X.append(feat + state_features(arr))
         y.append(d)
-        ranks.append(float(rank))
         g.append(by_sig.setdefault(step["sig"], len(by_sig)))
-    return (
-        np.asarray(X, float),
-        np.asarray(y, float),
-        np.asarray(g, int),
-        np.asarray(ranks, float),
-    )
+    return np.asarray(X, float), np.asarray(y, float), np.asarray(g, int)
 
 
-def top1(
-    pred: np.ndarray, true: np.ndarray, group: np.ndarray, seed: int = 0
-) -> tuple[int, int]:
-    """States where the best-predicted action is genuinely the closest to the win.
+def top1(pred: np.ndarray, true: np.ndarray, group: np.ndarray) -> tuple[float, int]:
+    """Expected hits from playing the best-predicted action, over rankable states.
 
-    Ties are broken at random, not by position. Rows arrive in the order the
-    agent first tried each action, and that order is anti-correlated with
-    distance-to-win, so `argmin`'s first-index bias scores a model that predicts
-    a constant at *zero* rather than at chance — lp85 read 0/215 against a 32%
-    floor for exactly that reason.
+    A hit is any action tied for the least distance. Where the prediction ties,
+    the pick is uniform over its tied actions, so a state pays the share of them
+    that are optimal — and a constant prediction scores chance by construction.
     """
-    rng = np.random.default_rng(seed)
-    hit = seen = 0
+    hit, seen = 0.0, 0
     for gid in np.unique(group):
         m = group == gid
-        if m.sum() < 2:  # nothing to rank
+        if m.sum() < 2:
             continue
+        p, t = pred[m], true[m]
+        hit += float((t[p == p.min()] == t.min()).mean())
         seen += 1
-        p = pred[m]
-        best = np.flatnonzero(p == p.min())
-        pick = int(rng.choice(best))
-        hit += int(true[m][pick] == true[m].min())
     return hit, seen
+
+
+def sign_test(deltas: list[float]) -> float:
+    """One-sided p that the model beats chance. Zero deltas carry no direction."""
+    signs = [d for d in deltas if d != 0]
+    wins = sum(d > 0 for d in signs)
+    return sum(
+        math.comb(len(signs), k) for k in range(wins, len(signs) + 1)
+    ) / 2 ** len(signs)
+
+
+Table = tuple[np.ndarray, np.ndarray, np.ndarray]
+
+
+def score_fold(train: list[Table], test: Table) -> tuple[float, int, float] | None:
+    """``(hits, states, chance hits)`` on the held-out level, or None if unscorable."""
+    parts = [p for p in train if len(p[0])]
+    Xte, yte, gte = test
+    if not parts or not len(Xte):
+        return None
+    model = GradientBoostingRegressor(random_state=0).fit(
+        np.vstack([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+    )
+    hit, seen = top1(model.predict(Xte), yte, gte)
+    return (hit, seen, top1(np.zeros_like(yte), yte, gte)[0]) if seen else None
+
+
+def score_episode(
+    game_id: str, seed: int, max_steps: int
+) -> list[tuple[int, float, int, float]]:
+    """``(level, hits, states, chance hits)`` per cleared level after the first.
+
+    Each is scored from the levels before it only: online a level is
+    back-labelled once it clears, so later ones cannot inform it.
+    """
+    steps = rollout(game_id, max_steps, seed)
+    built = [rows(s, back_label(s)) for s in cleared_segments(steps)]
+    return [
+        (k, *scored)
+        for k in range(1, len(built))
+        if (scored := score_fold(built[:k], built[k])) is not None
+    ]
+
+
+def distinct(
+    episodes: dict[tuple[str, int], list[Any]],
+) -> dict[tuple[str, int], list[Any]]:
+    """Episodes with repeated trajectories dropped, keeping the first of each.
+
+    The explorer's seed barely varies play — all five tu93 seeds are identical —
+    and a copy is not independent evidence. Scoring is deterministic, so equal
+    fold results mean equal trajectories; ``repr`` is an exact hashable image.
+    """
+    first: dict[str, tuple[str, int]] = {}
+    for key, folds in episodes.items():
+        first.setdefault(repr(folds), key)
+    return {key: episodes[key] for key in first.values()}
 
 
 @app.command()
 def main(
-    games: str = typer.Option(MULTI_LEVEL, help="Comma-separated game ids."),
-    max_steps: int = typer.Option(2500),
-    seed: int = typer.Option(0),
+    games: str = typer.Option("", help="Comma-separated game ids; default all 25."),
+    max_steps: int = typer.Option(6000),
+    seeds: int = typer.Option(5, help="Independent episodes per game."),
 ) -> None:
-    """Train on a game's earlier levels, score it on its last cleared one."""
+    """Score every cleared level from the levels before it, over several seeds."""
     require_starter()
-    tot_hit = tot_seen = base_hit = 0
+    if not games:
+        # measure lists environment_files at import, which CI does not have.
+        from measure import SUITE
+
+        games = ",".join(SUITE)
+    episodes: dict[tuple[str, int], list[tuple[int, float, int, float]]] = {}
     for game_id in games.split(","):
-        try:
-            steps = rollout(game_id, max_steps, seed)
-        except Exception as exc:
-            logger.error("{}: {}: {}", game_id, type(exc).__name__, exc)
-            continue
-        levels = sorted({s["level"] for s in steps})
-        segs = [[s for s in steps if s["level"] == lv] for lv in levels]
-        # The last segment is the one that never cleared, so it has no winning
-        # state to label; drop it.
-        segs = [s for s in segs[:-1] if len(s) > 2]
-        if len(segs) < 2:
-            logger.warning(
-                "{}: only {} cleared level(s), cannot split", game_id, len(segs)
-            )
-            continue
-
-        built = [rows(s, back_label(s)) for s in segs]
-        Xtr = np.vstack([b[0] for b in built[:-1]])
-        ytr = np.concatenate([b[1] for b in built[:-1]])
-        Xte, yte, gte, rte = built[-1]
-        if len(Xte) == 0 or len(Xtr) == 0:
-            logger.warning("{}: no labelled rows", game_id)
-            continue
-
-        model = GradientBoostingRegressor(random_state=0)
-        model.fit(Xtr, ytr)
-        hit, seen = top1(model.predict(Xte), yte, gte)
-        # Rank cannot be a baseline here (see rows()); chance is the floor.
-        bhit, _ = top1(rte, yte, gte)
-        tot_hit += hit
-        tot_seen += seen
-        base_hit += bhit
-        sizes = np.array([(gte == k).sum() for k in np.unique(gte)])
-        chance = float(np.mean(1.0 / sizes[sizes >= 2])) if (sizes >= 2).any() else 0.0
-        logger.info(
-            "{:6} train {:5} rows | held-out: model {}/{} ({:3.0%})  "
-            "baseline {:3.0%}  chance {:3.0%}",
-            game_id,
-            len(Xtr),
-            hit,
-            seen,
-            hit / max(seen, 1),
-            bhit / max(seen, 1),
-            chance,
-        )
-    if tot_seen:
-        logger.success(
-            "held-out levels: model {}/{} ({:.0%}) vs baseline {}/{} ({:.0%})",
-            tot_hit,
-            tot_seen,
-            tot_hit / tot_seen,
-            base_hit,
-            tot_seen,
-            base_hit / tot_seen,
-        )
+        for seed in range(seeds):
+            try:
+                scored = score_episode(game_id, seed, max_steps)
+            except Exception as exc:
+                logger.error(
+                    "{} seed {}: {}: {}", game_id, seed, type(exc).__name__, exc
+                )
+                continue
+            for level, hit, n, chance in scored:
+                logger.info(
+                    "{:6} seed {} level {}: model {:.1f}/{} ({:3.0%})  chance {:3.0%}",
+                    game_id,
+                    seed,
+                    level,
+                    hit,
+                    n,
+                    hit / n,
+                    chance / n,
+                )
+            if scored:
+                episodes[(game_id, seed)] = scored
+    if not episodes:
+        logger.warning("no scorable episodes")
+        return
+    total = len(episodes)
+    episodes = distinct(episodes)
+    folds = [f for scored in episodes.values() for f in scored]
+    _, hits, seen, expected = map(sum, zip(*folds))
+    deltas = [sum(h - c for _, h, _, c in scored) for scored in episodes.values()]
+    logger.success(
+        "{} distinct of {} episodes over {} games, {} folds: model {:.1f}/{} ({:.1%})"
+        " vs chance {:.1%} | {} above chance, {} below, sign test p = {:.4f}",
+        len(episodes),
+        total,
+        len({g for g, _ in episodes}),
+        len(folds),
+        hits,
+        seen,
+        hits / seen,
+        expected / seen,
+        sum(d > 0 for d in deltas),
+        sum(d < 0 for d in deltas),
+        sign_test(deltas),
+    )
 
 
 if __name__ == "__main__":
