@@ -23,12 +23,18 @@ trajectory and nested training sets, so neither is an independent trial.
 
 from __future__ import annotations
 
+import gzip
+import hashlib
+import inspect
+import itertools
 import math
 import os
+import pickle
 import sys
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import typer
@@ -41,10 +47,8 @@ sys.path.insert(0, str(REPO / "sia-oss" / "bench"))
 
 import arc_runner  # noqa: E402
 
-arc_runner._load_local(
-    "tgaer.agents.arc_agi3_explorer",
-    str(REPO / "src" / "tgaer" / "agents" / "arc_agi3_explorer.py"),
-)
+EXPLORER = REPO / "src" / "tgaer" / "agents" / "arc_agi3_explorer.py"
+arc_runner._load_local("tgaer.agents.arc_agi3_explorer", str(EXPLORER))
 import oracle_rank as R  # noqa: E402
 
 from tgaer.agents.arc_agi3_explorer import (  # noqa: E402
@@ -62,6 +66,8 @@ from tgaer.evaluation.arc_agi3_score_local import (  # noqa: E402
 os.chdir(REPO)
 
 app = typer.Typer(add_completion=False)
+CACHE = REPO / "sia-oss" / "bench" / "runs" / "value_model_cache"
+HARNESS = REPO / "src" / "tgaer" / "evaluation" / "arc_agi3_score_local.py"
 
 
 def rollout(game_id: str, max_steps: int, seed: int) -> list[dict[str, Any]]:
@@ -113,6 +119,36 @@ def rollout(game_id: str, max_steps: int, seed: int) -> list[dict[str, Any]]:
         seed=seed,
         on_step=hook,
     )
+    return steps
+
+
+def fingerprint(game_id: str) -> str:
+    """Everything a trajectory depends on besides its seed and budget.
+
+    The agent, the harness that plays it, the recorder that writes each step, the
+    game's own files and the arc_agi package — change any and a cached replay is
+    stale.
+    """
+    h = hashlib.sha256()
+    game = REPO / "environment_files" / game_id
+    for path in [EXPLORER, HARNESS, *sorted(p for p in game.rglob("*") if p.is_file())]:
+        h.update(path.read_bytes())
+    h.update(inspect.getsource(rollout).encode())
+    h.update(str(getattr(arc_agi, "__version__", "")).encode())
+    return h.hexdigest()[:12]
+
+
+def cached_rollout(game_id: str, seed: int, max_steps: int) -> list[dict[str, Any]]:
+    """``rollout``, persisted: the explorer is deterministic per seed, and the
+    rollout is nearly all of this bench's cost."""
+    path = CACHE / f"{game_id}_s{seed}_{max_steps}_{fingerprint(game_id)}.pkl.gz"
+    if path.is_file():
+        return pickle.loads(gzip.decompress(path.read_bytes()))
+    steps = rollout(game_id, max_steps, seed)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(gzip.compress(pickle.dumps(steps)))
+    tmp.replace(path)  # a killed run must not leave a truncated cache behind
     return steps
 
 
@@ -188,11 +224,23 @@ def state_features(arr: np.ndarray) -> list[float]:
     return [*hist.tolist(), len(fg) / n, *centre, *spread]
 
 
-def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> tuple[np.ndarray, ...]:
-    """(features, distance, state-group) per labelled step."""
+class Table(NamedTuple):
+    """One cleared level's labelled rows."""
+
+    X: np.ndarray
+    y: np.ndarray
+    g: np.ndarray
+    grids: np.ndarray
+    prims: list[tuple]
+
+
+def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> Table:
+    """Features, distance, state group, board and action per labelled step."""
     X: list[list[float]] = []
     y: list[float] = []
     g: list[int] = []
+    grids: list[np.ndarray] = []
+    prims: list[tuple] = []
     by_sig: dict[Any, int] = {}
     # One row per distinct (state, action). Frontier routing re-walks known
     # edges, so the same pair recurs many times — counting each visit inflates
@@ -200,22 +248,31 @@ def rows(seg: list[dict[str, Any]], labels: dict[int, float]) -> tuple[np.ndarra
     seen_pair: set[tuple[Any, Any]] = set()
     for i, d in labels.items():
         step = seg[i]
-        prim = step["prim"]
-        if not prim:
+        if not step["prim"]:
             continue
-        pair = (step["sig"], tuple(prim))
+        prim = tuple(step["prim"])
+        pair = (step["sig"], prim)
         if pair in seen_pair:
             continue
         seen_pair.add(pair)
         arr = step["arr"]
-        prim = tuple(prim)
         if prim not in step["order"]:
             continue  # kept so the row set matches earlier runs of this bench
         feat = R.features(prim, 0, arr, step["available"], R.cell_index(arr))
         X.append(feat + state_features(arr))
         y.append(d)
         g.append(by_sig.setdefault(step["sig"], len(by_sig)))
-    return np.asarray(X, float), np.asarray(y, float), np.asarray(g, int)
+        # The board the agent keys on: its chrome mask flattens self-animating
+        # cells, which tick with time and so would leak distance-to-win.
+        grids.append(step["settled"])
+        prims.append(prim)
+    return Table(
+        np.asarray(X, float),
+        np.asarray(y, float),
+        np.asarray(g, int),
+        np.asarray(grids),
+        prims,
+    )
 
 
 def top1(pred: np.ndarray, true: np.ndarray, group: np.ndarray) -> tuple[float, int]:
@@ -245,36 +302,69 @@ def sign_test(deltas: list[float]) -> float:
     ) / 2 ** len(signs)
 
 
-Table = tuple[np.ndarray, np.ndarray, np.ndarray]
+Model = Callable[[list[Table], Table], np.ndarray]
 
 
-def score_fold(train: list[Table], test: Table) -> tuple[float, int, float] | None:
-    """``(hits, states, chance hits)`` on the held-out level, or None if unscorable."""
-    parts = [p for p in train if len(p[0])]
-    Xte, yte, gte = test
-    if not parts or not len(Xte):
-        return None
+def gbr(train: list[Table], test: Table) -> np.ndarray:
+    """Gradient boosting over action features and 21 global board scalars."""
     model = GradientBoostingRegressor(random_state=0).fit(
-        np.vstack([p[0] for p in parts]), np.concatenate([p[1] for p in parts])
+        np.vstack([t.X for t in train]), np.concatenate([t.y for t in train])
     )
-    hit, seen = top1(model.predict(Xte), yte, gte)
-    return (hit, seen, top1(np.zeros_like(yte), yte, gte)[0]) if seen else None
+    return model.predict(test.X)
+
+
+def conv(train: list[Table], test: Table) -> np.ndarray:
+    """A small conv net over the board itself; see ``grid_encoder``."""
+    # torch is in the optional bench group, so only this model may need it.
+    import grid_encoder
+
+    return grid_encoder.fit_predict(
+        np.concatenate([t.grids for t in train]),
+        [p for t in train for p in t.prims],
+        np.concatenate([t.y for t in train]),
+        test.grids,
+        test.prims,
+    )
+
+
+MODELS: dict[str, Model] = {"gbr": gbr, "conv": conv}
+
+
+class Fold(NamedTuple):
+    """One held-out level, scored by every model — and by chance — on the same states."""
+
+    level: int
+    states: int
+    hits: dict[str, float]
+
+
+def score_fold(
+    level: int, train: list[Table], test: Table, models: dict[str, Model]
+) -> Fold | None:
+    """Every model's expected hits on the held-out level, or None if nothing ranks."""
+    train = [t for t in train if len(t.y)]
+    if not train:
+        return None
+    chance, seen = top1(np.zeros_like(test.y), test.y, test.g)
+    if not seen:
+        return None
+    hits = {n: top1(m(train, test), test.y, test.g)[0] for n, m in models.items()}
+    return Fold(level, seen, {"chance": chance, **hits})
 
 
 def score_episode(
-    game_id: str, seed: int, max_steps: int
-) -> list[tuple[int, float, int, float]]:
-    """``(level, hits, states, chance hits)`` per cleared level after the first.
+    game_id: str, seed: int, max_steps: int, models: dict[str, Model]
+) -> list[Fold]:
+    """Every cleared level after the first, scored from the levels before it only.
 
-    Each is scored from the levels before it only: online a level is
-    back-labelled once it clears, so later ones cannot inform it.
+    Online a level is back-labelled once it clears, so later ones cannot inform it.
     """
-    steps = rollout(game_id, max_steps, seed)
+    steps = cached_rollout(game_id, seed, max_steps)
     built = [rows(s, back_label(s)) for s in cleared_segments(steps)]
     return [
-        (k, *scored)
+        fold
         for k in range(1, len(built))
-        if (scored := score_fold(built[:k], built[k])) is not None
+        if (fold := score_fold(k, built[:k], built[k], models)) is not None
     ]
 
 
@@ -293,11 +383,43 @@ def distinct(
     return {key: episodes[key] for key in first.values()}
 
 
+def report(episodes: dict[tuple[str, int], list[Fold]], names: list[str]) -> None:
+    """Every scorer's hit rate, then each pair head to head over distinct episodes."""
+    total = len(episodes)
+    episodes = distinct(episodes)
+    folds = [f for scored in episodes.values() for f in scored]
+    states = sum(f.states for f in folds)
+    per = {
+        n: [sum(f.hits[n] for f in scored) for scored in episodes.values()]
+        for n in names
+    }
+    logger.success(
+        "{} distinct of {} episodes over {} games, {} folds, {} states | {}",
+        len(episodes),
+        total,
+        len({g for g, _ in episodes}),
+        len(folds),
+        states,
+        "  ".join(f"{n} {sum(per[n]) / states:.1%}" for n in names),
+    )
+    for a, b in itertools.combinations(names, 2):
+        d = [y - x for x, y in zip(per[a], per[b])]
+        logger.success(
+            "{} vs {}: {} episodes better, {} worse, sign test p = {:.4f}",
+            b,
+            a,
+            sum(x > 0 for x in d),
+            sum(x < 0 for x in d),
+            sign_test(d),
+        )
+
+
 @app.command()
 def main(
     games: str = typer.Option("", help="Comma-separated game ids; default all 25."),
     max_steps: int = typer.Option(6000),
     seeds: int = typer.Option(5, help="Independent episodes per game."),
+    model: str = typer.Option("gbr", help="Comma-separated, from: gbr, conv."),
 ) -> None:
     """Score every cleared level from the levels before it, over several seeds."""
     require_starter()
@@ -306,52 +428,32 @@ def main(
         from measure import SUITE
 
         games = ",".join(SUITE)
-    episodes: dict[tuple[str, int], list[tuple[int, float, int, float]]] = {}
+    models = {n: MODELS[n] for n in model.split(",")}
+    episodes: dict[tuple[str, int], list[Fold]] = {}
     for game_id in games.split(","):
         for seed in range(seeds):
             try:
-                scored = score_episode(game_id, seed, max_steps)
+                scored = score_episode(game_id, seed, max_steps, models)
             except Exception as exc:
                 logger.error(
                     "{} seed {}: {}: {}", game_id, seed, type(exc).__name__, exc
                 )
                 continue
-            for level, hit, n, chance in scored:
+            for f in scored:
                 logger.info(
-                    "{:6} seed {} level {}: model {:.1f}/{} ({:3.0%})  chance {:3.0%}",
+                    "{:6} seed {} level {}: {} over {} states",
                     game_id,
                     seed,
-                    level,
-                    hit,
-                    n,
-                    hit / n,
-                    chance / n,
+                    f.level,
+                    "  ".join(f"{n} {h / f.states:3.0%}" for n, h in f.hits.items()),
+                    f.states,
                 )
             if scored:
                 episodes[(game_id, seed)] = scored
-    if not episodes:
+    if episodes:
+        report(episodes, ["chance", *models])
+    else:
         logger.warning("no scorable episodes")
-        return
-    total = len(episodes)
-    episodes = distinct(episodes)
-    folds = [f for scored in episodes.values() for f in scored]
-    _, hits, seen, expected = map(sum, zip(*folds))
-    deltas = [sum(h - c for _, h, _, c in scored) for scored in episodes.values()]
-    logger.success(
-        "{} distinct of {} episodes over {} games, {} folds: model {:.1f}/{} ({:.1%})"
-        " vs chance {:.1%} | {} above chance, {} below, sign test p = {:.4f}",
-        len(episodes),
-        total,
-        len({g for g, _ in episodes}),
-        len(folds),
-        hits,
-        seen,
-        hits / seen,
-        expected / seen,
-        sum(d > 0 for d in deltas),
-        sum(d < 0 for d in deltas),
-        sign_test(deltas),
-    )
 
 
 if __name__ == "__main__":

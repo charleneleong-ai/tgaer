@@ -81,3 +81,8 @@ extend-exclude = [
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]  # pyflakes, pycodestyle, warnings, isort (ruff owns import order + format)
 ignore = ["E501"]  # line length is owned by `ruff format`; it won't wrap strings/comments/URLs
+
+[dependency-groups]
+bench = [
+    "torch==2.10.0",
+]
