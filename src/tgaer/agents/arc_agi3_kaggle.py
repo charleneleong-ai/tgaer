@@ -2455,11 +2455,18 @@ class ExplorerAgent(MyAgent):
     # non-decreasing in the action budget**: actions spent failing score nothing
     # and cost nothing.
     #
-    # The kernel's own projection on the v76 run was 16000 actions per game over
-    # 110 games in 7.5h, so 6000 used 37% of what was affordable. 12000 doubles
-    # it with margin for hidden games slower than the roster; is_done()'s global
-    # deadline remains the safety valve, and truncation is graceful — levels
-    # already cleared keep their counts. The LLM agent keeps 400: at 1051
+    # Measured throughput, not a projection: the scored rerun did 110 games x 400
+    # actions in ~12 min (61.1 actions/s aggregate) and the v77 mock 60025 actions
+    # in 903s over 25 threads (66.5/s). Agreeing within 8% across a 4x thread-count
+    # difference means throughput is CPU-saturated, so 110 concurrent games buy no
+    # speedup and the rate carries. At 61.1/s, 110 x 12000 actions is 6.0h — 80% of
+    # the 7.5h budget, so private games may be at most 1.25x slower than the roster
+    # before is_done() truncates. That is the backstop, not margin: 12000 is not a
+    # conservative setting. It is still correct to ship, because env_score is
+    # monotone in budget, so a truncated action is one that scored nothing and
+    # 12000-truncated weakly beats 8000-complete (4.0h, 53%). ab.py's
+    # throughput_verdict now fails any change projecting past the budget, since
+    # RHAE counts actions and cannot see this. The LLM agent keeps 400: at 1051
     # actions/min the same budget would need 10.5h and blow the deadline.
     MAX_ACTIONS = 12000
 
