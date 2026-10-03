@@ -1,8 +1,11 @@
-# dfranzen Milestone 2 notebook: scheduler fix
+# dfranzen Milestone 2 notebook: a scheduler change that lost on the hidden games
 
-We submit [dfranzen's public Milestone 2 notebook](https://www.kaggle.com/code/dfranzen/arc-agi-3-milestone-2-solution)
+**Outcome: rejected.** The change scored **20.60** public against **28.39** for the unmodified
+notebook submitted the next day, despite looking better locally. We submit the plain notebook.
+
+We submitted [dfranzen's public Milestone 2 notebook](https://www.kaggle.com/code/dfranzen/arc-agi-3-milestone-2-solution)
 (best public 27.89, Apache-2.0, source [da-fr/arc-agi-3-solution](https://github.com/da-fr/arc-agi-3-solution))
-with a two-part change to its priority scheduler. The notebook itself is not vendored here; it lives
+with a two-part change to its priority scheduler, then the plain notebook as its control. The notebook itself is not vendored here; it lives
 as the private kernel `charyeezy/arc-agi-3-dfranzen-m2-eval25-prior-fade` v1, submitted 2026-10-02
 as ref 56761652.
 
@@ -66,4 +69,24 @@ only tested together with the prior.
 The prior fixes tr87, and the fade keeps ka59 in play. The overall gain is about 1.2 se: single
 games swing ±80 points between runs regardless of the change (m0r0 14→100, tu93 100→12), so one
 run per variant cannot establish it. The pre-committed switch rule (≥ 43.01 and tr87/ka59 not
-parked) passed for prior-fade, so it took the 2026-10-02 slot. Its public score is the real test.
+parked) passed for prior-fade, so it took the 2026-10-02 slot.
+
+## Replicates and the public test
+
+A byte-identical rerun of each arm moved the unmodified notebook to 44.57 and prior-fade to 48.36,
+so the paired gain on two-run means is **+6.3 ± 5.0 se (p = 0.22)**: not established. Identical
+configs differ by an sd of ~30-37 points per game. Replaying dfranzen's own `priority_value` over
+the recorded game curves put the scheduler's worth at about +1.7 at 25 games and +0.9 at the
+scored 110-game scale.
+
+| submission | notebook | public |
+|---|---|---|
+| ref 56761652 (2026-10-02) | dfranzen + prior + fade 0.75 | 20.60 |
+| ref 56785456 (2026-10-03) | dfranzen, unmodified (`charyeezy/arc-agi-3-dfranzen-m2-copy`) | **28.39** |
+
+The plain copy lands in the unmodified notebook's public range (dfranzen 27.89 and 31.47, an
+identical copy by fantasy0312 27.26). The likeliest cause is the level prior: its per-level
+baselines are medians of the same 25 public games the change was tuned on, so it can misprice
+late levels on unseen games, and the fade starves early-level games once 110 compete for 10
+slots. Lesson: a local gain inside the noise floor, fitted to the public games, is not evidence
+for the hidden set — the same pattern as the explorer's local gains.
