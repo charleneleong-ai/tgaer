@@ -1,0 +1,28 @@
+{
+ "seed": 20261004,
+ "tune": [
+  "ar25-L7",
+  "bp35-L2",
+  "g50t-L1",
+  "ka59-L6",
+  "m0r0-L3",
+  "sp80-L5",
+  "su15-L5",
+  "tr87-L6",
+  "vc33-L7",
+  "wa30-L5"
+ ],
+ "holdout": [
+  "cd82-L3",
+  "cn04-L2",
+  "dc22-L4",
+  "lf52-L4",
+  "ls20-L5",
+  "r11l-L2",
+  "re86-L8",
+  "s5i5-L2",
+  "sk48-L1",
+  "tn36-L2"
+ ],
+ "rule": "Candidates are proposed and selected from tune-level traces only; holdout levels are reported as counts and never read."
+}
