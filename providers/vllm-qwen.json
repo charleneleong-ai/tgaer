@@ -1,0 +1,7 @@
+{
+  "provider_id": "vllm-qwen",
+  "name": "Local vLLM (Qwen3.8-27B, pi-a100-80gb)",
+  "client_kind": "openai",
+  "base_url": "http://localhost:8001/v1",
+  "api_key_env": "VLLM_DUMMY_API_KEY"
+}

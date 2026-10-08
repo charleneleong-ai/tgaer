@@ -1,0 +1,281 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{booktabs,longtable,array,amsmath,microtype}
+\usepackage[table]{xcolor}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=blue!55!black]{hyperref}
+\newcommand{\pp}{\,\text{pp}}
+\newcommand{\gain}[1]{\textcolor{green!45!black}{#1}}
+\newcommand{\loss}[1]{\textcolor{red!60!black}{#1}}
+
+\title{\textbf{A Model-Free Explorer for ARC-AGI-3}\\[2pt]
+\large Architecture, Ablations, and What the Metric Actually Rewards}
+\author{TGAER --- ARC Prize 2026, ARC-AGI-3 track}
+\date{29 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent We report on a model-free exploration agent for ARC-AGI-3, a benchmark of
+interactive grid games whose rules are never stated. Over the period covered here the
+agent was measured against a 25-game local harness with a $0.0300\pp$ noise floor, and
+submitted to the Kaggle leaderboard, which scores \emph{110 games the agent has never
+seen}. Our headline finding is negative and specific: of fifteen gated mechanism
+changes, one shipped with a measurable local gain, one shipped bit-identical and moved
+the public score, and thirteen were falsified. We decompose the score to show that
+\emph{all} remaining local headroom is action efficiency on games already solved rather
+than new games solved, and that the two games holding $64\%$ of that headroom fail for
+opposite reasons requiring opposite fixes. We also show that the local benchmark is a
+poor proxy in \emph{both} directions, which reframes what a submission should be
+selected for.
+\end{abstract}
+
+\section{The metric, and why it drives every decision}
+
+A level scores $\min\!\left(\text{cap},\ (h/a)^2\right)$ where $h$ is the human baseline
+action count and $a$ is ours. A game averages its levels \emph{weighted by level index
+over all of its levels}, so an uncleared level contributes zero to the numerator while
+its weight remains in the denominator. Three consequences set the whole research agenda:
+
+\begin{enumerate}\itemsep2pt
+  \item \textbf{Quadratic in efficiency.} Being $10\times$ slower than a human costs
+  $100\times$ the score. Level \emph{count} is close to irrelevant by comparison.
+  \item \textbf{Later levels are worth more.} In an 8-level game level~1 is $1/36$ of
+  the score and levels 2--8 are $35/36$. Exploration early is cheap; exploitation late
+  is valuable.
+  \item \textbf{Actions on a level never cleared are free.} The numerator is zero either
+  way, so truncation costs nothing and monotonicity in the action budget holds.
+\end{enumerate}
+
+\section{Evaluation protocol}
+
+Local measurements use 25 public games at 600 actions, five seeds per arm, reporting
+Relative Human Action Efficiency (RHAE). The gate requires three things, and a candidate
+failing any one is rejected: (i) no game may score less often and no game may lose a
+level, (ii) wall clock within $1.25\times$ of baseline with both arms projecting inside
+the kernel's deadline, and (iii) an argument for why the change should help
+\emph{off-roster}. Baseline is $0.3520\% \pm 0.0280$, per-seed
+$[0.3827, 0.3827, 0.3316, 0.3316, 0.3316]$; the noise floor is $0.0300\pp$.
+
+Two protocol lessons were learned the hard way and are recorded because they changed
+conclusions. First, \textbf{a candidate standard deviation of exactly zero is a defect
+report, not a clean result}: the entire seed variance of the 25-game suite comes from
+one game (\texttt{lp85}) reaching level 3 on two seeds, so $\sigma\to0$ means that
+outcome was pinned. Second, \textbf{the headline verdict is not sufficient}: one
+candidate read ``inside noise'' while \texttt{lp85} lost $0.8$ levels on average,
+just under the level-drop threshold. The per-game difference must be read every time.
+
+\section{Where the headroom is}
+
+Each game's \texttt{cap} is the score it would post at \emph{perfect} efficiency on the
+levels it currently clears. Averaged over the roster this is the ceiling reachable by
+pure speed, with no additional level solved. At 6000 actions over three seeds:
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+game & levels & env \% & cap \% & capture \\
+\midrule
+\texttt{lp85} & 3/8 & 3.6330 & 19.444 & 18.7\% \\
+\textbf{\texttt{tu93}} & 3/9 & 0.0455 & 13.333 & \textbf{0.3\%} \\
+\texttt{m0r0} & 1/6 & 0.0024 & 4.762 & 0.1\% \\
+\texttt{sp80} & 1/6 & 0.0345 & 4.762 & 0.7\% \\
+\texttt{g50t} & 1/7 & 3.5714 & 3.571 & \textbf{100.0\%} \\
+\texttt{ar25} & 1/8 & 1.8701 & 2.778 & 67.3\% \\
+\texttt{s5i5} & 1/8 & 0.0006 & 2.778 & 0.0\% \\
+\midrule
+\multicolumn{2}{l}{\textbf{total}} & \textbf{0.3663} & \textbf{2.0571} & \textbf{17.8\%} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{18 of 25 games score zero, and their \texttt{cap} is zero too}, so coverage work
+returns nothing until level~1 actually falls. Everything reachable is efficiency on games
+already won. \texttt{g50t} is already at human pace and \texttt{ar25} at $67\%$, so the
+two games supplying most of today's score have nothing left to give.
+
+\section{Diagnosis: stranded versus flooded}
+
+Instrumenting the agent's own state graph shows the two games holding $64\%$ of the
+ceiling fail in opposite ways.
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+& \texttt{tu93} L2 & \texttt{lp85} L4 \\
+\midrule
+steps on the level & 5424 / 6000 & 4750 / 6000 \\
+\textbf{no route to a frontier} & \textbf{3581 (66\%)} & \textbf{0 (0\%)} \\
+current state is itself a frontier & 474 & 3764 (79\%) \\
+states discovered & frozen at \textbf{159} & growing to \textbf{1647} \\
+untested pairs remaining & frozen at \textbf{6} & growing to \textbf{15950} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\texttt{tu93} is \textbf{stranded}: from step 2500 to 6000 it discovers no new state and
+drains no untested pair, with six pairs sitting at three states it cannot reach. The
+adjacency is directed and holds only observed transitions, so the agent learns
+$a \xrightarrow{X} b$ but never the way back unless it happens to take the inverse at
+$b$; inside a loop it never does. \texttt{lp85} is \textbf{flooded}: it never fails to
+find a route because nearly every state is itself a frontier, and it generates states
+faster than it can drain them. A reachability sweep confirms all seven scoring games are
+budget-limited rather than out of reachable states.
+
+\section{Ablation ledger}
+
+Every row was gated at five seeds against the noise floor. Rejections are the majority
+and are the substance of the work.
+
+\begin{center}
+\begin{longtable}{p{6.4cm}rp{5.4cm}}
+\toprule
+mechanism & $\Delta$ RHAE & outcome \\
+\midrule
+\endhead
+action budget $6000\to12000$ & \gain{$+0.0001\pp$} & shipped; monotone, so free \\
+colour-agnostic role inference & $+0.0000\pp$ & \textbf{shipped bit-identical}; moved public $+0.01$ \\
+probe cap $4\to1$ & \gain{$+0.1959\pp$} & shipped; largest local gain recorded \\
+\midrule
+defer irreversible edges & \loss{$-0.1659\pp$} & rejected, $8.4\sigma$; three games stop scoring \\
+drop the field-box crop & \loss{$-0.1661\pp$} & rejected; crop is the denoiser \\
+re-validate the avatar latch & --- & rejected; \texttt{tu93} $2\to1$ levels \\
+$(\text{colour},\text{size})$ compression & --- & not built; candidates collapse only $1.4\times$ \\
+class-generalised inert demotion & $+0.0000\pp$ & rejected; bit-identical on all seeds \\
+effect (inertness) prediction & \gain{$+0.0065\pp$} & \textbf{closed by ceiling}: $5\times$ under the floor \\
+per-level scoping of the stuck test & \loss{$-0.0012\pp$} & rejected; \texttt{tu93} 5/5 seeds $\to$ 0/5 \\
+fresh novelty window on respawn & \loss{$-0.0012\pp$} & rejected; \emph{identical} to the row above \\
+verify a routed step's destination & $+0.0000\pp$ & bit-identical; routes never mislead \\
+learned inverse edges & \loss{$-0.0014\pp$} & rejected; only \texttt{tu93} moved, and it died \\
+carry inert evidence across a level & \loss{$-0.0204\pp$} & rejected; $\sigma=0$, \texttt{lp85} pinned \\
+\quad same, capped at 1 & \loss{$-0.0204\pp$} & rejected; \emph{bit-identical} to uncapped \\
+\quad same, controls only & $+0.0000\pp$ & no-op; 0 of 25 games moved \\
+novelty judged against the game's own ceiling & $-0.0002\pp$ & \textbf{submitted}; passes all three gates \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Three results worth more than the fixes would have been}
+
+\paragraph{Effect prediction is closed by a bound, not an experiment.}
+A \emph{perfect oracle} for ``this action changes nothing'' is worth
+$+0.0065\pp$ against a $0.0300\pp$ floor --- $5\times$ below measurable. The value of
+predicting that an action does nothing is bounded by the cost of finding out, which is
+one action. Three games have \emph{zero} inert actions in 600 steps. This does not close
+mechanisms that avoid \emph{expensive} mistakes.
+
+\paragraph{\texttt{tu93} is a knife edge, so its headroom is not capturable.}
+Three independent routing mechanisms each took it from scoring in 5/5 seeds to 0/5, and
+the cleanest of them moved \emph{no other game at all}. Its wins depend on an accident:
+a death lowers the completed-level count, which reopens a gate while the novelty window
+still holds pre-death evidence, so an escape switch fires on the respawned board. Its
+nominal $25.9\%$ of the ceiling cannot be reached by changing how it moves, because
+reaching its stranded states costs the levels it already has.
+
+\paragraph{Nothing in the inert map transfers across a level.}
+Its informative half is clicks, whose keys embed $(\text{row},\text{col})$ and therefore
+name a board; its board-free half is 4--6 controls relearned within a handful of steps.
+Hence the membership rule: knowledge belongs in a cross-level tier only if its key is
+board-free \emph{and} re-earning it is expensive.
+
+\section{Constant sensitivity}
+
+A real mechanism improves over a \emph{range}; a lucky rollout spikes at one value with
+baseline either side. Sweeping the module-level tuned constants:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+constant & response & reading \\
+\midrule
+\texttt{PROBE\_LIMIT} & $0.3825 \to 0.3078 \to 0.3073 \to 0.1865$ & \textbf{monotone} to a floor at 1, not a spike \\
+\texttt{CHURN\_FRACTION} & $0.1861,\,0.3800,\,\mathbf{0.3825},\,0.3314,\,0.3314$ & plateau over $0.4$--$0.5$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The sweep tool labelled \texttt{PROBE\_LIMIT} a spike because only one value beats
+baseline, but its own definition of a spike requires baseline \emph{on both sides}. The
+response is monotone and 1 sits at the boundary; the code further documents that 0 and 1
+are identical on all 25 games, with 1 retained to keep the mechanism alive for an unseen
+game. The constant is therefore at a natural floor rather than fitted to noise.
+
+\section{Prior art, filtered by the rules we actually play under}
+
+Internet access is disabled in the scored kernel, which are the competition's own terms.
+Every published result above ours that uses a frontier API is therefore a research
+result on the public set, not a submittable design.
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+system & score & model & in-kernel? \\
+\midrule
+Tycho & 100.0 RHAE, all 183 levels & GPT-5.6 / Opus 5 & \textbf{no} \\
+Executable World Models & 58.12\% RHAE & GPT-5.5 & \textbf{no} \\
+\textbf{Duck harness} (winner) & \textbf{1.21\%} & Qwen 3.6 27B FP8 & yes \\
+AERA & 0.30 (private, 55 games) & Qwen2.5-\textbf{0.5B} & yes \\
+\textbf{ours} & \textbf{0.13--0.14} & none (model-free) & yes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The benchmark is close to solved by frontier coding agents; the \emph{competition} is
+not, because it forbids them. The sharpest datum is not the winner's $9\times$ margin but
+that \textbf{AERA beats us roughly $2\times$ using a 0.5B model}, which retires compute
+and model size as explanations and leaves architecture. Both kernel-feasible systems
+above us are LLM-as-programmer designs. An ablation of the world-model family reports
+that \emph{verification} ranks first among its mechanisms and, critically, succeeds at
+\emph{lower model effort} --- the regime a local quantised model must work in --- while
+the executable world model is ``not universally beneficial''.
+
+\section{The local benchmark is a poor proxy in both directions}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+submission & change & local RHAE & public \\
+\midrule
+v76 & probe cap $4\to1$ & $0.1561 \to 0.3520\%$ ($2.25\times$) & 0.13 \\
+v77 & 12000 actions + colour-agnostic roles & unchanged, \textbf{bit-identical} & \textbf{0.14} \\
+repeat & \emph{byte-identical rebuild of v77} & --- & \textbf{0.14} \\
+v78 & novelty against the game's own ceiling & $-0.0002\pp$ & pending \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+A $2.25\times$ local gain moved the public score by zero; a local \emph{no-op} moved it
+by $+0.01$. The identical rebuild scoring identically is the first evidence that the
+public score is reproducible at $0.01$ resolution, which makes v77's $+0.01$ real. The
+caveat is that this rests on a single pair, so equality bounds the variance weakly.
+
+The operative conclusion is that a flat local gate is \emph{not} a reason to withhold a
+submission, and a local gain is not a reason to make one. What earns a submission is a
+named mechanism by which the change differs off-roster. v77 removed a dependency on
+public-set colour indices; v78 removes a threshold fitted inside a $0.11$--$0.18$ gap
+measured on five of the 25 games that are never scored.
+
+\section{Conclusions}
+
+\begin{enumerate}\itemsep2pt
+  \item All remaining local headroom is \textbf{action efficiency on games already
+  solved}. Coverage work returns nothing while 18 games score zero.
+  \item The two games holding that headroom need \textbf{opposite} fixes, which explains
+  why single mechanisms aimed at ``exploration'' kept failing.
+  \item \texttt{tu93}'s share of the ceiling is \textbf{not capturable} by routing
+  changes, and it has decided three gates on its own. A candidate should be required to
+  move a game other than \texttt{tu93}.
+  \item \texttt{lp85} is an \textbf{ordering} problem, not a search problem: 15950
+  untested pairs where which candidate is tried first is the whole game.
+  \item Ordering under a budget is what a value model or a program-writing agent
+  supplies, and is the one architecture we have never actually tested. Our earlier 27B
+  failure tested LLM-as-\emph{policy}, the weak variant.
+\end{enumerate}
+
+\paragraph{Next steps, in order.} Confirm the kernel's runtime limit, which is not stated
+in the official documentation while our code assumes 7.5\,h. Extend oracle labels past
+level~0 so the transfer metric (actions-per-level regressed on level index) becomes
+decisive. Then resume the REPL branches toward the published winner's design, sized to
+the confirmed accelerator.
+
+\end{document}
