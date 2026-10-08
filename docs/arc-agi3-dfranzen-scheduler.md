@@ -90,3 +90,21 @@ baselines are medians of the same 25 public games the change was tuned on, so it
 late levels on unseen games, and the fade starves early-level games once 110 compete for 10
 slots. Lesson: a local gain inside the noise floor, fitted to the public games, is not evidence
 for the hidden set — the same pattern as the explorer's local gains.
+
+## A second scheduler change, also rejected: endgame rotation
+
+[`endgame_rotation.py`](../sia-oss/bench/dfz/endgame_rotation.py) admits waiting games
+first-in-first-out in the final 15% of the run, so games parked near a solution get a last turn.
+It uses no public-game statistics. Locally it did what it was built for: 2 games parked for 10+
+minutes against 8 in unmodified runs, and 109 levels against 97-105 (47.88 on one run). Publicly
+it scored **22.56** (ref 56925797, 2026-10-08), below all three plain draws (28.39, 27.86, 24.60).
+With 110 games competing for 10 slots, FIFO in the tail hands slots to long-parked games that are
+mostly hopeless rather than to near-solutions, which a 25-game local run cannot show.
+
+The only scheduler change to beat plain publicly is the D' slot priority from
+[shiiin9's notebook](https://www.kaggle.com/code/shiiin9/affectify-arc-31-54-in-a-single-sub):
+our two draws scored 29.68 and 29.71 against plain's mean of 26.95. Its authors fitted it in
+simulation across many games rather than to the public 25. Changes that act inside one game
+([`level_reattempt.py`](../sia-oss/bench/dfz/level_reattempt.py),
+[`reasoning_window.py`](../sia-oss/bench/dfz/reasoning_window.py)) do not move time between games,
+so they are the safer direction for the rest of the competition.
