@@ -54,6 +54,9 @@ tbody tr:last-child td{border-bottom:none}
   padding:.12rem .4rem;border-radius:2px;border:1px solid currentColor;white-space:nowrap}
 .pill.KEEP{color:var(--gain)}.pill.DISCARD{color:var(--loss)}.pill.BASELINE{color:var(--flat)}.pill.PROMOTE{color:var(--accent)}
 ul{max-width:66ch;padding-left:1.2rem}li{margin:.35rem 0}
+.fig{margin:1rem 0;background:#fff;border:1px solid var(--line);border-radius:3px;padding:.5rem}
+.fig img{display:block;width:100%;height:auto}
+.fig figcaption{font-size:.8rem;color:#5d6874;margin-top:.3rem}
 footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--muted);font-size:.8rem}
 """
 
@@ -356,6 +359,36 @@ class Dashboard:
             "None of the top five has disclosed a method.</p>"
         )
 
+    def audit(self) -> str:
+        figs = [
+            (
+                "01_levels_heatmap",
+                "Share of each game's levels cleared, per run (unmodified runs left of the white line)",
+            ),
+            (
+                "04_per_game_effects",
+                "Levels gained or lost per game against the unmodified mean",
+            ),
+            ("02_game_variability", "How far each game swings between runs"),
+            (
+                "03_completion_vs_efficiency",
+                "Completion against actions spent per cleared level",
+            ),
+            ("05_weak_games", "Levels cleared per run in the six weakest games"),
+        ]
+        imgs = "".join(
+            f'<figure class="fig"><img src="figures/{name}.png" alt="{Svg.esc(cap)}" loading="lazy">'
+            f"<figcaption>{Svg.esc(cap)}</figcaption></figure>"
+            for name, cap in figs
+        )
+        return (
+            "<h2>Trajectory audit: per game, across 18 local runs</h2>"
+            '<p class="take">Which game it is matters far more than which change we made: the same games lead and trail '
+            "in every run, and most games swing by half their levels between identical setups.</p>"
+            + imgs
+            + "<p>Built by scripts/trajectory_audit.py from docs/figures/arc-agi3/runs_per_game.csv.</p>"
+        )
+
     def page(self) -> str:
         body = "".join(
             [
@@ -372,6 +405,7 @@ class Dashboard:
                 self.gains(),
                 self.failures(),
                 self.funnel(),
+                self.audit(),
                 self.ledger(),
                 f"<footer>Built by scripts/build_artifact.py from docs/experiments/arc-agi3-ledger.json · status as of {self.d['as_of']}.</footer>",
             ]
