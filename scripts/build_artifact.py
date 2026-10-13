@@ -35,6 +35,7 @@ h2{font-size:1.3rem;font-weight:700;margin-top:2.7rem;padding-top:1rem;border-to
 p{margin:.6rem 0;max-width:66ch}
 .take{font-weight:600;margin-top:.7rem}
 .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem}
+.phase{color:var(--muted);font-size:.9rem;margin-top:.3rem}
 .lede{font-size:1.05rem;color:var(--muted);max-width:62ch;margin-top:.8rem}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:.7rem;margin:1.8rem 0 .4rem}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:.85rem .95rem;min-width:0}
@@ -197,13 +198,17 @@ class Dashboard:
             (
                 "baseline",
                 f"{self.base['public_mean']:.2f}",
-                "plain dfranzen, mean of 3",
+                f"plain dfranzen, mean of {sum(p['group'] == 'plain' for p in pub)}",
             ),
-            ("D' mean", f"{sum(dp) / len(dp):.2f}", f"n={len(dp)}, p~0.34 vs plain"),
+            (
+                "D' mean",
+                f"{sum(dp) / len(dp):.2f}",
+                f"n={len(dp)}, indistinguishable from plain",
+            ),
             (
                 "not moved",
                 f"{self.base['suite_episodes']:.0f} / 40",
-                "stuck levels cleared, 11 arms",
+                f"stuck levels cleared, {len(self.d['suite']) - 2} arms",
             ),
             (
                 "leader",
@@ -233,11 +238,11 @@ class Dashboard:
             18,
             32,
             [18, 20, 22, 24, 26, 28, 30, 32],
-            (self.base["public_mean"], "plain mean 26.95"),
+            (self.base["public_mean"], f"plain mean {self.base['public_mean']:.2f}"),
         )
         return (
-            "<h2>Public score: only D' sits above plain dfranzen</h2>"
-            '<p class="take">Every change we added on top of dfranzen scored at or below the plain copies; D\' leads by 1.7 points, inside the noise of three draws.</p>'
+            "<h2>Public score: D' and plain dfranzen are indistinguishable</h2>"
+            '<p class="take">Every change we added on top of dfranzen scored at or below the plain copies; D\' and plain differ by 0.6 points over four draws each, and draws of identical code span 22-30.</p>'
             + chart
             + "<p>Each dot is one submission scored on about 55 hidden games. Identical copies vary by about 4 points. "
             "The new-kernel submission that scored 0.00 is left out: it failed in the scored rerun, and the same code from the proven kernel scored 26.05.</p>"
@@ -285,7 +290,7 @@ class Dashboard:
         )
         return (
             "<h2>Stuck-level suite: no arm has converted stuck levels</h2>"
-            '<p class="take">Eleven arms, from prompts to harness probes to restarts, clear 5 to 12 of 40 stuck-level episodes against a baseline of 9.</p>'
+            f'<p class="take">{len(self.d["suite"]) - 2} arms, from prompts to harness probes to restarts, clear 5 to 12 of 40 stuck-level episodes against a baseline of 9.</p>'
             + chart
             + "<p>20 levels where full runs got stuck, each replayed twice from the recorded history. Shaded: 9 ± one standard deviation between identical baselines.</p>"
         )
@@ -336,7 +341,7 @@ class Dashboard:
         rows = [(name, n, "var(--accent)") for name, n in self.d["funnel"]]
         return (
             "<h2>The funnel</h2>"
-            '<p class="take">21 mechanisms built; one cleared the local noise band and did not reproduce; one configuration beat plain publicly, not significantly.</p>'
+            f'<p class="take">{self.d["funnel"][0][1]} mechanisms built; one cleared the local noise band and did not reproduce; one configuration beat plain publicly, not significantly.</p>'
             + Svg.bars(rows, 0, 25, [0, 5, 10, 15, 20, 25], "{:.0f}")
         )
 
@@ -395,9 +400,10 @@ class Dashboard:
                 '<div class="eyebrow">ARC Prize 2026 · ARC-AGI-3 · '
                 + self.d["as_of"]
                 + "</div>",
+                f'<p class="phase">{Svg.esc(self.d["phase"])}</p>',
                 "<h1>dfranzen's harness, and what moved the public score</h1>",
-                '<p class="lede">Twenty-one changes on top of the strongest public notebook, tested locally, on a stuck-level suite '
-                "and in public submissions. One configuration (D') leads plain dfranzen; nothing else moved the hidden-game score.</p>",
+                '<p class="lede">Twenty-three changes on top of the strongest public notebook, tested locally, on a stuck-level suite '
+                "and in public submissions. None moved the hidden-game score; D' and plain dfranzen are tied, and speed is the lever left.</p>",
                 self.headline(),
                 self.public(),
                 self.local(),

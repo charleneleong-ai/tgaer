@@ -2,19 +2,19 @@
 \usepackage[margin=2.2cm]{geometry}
 \usepackage{booktabs}
 \usepackage{hyperref}
-\title{Lifting dfranzen's ARC-AGI-3 harness: what moved the hidden-game score}
+\title{Lifting dfranzen's ARC-AGI-3 harness, phase 1: what moved the hidden-game score}
 \author{Charlene Leong}
-\date{11 October 2026}
+\date{13 October 2026 (phase 1: 1--13 October)}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-We tested 21 changes on top of dfranzen's Milestone~2 notebook for the ARC Prize 2026 ARC-AGI-3 Kaggle
+We tested 23 changes on top of dfranzen's Milestone~2 notebook for the ARC Prize 2026 ARC-AGI-3 Kaggle
 competition (offline, 9~hours, one RTX PRO 6000, 110 hidden interactive games, RHAE score). Changes were
-screened on a 25-game local run, on a 40-episode stuck-level suite, and by public submission. One configuration,
-the D$'$ slot priority from a public notebook, leads plain dfranzen by 1.7 public points over three draws each
-($p\approx0.34$). No change we built moved the public score, and no local or suite result outside the noise
+screened on a 25-game local run, on a 40-episode stuck-level suite, and by public submission. The D$'$ slot priority from a public
+notebook and plain dfranzen are indistinguishable: 27.10 against 26.52 public over four draws each, with draws of
+identical code spread over 22--30. No change we built moved the public score, and no local or suite result outside the noise
 band reproduced.
 \end{abstract}
 
@@ -25,7 +25,7 @@ scheduler. Kaggle allows one submission per day; the public score covers about 5
 
 Three screens, with their measured noise:
 \begin{itemize}
-  \item \textbf{Public score}: identical plain copies scored 28.39, 27.86 and 24.60 (sd 2.05); community copies
+  \item \textbf{Public score}: identical plain copies scored 28.39, 27.86, 24.60 and 25.21; with D$'$'s four draws the sd is about 2.8; community copies
         average 25.77 (sd 3.93).
   \item \textbf{Local 25-game run} (RHAE on the public games): identical runs differ by up to about 7 points.
   \item \textbf{Stuck-level suite}: 20 levels where full runs got stuck, each replayed twice from the recorded
@@ -37,8 +37,9 @@ Three screens, with their measured noise:
 \toprule
 Stage & Count \\
 \midrule
-Mechanisms built & 21 \\
+Mechanisms built & 23 \\
 Tested on the 25-game local run & 17 \\
+Tested on the stuck-level suite & 12 \\
 Above the local noise band ($42.9 \pm 7$) & 1 \\
 Reproduced when stacked or re-run & 0 \\
 Submitted publicly (as changes on dfranzen) & 4 \\
@@ -54,8 +55,8 @@ Significant against plain ($p<0.05$) & 0 \\
 Date & Configuration & Public \\
 \midrule
 10-02 & dfranzen + level prior + fade & 20.60 \\
-10-03, 10-04, 10-05 & plain dfranzen copy & 28.39, 27.86, 24.60 \\
-10-06, 10-07, 10-09 & D$'$ slot priority (shiiin9) & 29.68, 29.71, 26.60 \\
+10-03, 10-04, 10-05, 10-13 & plain dfranzen copy & 28.39, 27.86, 24.60, 25.21 \\
+10-06, 10-07, 10-09, 10-12 & D$'$ slot priority (shiiin9) & 29.68, 29.71, 26.60, 22.40 \\
 10-08 & dfranzen + endgame FIFO rotation & 22.56 \\
 10-10 & D$'$ + re-attempt, new kernel slug & 0.00 (rerun failed) \\
 10-11 & D$'$ + re-attempt, proven kernel & 26.05 \\
@@ -81,11 +82,19 @@ reasoning window & 24.27 & 74 & 544 \\
 \end{tabular}
 
 \subsection*{Stuck-level suite (episodes cleared of 40; baseline 9, 9)}
-Stall probe 10; prompt candidates 11, 11, 12, 9, 5; win records 8; thinking cap 8; keep-context restart 8.
+Stall probe 10; prompt candidates 11, 11, 12, 9, 5; win records 8; thinking cap 8; keep-context restart 8; replay-verified simulator check 8
+(the contract reached all 40 transcripts, none wrote the \texttt{predict} function it asked for).
 
 \subsection*{Re-attempt conversion}
 Of 28 re-attempts (v3 and v4), 6 cleared their level afterwards (21\%), against about 25\% of stuck levels
 cleared by continuing in unmodified runs.
+
+\subsection*{Serving speed}
+Speculative-decoding settings, 100 real requests at 10 concurrent: dfranzen's 3 draft steps with the FR-Spec
+vocabulary gave 400 and 419 tok/s on two boots; 2 steps 393, FR-Spec off 392, no speculative decoding 312.
+4 and 5 steps did not boot within 20 minutes. Replaying the scheduler over three local runs with a throughput
+multiplier gave 50.5 (stock), 52.4 (+10\%), 54.3 (+20\%) and 57.2 (+30\%); the replay overstates the stock run
+(50.5 against 42.7 measured), so these are direction and rough size.
 
 \section{Findings}
 \begin{enumerate}
@@ -93,14 +102,20 @@ cleared by continuing in unmodified runs.
         local mix does not represent the 110 hidden games.
   \item The model depends on its own past reasoning: removing it collapsed the run to 24.27.
   \item Restarting a stuck level, with or without its context, converts it no more often than continuing.
-  \item Smaller board images (256 px) cost nothing and add 5\% throughput.
+  \item Smaller board images (256 px) cost nothing and add 5\% throughput. dfranzen's speculative-decoding settings
+        are already the fastest tested; the remaining speed lever is a drafter retrained on the quantised model.
+  \item Asked to write a checkable simulator of the game, the model declined in every episode and called it
+        optional: it predicts in prose, not in code.
   \item A submission from a newly created kernel scored 0.00 although its save run passed; the same code from an
         existing kernel scored normally.
 \end{enumerate}
 
 \section{What is not established}
 \begin{itemize}
-  \item Whether D$'$ beats plain dfranzen: resolving 2 points needs about 60 draws per arm.
+  \item Whether D$'$ beats plain dfranzen: 27.10 against 26.52 over four draws each; resolving 2 points needs
+        about 60 draws per arm.
+  \item Whether a 10--15\% throughput gain shows publicly: the replay puts it near +1--1.5 points, below what
+        eight draws per arm can detect.
   \item Any local effect under about 5 points.
   \item The cause of the new-kernel 0.00: no scored-rerun logs are available; a Python 3.13 image change, a
         dataset-version race and mount failures all fit.
@@ -110,5 +125,6 @@ cleared by continuing in unmodified runs.
 
 \section*{Sources}
 Results: \texttt{docs/experiments/arc-agi3-ledger.json}. Dashboard:
-\url{https://claude.ai/artifact/LsbFyTwgMn4EmDU2vN8mko}. Literature: \texttt{reports/ARC AGI 3 SOTA October update.md}.
+\url{https://claude.ai/artifact/LsbFyTwgMn4EmDU2vN8mko}. Literature: \texttt{reports/ARC AGI 3 SOTA October update.md} and
+\texttt{reports/ARC AGI 3 SOTA October 12 delta.md}.
 \end{document}
