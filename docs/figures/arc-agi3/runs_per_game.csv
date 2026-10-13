@@ -1,0 +1,451 @@
+run,unmodified,game,score,levels,n_levels,actions,tokens
+unmodified 2,True,ar25,100.0,8.0,8,285,116420
+unmodified 2,True,bp35,2.22,1.0,9,75,140610
+unmodified 2,True,cd82,100.0,6.0,6,114,67692
+unmodified 2,True,cn04,4.76,1.0,6,88,130661
+unmodified 2,True,dc22,0.0,0.0,6,211,103128
+unmodified 2,True,ft09,47.62,4.0,6,98,116603
+unmodified 2,True,g50t,10.71,2.0,7,231,196195
+unmodified 2,True,ka59,18.17,3.0,7,286,267191
+unmodified 2,True,lf52,10.91,3.0,10,166,218928
+unmodified 2,True,lp85,100.0,8.0,8,139,134047
+unmodified 2,True,ls20,22.75,4.0,7,421,242861
+unmodified 2,True,m0r0,14.29,2.0,6,158,141266
+unmodified 2,True,r11l,100.0,6.0,6,100,238097
+unmodified 2,True,re86,58.33,6.0,8,489,227694
+unmodified 2,True,s5i5,58.33,6.0,8,239,335142
+unmodified 2,True,sb26,97.44,8.0,8,155,82581
+unmodified 2,True,sc25,63.91,5.0,6,299,246982
+unmodified 2,True,sk48,2.78,1.0,8,60,134416
+unmodified 2,True,sp80,4.76,1.0,6,30,194343
+unmodified 2,True,su15,13.33,3.0,9,134,185582
+unmodified 2,True,tn36,3.57,1.0,7,115,137714
+unmodified 2,True,tr87,100.0,6.0,6,268,112771
+unmodified 2,True,tu93,100.0,9.0,9,232,221001
+unmodified 2,True,vc33,74.03,6.0,7,321,266758
+unmodified 2,True,wa30,6.34,2.0,9,354,204946
+unmodified 3,True,ar25,100.0,8.0,8,277,135329
+unmodified 3,True,bp35,2.22,1.0,9,63,166067
+unmodified 3,True,cd82,22.8,4.0,6,161,169708
+unmodified 3,True,cn04,47.62,4.0,6,191,279193
+unmodified 3,True,dc22,39.64,4.0,6,368,247496
+unmodified 3,True,ft09,100.0,6.0,6,92,93419
+unmodified 3,True,g50t,21.43,3.0,7,344,169953
+unmodified 3,True,ka59,53.57,5.0,7,275,230598
+unmodified 3,True,lf52,5.45,2.0,10,119,170404
+unmodified 3,True,lp85,100.0,8.0,8,179,169563
+unmodified 3,True,ls20,63.74,6.0,7,550,289511
+unmodified 3,True,m0r0,64.49,5.0,6,359,243312
+unmodified 3,True,r11l,100.0,6.0,6,97,281679
+unmodified 3,True,re86,41.67,5.0,8,292,160241
+unmodified 3,True,s5i5,8.33,2.0,8,70,190442
+unmodified 3,True,sb26,77.78,7.0,8,153,93481
+unmodified 3,True,sc25,47.62,4.0,6,193,120281
+unmodified 3,True,sk48,1.25,1.0,8,145,136311
+unmodified 3,True,sp80,4.76,1.0,6,36,128978
+unmodified 3,True,su15,2.22,1.0,9,37,121191
+unmodified 3,True,tn36,3.57,1.0,7,83,148371
+unmodified 3,True,tr87,71.43,5.0,6,237,115609
+unmodified 3,True,tu93,86.04,9.0,9,271,200804
+unmodified 3,True,vc33,21.43,3.0,7,95,147879
+unmodified 3,True,wa30,12.49,4.0,9,693,183565
+level prior,False,ar25,100.0,8.0,8,285,109603
+level prior,False,bp35,1.09,1.0,9,64,158016
+level prior,False,cd82,75.72,6.0,6,217,232063
+level prior,False,cn04,71.43,5.0,6,248,259810
+level prior,False,dc22,14.29,2.0,6,136,184220
+level prior,False,ft09,100.0,6.0,6,88,75287
+level prior,False,g50t,3.57,1.0,7,55,110245
+level prior,False,ka59,10.26,2.0,7,208,158769
+level prior,False,lf52,4.73,2.0,10,163,164342
+level prior,False,lp85,100.0,8.0,8,109,133780
+level prior,False,ls20,28.68,4.0,7,324,196613
+level prior,False,m0r0,100.0,6.0,6,286,195793
+level prior,False,r11l,96.53,6.0,6,148,266320
+level prior,False,re86,41.67,5.0,8,416,184171
+level prior,False,s5i5,0.86,1.0,8,50,125855
+level prior,False,sb26,57.74,6.0,8,204,236072
+level prior,False,sc25,71.43,5.0,6,317,219337
+level prior,False,sk48,16.67,3.0,8,155,152944
+level prior,False,sp80,4.76,1.0,6,45,106291
+level prior,False,su15,13.33,3.0,9,98,138457
+level prior,False,tn36,3.57,1.0,7,93,116820
+level prior,False,tr87,81.61,6.0,6,464,122559
+level prior,False,tu93,12.47,3.0,9,100,118050
+level prior,False,vc33,100.0,7.0,7,219,203706
+level prior,False,wa30,6.67,2.0,9,307,162832
+prior + fade,False,ar25,100.0,8.0,8,362,144160
+prior + fade,False,bp35,2.22,1.0,9,55,134654
+prior + fade,False,cd82,90.51,6.0,6,175,258500
+prior + fade,False,cn04,71.43,5.0,6,272,324894
+prior + fade,False,dc22,14.29,2.0,6,208,176641
+prior + fade,False,ft09,100.0,6.0,6,121,87254
+prior + fade,False,g50t,0.0,0.0,7,80,74707
+prior + fade,False,ka59,53.57,5.0,7,356,293889
+prior + fade,False,lf52,5.45,2.0,10,114,181211
+prior + fade,False,lp85,100.0,8.0,8,113,116559
+prior + fade,False,ls20,3.57,1.0,7,122,60401
+prior + fade,False,m0r0,71.43,5.0,6,321,317844
+prior + fade,False,r11l,100.0,6.0,6,89,156940
+prior + fade,False,re86,58.33,6.0,8,517,172661
+prior + fade,False,s5i5,2.52,1.0,8,33,183576
+prior + fade,False,sb26,100.0,8.0,8,155,71709
+prior + fade,False,sc25,44.74,5.0,6,381,236914
+prior + fade,False,sk48,0.0,0.0,8,125,69289
+prior + fade,False,sp80,4.76,1.0,6,52,133351
+prior + fade,False,su15,22.22,4.0,9,129,331227
+prior + fade,False,tn36,3.57,1.0,7,71,148550
+prior + fade,False,tr87,97.46,6.0,6,401,203243
+prior + fade,False,tu93,100.0,9.0,9,249,258997
+prior + fade,False,vc33,72.91,6.0,7,228,221383
+prior + fade,False,wa30,2.22,1.0,9,141,106239
+prior + fade (rep),False,ar25,100.0,8.0,8,310,209545
+prior + fade (rep),False,bp35,2.02,1.0,9,82,175611
+prior + fade (rep),False,cd82,94.11,6.0,6,158,140158
+prior + fade (rep),False,cn04,4.76,1.0,6,96,178185
+prior + fade (rep),False,dc22,0.0,0.0,6,114,107527
+prior + fade (rep),False,ft09,47.62,4.0,6,197,179744
+prior + fade (rep),False,g50t,10.62,2.0,7,171,170771
+prior + fade (rep),False,ka59,21.43,3.0,7,270,212573
+prior + fade (rep),False,lf52,1.82,1.0,10,127,87323
+prior + fade (rep),False,lp85,100.0,8.0,8,120,142487
+prior + fade (rep),False,ls20,12.45,3.0,7,393,216239
+prior + fade (rep),False,m0r0,71.43,5.0,6,247,230178
+prior + fade (rep),False,r11l,100.0,6.0,6,93,151432
+prior + fade (rep),False,re86,58.33,6.0,8,474,292008
+prior + fade (rep),False,s5i5,7.91,2.0,8,118,289559
+prior + fade (rep),False,sb26,100.0,8.0,8,152,77617
+prior + fade (rep),False,sc25,22.77,3.0,6,223,175462
+prior + fade (rep),False,sk48,0.0,0.0,8,126,125775
+prior + fade (rep),False,sp80,4.76,1.0,6,75,237008
+prior + fade (rep),False,su15,62.22,7.0,9,169,292492
+prior + fade (rep),False,tn36,100.0,7.0,7,243,167624
+prior + fade (rep),False,tr87,95.22,6.0,6,396,157399
+prior + fade (rep),False,tu93,89.36,9.0,9,270,295705
+prior + fade (rep),False,vc33,100.0,7.0,7,219,151569
+prior + fade (rep),False,wa30,2.22,1.0,9,99,94191
+win records,False,ar25,100.0,8.0,8,305,114625
+win records,False,bp35,0.72,1.0,9,81,195718
+win records,False,cd82,0.0,0.0,6,72,104132
+win records,False,cn04,4.76,1.0,6,57,153396
+win records,False,dc22,47.62,4.0,6,322,241718
+win records,False,ft09,100.0,6.0,6,105,114125
+win records,False,g50t,10.71,2.0,7,219,199369
+win records,False,ka59,45.09,5.0,7,461,227635
+win records,False,lf52,3.83,2.0,10,164,154175
+win records,False,lp85,100.0,8.0,8,204,143488
+win records,False,ls20,28.79,4.0,7,417,205777
+win records,False,m0r0,65.43,5.0,6,314,280722
+win records,False,r11l,100.0,6.0,6,100,219529
+win records,False,re86,41.67,5.0,8,361,174670
+win records,False,s5i5,8.32,2.0,8,94,162673
+win records,False,sb26,97.44,8.0,8,147,54782
+win records,False,sc25,71.43,5.0,6,260,174623
+win records,False,sk48,2.78,1.0,8,55,156133
+win records,False,sp80,4.76,1.0,6,47,143806
+win records,False,su15,22.22,4.0,9,131,135163
+win records,False,tn36,0.0,0.0,7,355,97588
+win records,False,tr87,100.0,6.0,6,372,172562
+win records,False,tu93,73.16,8.0,9,203,260565
+win records,False,vc33,100.0,7.0,7,269,197513
+win records,False,wa30,2.22,1.0,9,166,103055
+win records (rep),False,ar25,41.67,5.0,8,249,173669
+win records (rep),False,bp35,2.02,1.0,9,42,196495
+win records (rep),False,cd82,91.51,6.0,6,171,290614
+win records (rep),False,cn04,4.76,1.0,6,85,132706
+win records (rep),False,dc22,25.64,3.0,6,255,276906
+win records (rep),False,ft09,100.0,6.0,6,107,67100
+win records (rep),False,g50t,0.0,0.0,7,83,79492
+win records (rep),False,ka59,10.71,2.0,7,207,149078
+win records (rep),False,lf52,5.45,2.0,10,118,139856
+win records (rep),False,lp85,100.0,8.0,8,108,104288
+win records (rep),False,ls20,27.02,4.0,7,435,264466
+win records (rep),False,m0r0,71.43,5.0,6,302,330538
+win records (rep),False,r11l,69.64,5.0,6,202,173279
+win records (rep),False,re86,58.33,6.0,8,532,236551
+win records (rep),False,s5i5,8.33,2.0,8,91,220513
+win records (rep),False,sb26,87.87,8.0,8,218,107384
+win records (rep),False,sc25,71.43,5.0,6,278,190587
+win records (rep),False,sk48,0.82,1.0,8,209,148760
+win records (rep),False,sp80,71.43,5.0,6,195,285578
+win records (rep),False,su15,13.33,3.0,9,144,124519
+win records (rep),False,tn36,3.57,1.0,7,75,109814
+win records (rep),False,tr87,71.43,5.0,6,256,112814
+win records (rep),False,tu93,80.0,8.0,9,267,273990
+win records (rep),False,vc33,21.08,3.0,7,114,146658
+win records (rep),False,wa30,6.67,2.0,9,210,152362
+40K drain,False,ar25,100.0,8.0,8,287,138257
+40K drain,False,bp35,1.17,1.0,9,67,110509
+40K drain,False,cd82,100.0,6.0,6,130,88813
+40K drain,False,cn04,4.76,1.0,6,69,152108
+40K drain,False,dc22,0.0,0.0,6,304,80871
+40K drain,False,ft09,100.0,6.0,6,96,74769
+40K drain,False,g50t,10.71,2.0,7,183,170038
+40K drain,False,ka59,44.64,5.0,7,295,201957
+40K drain,False,lf52,10.91,3.0,10,186,214022
+40K drain,False,lp85,77.78,7.0,8,194,156719
+40K drain,False,ls20,31.59,4.0,7,326,213439
+40K drain,False,m0r0,100.0,6.0,6,326,202453
+40K drain,False,r11l,100.0,6.0,6,123,244485
+40K drain,False,re86,58.33,6.0,8,409,179494
+40K drain,False,s5i5,8.33,2.0,8,102,171282
+40K drain,False,sb26,100.0,8.0,8,143,58181
+40K drain,False,sc25,63.32,5.0,6,339,186477
+40K drain,False,sk48,2.78,1.0,8,116,158275
+40K drain,False,sp80,4.76,1.0,6,87,137062
+40K drain,False,su15,13.33,3.0,9,127,167060
+40K drain,False,tn36,0.0,0.0,7,124,74827
+40K drain,False,tr87,71.43,5.0,6,389,109457
+40K drain,False,tu93,80.0,8.0,9,200,324066
+40K drain,False,vc33,47.21,5.0,7,207,196357
+40K drain,False,wa30,18.59,4.0,9,570,191919
+endgame rotation,False,ar25,100.0,8.0,8,278,103632
+endgame rotation,False,bp35,5.71,2.0,9,107,202460
+endgame rotation,False,cd82,100.0,6.0,6,125,92542
+endgame rotation,False,cn04,7.98,2.0,6,126,162482
+endgame rotation,False,dc22,46.43,4.0,6,325,280191
+endgame rotation,False,ft09,100.0,6.0,6,123,85244
+endgame rotation,False,g50t,3.57,1.0,7,62,123013
+endgame rotation,False,ka59,75.0,6.0,7,341,244119
+endgame rotation,False,lf52,10.91,3.0,10,146,216547
+endgame rotation,False,lp85,100.0,8.0,8,123,136961
+endgame rotation,False,ls20,32.8,4.0,7,506,289276
+endgame rotation,False,m0r0,28.57,3.0,6,293,215120
+endgame rotation,False,r11l,71.43,5.0,6,124,193349
+endgame rotation,False,re86,41.67,5.0,8,474,196812
+endgame rotation,False,s5i5,8.33,2.0,8,104,165800
+endgame rotation,False,sb26,85.94,8.0,8,178,104091
+endgame rotation,False,sc25,71.43,5.0,6,347,210412
+endgame rotation,False,sk48,0.9,1.0,8,107,109365
+endgame rotation,False,sp80,4.76,1.0,6,43,160813
+endgame rotation,False,su15,22.22,4.0,9,143,228315
+endgame rotation,False,tn36,3.57,1.0,7,120,149740
+endgame rotation,False,tr87,100.0,6.0,6,244,113687
+endgame rotation,False,tu93,60.07,7.0,9,290,193761
+endgame rotation,False,vc33,100.0,7.0,7,276,190157
+endgame rotation,False,wa30,15.62,4.0,9,575,195678
+re-attempt v2,False,ar25,100.0,8.0,8,303,147380
+re-attempt v2,False,bp35,5.49,2.0,9,91,223221
+re-attempt v2,False,cd82,98.6,6.0,6,136,86796
+re-attempt v2,False,cn04,25.75,3.0,6,231,207429
+re-attempt v2,False,dc22,47.62,4.0,6,297,280109
+re-attempt v2,False,ft09,100.0,6.0,6,102,101505
+re-attempt v2,False,g50t,0.0,0.0,7,80,117095
+re-attempt v2,False,ka59,39.88,5.0,7,356,193659
+re-attempt v2,False,lf52,4.38,2.0,10,138,133862
+re-attempt v2,False,lp85,100.0,8.0,8,123,134688
+re-attempt v2,False,ls20,3.57,1.0,7,173,85955
+re-attempt v2,False,m0r0,67.54,5.0,6,294,270547
+re-attempt v2,False,r11l,100.0,6.0,6,97,155620
+re-attempt v2,False,re86,58.33,6.0,8,482,203317
+re-attempt v2,False,s5i5,41.67,5.0,8,198,272674
+re-attempt v2,False,sb26,77.78,7.0,8,220,115014
+re-attempt v2,False,sc25,41.22,4.0,6,250,184949
+re-attempt v2,False,sk48,1.43,1.0,8,116,197478
+re-attempt v2,False,sp80,28.57,3.0,6,100,190625
+re-attempt v2,False,su15,22.22,4.0,9,104,247465
+re-attempt v2,False,tn36,3.57,1.0,7,70,93704
+re-attempt v2,False,tr87,80.37,6.0,6,460,228768
+re-attempt v2,False,tu93,100.0,9.0,9,232,249937
+re-attempt v2,False,vc33,21.43,3.0,7,85,164099
+re-attempt v2,False,wa30,2.22,1.0,9,162,91426
+HiCache 12 streams,False,ar25,100.0,8.0,8,329,144166
+HiCache 12 streams,False,bp35,2.22,1.0,9,79,178564
+HiCache 12 streams,False,cd82,100.0,6.0,6,169,116386
+HiCache 12 streams,False,cn04,47.62,4.0,6,160,241722
+HiCache 12 streams,False,dc22,47.62,4.0,6,358,246455
+HiCache 12 streams,False,ft09,100.0,6.0,6,90,85900
+HiCache 12 streams,False,g50t,0.0,0.0,7,62,122141
+HiCache 12 streams,False,ka59,32.74,5.0,7,378,283257
+HiCache 12 streams,False,lf52,5.45,2.0,10,140,211103
+HiCache 12 streams,False,lp85,100.0,8.0,8,139,155824
+HiCache 12 streams,False,ls20,45.49,5.0,7,484,272065
+HiCache 12 streams,False,m0r0,12.98,2.0,6,169,209740
+HiCache 12 streams,False,r11l,100.0,6.0,6,95,206981
+HiCache 12 streams,False,re86,58.33,6.0,8,447,182601
+HiCache 12 streams,False,s5i5,8.33,2.0,8,87,190900
+HiCache 12 streams,False,sb26,100.0,8.0,8,157,62679
+HiCache 12 streams,False,sc25,93.77,6.0,6,260,142582
+HiCache 12 streams,False,sk48,2.78,1.0,8,101,134832
+HiCache 12 streams,False,sp80,14.29,2.0,6,51,131700
+HiCache 12 streams,False,su15,33.33,5.0,9,231,288119
+HiCache 12 streams,False,tn36,0.0,0.0,7,124,110769
+HiCache 12 streams,False,tr87,4.76,1.0,6,151,112618
+HiCache 12 streams,False,tu93,55.23,8.0,9,276,326913
+HiCache 12 streams,False,vc33,100.0,7.0,7,271,170004
+HiCache 12 streams,False,wa30,22.22,4.0,9,377,184493
+re-attempt v3,False,ar25,100.0,8.0,8,276,111258
+re-attempt v3,False,bp35,0.68,1.0,9,53,171745
+re-attempt v3,False,cd82,100.0,6.0,6,115,76511
+re-attempt v3,False,cn04,47.62,4.0,6,205,216971
+re-attempt v3,False,dc22,0.0,0.0,6,97,82070
+re-attempt v3,False,ft09,47.62,4.0,6,123,125663
+re-attempt v3,False,g50t,0.0,0.0,7,64,85682
+re-attempt v3,False,ka59,14.26,3.0,7,204,222248
+re-attempt v3,False,lf52,1.82,1.0,10,274,72495
+re-attempt v3,False,lp85,100.0,8.0,8,111,163878
+re-attempt v3,False,ls20,22.84,4.0,7,449,272594
+re-attempt v3,False,m0r0,64.57,5.0,6,394,269945
+re-attempt v3,False,r11l,71.43,5.0,6,99,272388
+re-attempt v3,False,re86,58.33,6.0,8,455,191078
+re-attempt v3,False,s5i5,8.33,2.0,8,87,165399
+re-attempt v3,False,sb26,95.06,8.0,8,157,61101
+re-attempt v3,False,sc25,0.0,0.0,6,90,77643
+re-attempt v3,False,sk48,0.0,0.0,8,105,80189
+re-attempt v3,False,sp80,4.76,1.0,6,68,143221
+re-attempt v3,False,su15,13.33,3.0,9,127,189894
+re-attempt v3,False,tn36,31.43,4.0,7,253,241545
+re-attempt v3,False,tr87,100.0,6.0,6,233,78927
+re-attempt v3,False,tu93,73.38,8.0,9,227,326370
+re-attempt v3,False,vc33,100.0,7.0,7,207,136409
+re-attempt v3,False,wa30,2.22,1.0,9,150,149081
+re-attempt v4,False,ar25,100.0,8.0,8,280,119548
+re-attempt v4,False,bp35,2.22,1.0,9,59,142469
+re-attempt v4,False,cd82,100.0,6.0,6,133,152794
+re-attempt v4,False,cn04,71.43,5.0,6,225,200613
+re-attempt v4,False,dc22,14.29,2.0,6,224,176281
+re-attempt v4,False,ft09,100.0,6.0,6,97,110522
+re-attempt v4,False,g50t,53.57,5.0,7,451,254641
+re-attempt v4,False,ka59,10.71,2.0,7,150,180791
+re-attempt v4,False,lf52,10.91,3.0,10,212,188957
+re-attempt v4,False,lp85,100.0,8.0,8,141,235860
+re-attempt v4,False,ls20,53.57,5.0,7,337,215458
+re-attempt v4,False,m0r0,100.0,6.0,6,313,206990
+re-attempt v4,False,r11l,71.43,5.0,6,111,278764
+re-attempt v4,False,re86,41.67,5.0,8,411,181340
+re-attempt v4,False,s5i5,41.67,5.0,8,174,239354
+re-attempt v4,False,sb26,100.0,8.0,8,145,55152
+re-attempt v4,False,sc25,42.14,4.0,6,219,159916
+re-attempt v4,False,sk48,0.0,0.0,8,136,82228
+re-attempt v4,False,sp80,4.76,1.0,6,56,151884
+re-attempt v4,False,su15,46.36,6.0,9,261,212895
+re-attempt v4,False,tn36,3.57,1.0,7,90,142769
+re-attempt v4,False,tr87,66.08,5.0,6,265,136692
+re-attempt v4,False,tu93,17.87,4.0,9,135,162320
+re-attempt v4,False,vc33,100.0,7.0,7,216,123046
+re-attempt v4,False,wa30,2.22,1.0,9,132,152525
+reasoning window,False,ar25,58.33,6.0,8,243,195020
+reasoning window,False,bp35,0.76,1.0,9,88,147263
+reasoning window,False,cd82,6.63,2.0,6,104,214028
+reasoning window,False,cn04,28.57,3.0,6,179,201700
+reasoning window,False,dc22,14.29,2.0,6,204,164080
+reasoning window,False,ft09,100.0,6.0,6,86,83529
+reasoning window,False,g50t,10.71,2.0,7,146,167716
+reasoning window,False,ka59,0.4,1.0,7,96,95422
+reasoning window,False,lf52,5.45,2.0,10,93,176520
+reasoning window,False,lp85,100.0,8.0,8,163,153628
+reasoning window,False,ls20,9.41,2.0,7,217,177499
+reasoning window,False,m0r0,4.76,1.0,6,116,127174
+reasoning window,False,r11l,4.76,1.0,6,19,132720
+reasoning window,False,re86,41.67,5.0,8,338,158267
+reasoning window,False,s5i5,16.67,3.0,8,152,219869
+reasoning window,False,sb26,11.26,4.0,8,180,151999
+reasoning window,False,sc25,23.05,3.0,6,241,130685
+reasoning window,False,sk48,0.0,0.0,8,55,82757
+reasoning window,False,sp80,14.29,2.0,6,101,170610
+reasoning window,False,su15,33.33,5.0,9,155,264815
+reasoning window,False,tn36,3.57,1.0,7,100,131900
+reasoning window,False,tr87,47.62,4.0,6,209,181271
+reasoning window,False,tu93,33.33,5.0,9,175,210599
+reasoning window,False,vc33,35.71,4.0,7,182,171004
+reasoning window,False,wa30,2.22,1.0,9,117,120952
+HiCache 160K,False,ar25,100.0,8.0,8,270,94035
+HiCache 160K,False,bp35,4.38,2.0,9,98,180084
+HiCache 160K,False,cd82,90.38,6.0,6,135,101134
+HiCache 160K,False,cn04,100.0,6.0,6,257,192057
+HiCache 160K,False,dc22,47.62,4.0,6,290,260030
+HiCache 160K,False,ft09,100.0,6.0,6,89,79721
+HiCache 160K,False,g50t,0.0,0.0,7,54,79639
+HiCache 160K,False,ka59,52.79,6.0,7,516,218055
+HiCache 160K,False,lf52,10.91,3.0,10,167,202237
+HiCache 160K,False,lp85,100.0,8.0,8,124,151029
+HiCache 160K,False,ls20,25.83,4.0,7,473,230322
+HiCache 160K,False,m0r0,64.43,5.0,6,332,218111
+HiCache 160K,False,r11l,47.62,4.0,6,73,204518
+HiCache 160K,False,re86,41.67,5.0,8,435,149559
+HiCache 160K,False,s5i5,2.78,1.0,8,46,94439
+HiCache 160K,False,sb26,100.0,8.0,8,163,66927
+HiCache 160K,False,sc25,62.0,5.0,6,332,161960
+HiCache 160K,False,sk48,0.0,0.0,8,38,87244
+HiCache 160K,False,sp80,28.57,3.0,6,101,177237
+HiCache 160K,False,su15,22.22,4.0,9,214,145427
+HiCache 160K,False,tn36,0.0,0.0,7,125,93380
+HiCache 160K,False,tr87,100.0,6.0,6,372,106866
+HiCache 160K,False,tu93,80.0,8.0,9,225,275797
+HiCache 160K,False,vc33,21.14,3.0,7,125,117057
+HiCache 160K,False,wa30,13.33,3.0,9,459,208033
+24K drain,False,ar25,100.0,8.0,8,320,123069
+24K drain,False,bp35,1.09,1.0,9,70,106601
+24K drain,False,cd82,100.0,6.0,6,133,99132
+24K drain,False,cn04,4.76,1.0,6,54,112863
+24K drain,False,dc22,14.29,2.0,6,208,130565
+24K drain,False,ft09,100.0,6.0,6,128,103976
+24K drain,False,g50t,0.0,0.0,7,38,83880
+24K drain,False,ka59,42.47,5.0,7,294,172772
+24K drain,False,lf52,1.82,1.0,10,45,99136
+24K drain,False,lp85,100.0,8.0,8,138,113856
+24K drain,False,ls20,2.37,1.0,7,86,96838
+24K drain,False,m0r0,14.29,2.0,6,137,141859
+24K drain,False,r11l,100.0,6.0,6,107,162362
+24K drain,False,re86,41.67,5.0,8,339,151918
+24K drain,False,s5i5,2.78,1.0,8,31,119879
+24K drain,False,sb26,93.41,8.0,8,162,65484
+24K drain,False,sc25,47.62,4.0,6,218,118321
+24K drain,False,sk48,0.0,0.0,8,29,74001
+24K drain,False,sp80,4.76,1.0,6,35,123147
+24K drain,False,su15,13.33,3.0,9,104,143597
+24K drain,False,tn36,100.0,7.0,7,196,166444
+24K drain,False,tr87,56.25,5.0,6,422,130556
+24K drain,False,tu93,80.0,8.0,9,277,174191
+24K drain,False,vc33,100.0,7.0,7,219,157278
+24K drain,False,wa30,2.22,1.0,9,150,106880
+HiCache 160K + re-attempt,False,ar25,100.0,8.0,8,328,156440
+HiCache 160K + re-attempt,False,bp35,0.9,1.0,9,62,131844
+HiCache 160K + re-attempt,False,cd82,99.81,6.0,6,148,85864
+HiCache 160K + re-attempt,False,cn04,4.76,1.0,6,50,132631
+HiCache 160K + re-attempt,False,dc22,47.62,4.0,6,293,191220
+HiCache 160K + re-attempt,False,ft09,100.0,6.0,6,81,67365
+HiCache 160K + re-attempt,False,g50t,10.22,2.0,7,272,219773
+HiCache 160K + re-attempt,False,ka59,21.21,3.0,7,203,131307
+HiCache 160K + re-attempt,False,lf52,1.82,1.0,10,55,76010
+HiCache 160K + re-attempt,False,lp85,100.0,8.0,8,144,161447
+HiCache 160K + re-attempt,False,ls20,3.57,1.0,7,122,89386
+HiCache 160K + re-attempt,False,m0r0,60.38,5.0,6,407,212147
+HiCache 160K + re-attempt,False,r11l,91.64,6.0,6,168,251660
+HiCache 160K + re-attempt,False,re86,41.67,5.0,8,339,202255
+HiCache 160K + re-attempt,False,s5i5,7.71,2.0,8,96,182001
+HiCache 160K + re-attempt,False,sb26,97.44,8.0,8,150,44384
+HiCache 160K + re-attempt,False,sc25,47.62,4.0,6,236,131563
+HiCache 160K + re-attempt,False,sk48,41.67,5.0,8,338,328838
+HiCache 160K + re-attempt,False,sp80,4.76,1.0,6,114,262998
+HiCache 160K + re-attempt,False,su15,13.33,3.0,9,131,159845
+HiCache 160K + re-attempt,False,tn36,3.57,1.0,7,77,86005
+HiCache 160K + re-attempt,False,tr87,70.33,5.0,6,244,201287
+HiCache 160K + re-attempt,False,tu93,70.39,8.0,9,239,290937
+HiCache 160K + re-attempt,False,vc33,21.43,3.0,7,142,162712
+HiCache 160K + re-attempt,False,wa30,2.22,1.0,9,140,86437
+256 px images,False,ar25,100.0,8.0,8,346,273653
+256 px images,False,bp35,0.0,0.0,9,78,113285
+256 px images,False,cd82,100.0,6.0,6,119,134484
+256 px images,False,cn04,3.46,1.0,6,90,160070
+256 px images,False,dc22,14.29,2.0,6,204,160077
+256 px images,False,ft09,38.25,4.0,6,135,164183
+256 px images,False,g50t,0.0,0.0,7,65,79723
+256 px images,False,ka59,46.35,5.0,7,362,287712
+256 px images,False,lf52,9.07,3.0,10,256,222435
+256 px images,False,lp85,100.0,8.0,8,159,124809
+256 px images,False,ls20,3.57,1.0,7,284,74590
+256 px images,False,m0r0,71.43,5.0,6,284,212553
+256 px images,False,r11l,100.0,6.0,6,125,159566
+256 px images,False,re86,58.33,6.0,8,534,268809
+256 px images,False,s5i5,1.78,1.0,8,46,130447
+256 px images,False,sb26,25.99,4.0,8,124,183028
+256 px images,False,sc25,30.95,4.0,6,312,192376
+256 px images,False,sk48,8.33,2.0,8,115,155438
+256 px images,False,sp80,28.57,3.0,6,139,211981
+256 px images,False,su15,44.4,6.0,9,284,318977
+256 px images,False,tn36,0.0,0.0,7,166,76914
+256 px images,False,tr87,71.43,5.0,6,339,146051
+256 px images,False,tu93,97.96,9.0,9,257,301511
+256 px images,False,vc33,100.0,7.0,7,255,221407
+256 px images,False,wa30,13.33,3.0,9,560,233065
