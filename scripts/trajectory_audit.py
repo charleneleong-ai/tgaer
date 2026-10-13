@@ -97,7 +97,6 @@ class Audit:
 
     def save(self, fig: plt.Figure, name: str) -> None:
         fig.savefig(FIGS / f"{name}.png", bbox_inches="tight", facecolor="white")
-        fig.savefig(FIGS / f"{name}.svg", bbox_inches="tight", facecolor="white")
         plt.close(fig)
 
     def heatmap(self) -> None:
