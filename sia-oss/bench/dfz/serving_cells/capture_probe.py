@@ -84,6 +84,57 @@ for i, r in enumerate(samples):
         (OUT / f"logprobs_{i}.json").write_text(json.dumps(lp[:64]))
     print("[capture]", json.dumps(row), flush=True)
     report.setdefault("rows", []).append(row)
+# Short text prompts captured in full (prompt + greedy output states and token ids): the stage-2 gate replays
+# them through mtp_ref.py and checks it predicts token t+2 as often as SGLang's drafter does.
+SHORT = [
+    "Explain in three sentences why a breadth-first search finds the shortest path in an unweighted grid.",
+    "Write a Python function that rotates a 2D list of ints 90 degrees clockwise, then show it on a 3x3 example.",
+    "A game board has a red block that moves one cell per action and stops at walls. List a plan to test which actions move it.",
+    "Summarise the rules of tic-tac-toe, then say who wins with perfect play.",
+]
+for j, prompt in enumerate(SHORT):
+    try:
+        out = post(
+            "/generate",
+            {
+                "text": prompt,
+                "sampling_params": {"temperature": 0, "max_new_tokens": 384},
+                "return_hidden_states": True,
+                "return_logprob": True,
+                "top_logprobs_num": 20,
+                "logprob_start_len": 0,
+            },
+        )
+    except Exception as exc:
+        report.setdefault("errors", []).append(f"generate {j}: {exc!r}"[:300])
+        continue
+    meta = out["meta_info"]
+    hs = meta.get("hidden_states") or []
+    row = {
+        "j": j,
+        "meta_keys": sorted(meta),
+        "n_hidden_entries": len(hs),
+        "hidden_entry_shapes": [shape(x) for x in hs[:3]],
+        "n_input_logprobs": len(meta.get("input_token_logprobs") or []),
+        "n_output_logprobs": len(meta.get("output_token_logprobs") or []),
+    }
+    if hs:
+        np.savez_compressed(
+            OUT / f"short_{j}.npz",
+            prompt_hidden=np.asarray(hs[0], dtype=np.float32),
+            output_hidden=np.asarray(hs[1:], dtype=np.float32),
+            input_ids=np.asarray(
+                [t[1] for t in meta.get("input_token_logprobs") or []], dtype=np.int64
+            ),
+            output_ids=np.asarray(
+                [t[1] for t in meta.get("output_token_logprobs") or []], dtype=np.int64
+            ),
+        )
+        (OUT / f"short_{j}_top.json").write_text(
+            json.dumps(meta.get("output_top_logprobs", [])[:64])
+        )
+    print("[capture]", json.dumps(row), flush=True)
+    report.setdefault("short_rows", []).append(row)
 report["wall_s"] = round(time.time() - t0, 1)
 (OUT / "report.json").write_text(json.dumps(report, indent=1))
 print(

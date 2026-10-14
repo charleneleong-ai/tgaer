@@ -225,3 +225,26 @@ def test_config_reads_text_config_and_mtp_rope(tmp_path: Path) -> None:
         64,
         512,
     )
+
+
+def test_gate_counts_hits_on_generated_tokens_only() -> None:
+    pytest.importorskip("numpy")
+    from mtp_gate import depth1_acceptance
+
+    vocab = 7
+
+    def plus_one(
+        hidden, next_tokens, positions
+    ):  # drafter that predicts token + 1 from token t+1
+        return torch.nn.functional.one_hot(
+            (next_tokens + 1) % vocab, vocab
+        ).float(), hidden
+
+    tokens = torch.tensor([3, 4, 5, 6, 0, 1, 1, 2])  # one break: 1 -> 1
+    hits, trials = depth1_acceptance(
+        plus_one, torch.zeros(8, 4), tokens, first_output=4
+    )
+    assert (hits, trials) == (
+        3,
+        4,
+    )  # predicts tokens 4..7 from rows 2..5; the 1 -> 1 step misses
