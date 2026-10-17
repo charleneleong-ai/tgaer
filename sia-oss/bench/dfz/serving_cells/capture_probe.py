@@ -25,7 +25,25 @@ assert patched.count('"--enable-metrics",') == 1
 patched = patched.replace(
     '"--enable-metrics",', '"--enable-metrics", "--enable-return-hidden-states",'
 )
+SERVER_STARTUP_TIMEOUT = (
+    40 * 60
+)  # the launcher otherwise releases at 12 min with the server still loading
 exec(patched)
+
+
+def wait_healthy(limit_s: float = 2400) -> bool:
+    t = time.time()
+    while time.time() - t < limit_s and proc.poll() is None:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{SERVED_MODEL_PORT}/health", timeout=5
+            ) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(5)
+    return False
 
 
 def post(path: str, body: dict) -> dict:
@@ -46,7 +64,7 @@ def shape(x) -> list:
     return dims
 
 
-report = {"boot_ok": proc.poll() is None}
+report = {"boot_ok": wait_healthy()}
 samples = [lane["requests"][0] for lane in WORKLOAD] + [
     lane["requests"][-1] for lane in WORKLOAD
 ]
