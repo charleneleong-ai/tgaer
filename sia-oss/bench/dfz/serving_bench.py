@@ -113,7 +113,18 @@ def workload(run_dir: Path, out: Path) -> None:
 
 
 @app.command()
-def kernel(bench: str, base_dir: Path, out_dir: Path, slug: str) -> None:
+def kernel(
+    bench: str,
+    base_dir: Path,
+    out_dir: Path,
+    slug: str,
+    configs: str = typer.Option(
+        "", help="JSON [[name, overrides], ...] replacing the bench's own configs."
+    ),
+    dataset: list[str] = typer.Option(
+        [], help="Extra Kaggle dataset sources, e.g. a retrained drafter."
+    ),
+) -> None:
     if bench not in BENCHES:
         raise typer.BadParameter(f"bench must be one of {sorted(BENCHES)}")
     base_nb = json.loads(next(base_dir.glob("*.ipynb")).read_text())

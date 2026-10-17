@@ -29,6 +29,30 @@ CONFIGS = [
     ("nospec", {"SPEC": False}),
     ("base_s3_rep", {}),
 ]
+# A kernel may override the configs with /kaggle/working/bench_configs.json: [[name, overrides], ...]. An override
+# {"DRAFT_DENSE": "<dataset slug>"} serves the stock drafter with that dataset's mtp-dense.safetensors swapped in.
+_override = Path("/kaggle/working/bench_configs.json")
+if _override.exists():
+    CONFIGS = [tuple(c) for c in json.loads(_override.read_text())]
+STOCK_DRAFT = DRAFT_MODEL_DIR
+
+
+def draft_with(slug: str) -> str:
+    """A draft folder linking every stock drafter file, with mtp-dense.safetensors replaced."""
+    (dense,) = glob.glob(
+        f"/kaggle/input/**/{slug}/**/mtp-dense.safetensors", recursive=True
+    )
+    root = Path(f"/tmp/draft-{slug}")
+    root.mkdir(parents=True, exist_ok=True)
+    for src in Path(STOCK_DRAFT).iterdir():
+        dst = root / src.name
+        if not dst.exists():
+            dst.symlink_to(
+                dense if src.name == "mtp-dense.safetensors" else src.resolve()
+            )
+    return str(root)
+
+
 SAMPLING = dict(temperature=0.6, top_p=0.95, top_k=20, max_tokens=2048)
 DECODE = re.compile(
     r"#running-req: (\d+).*?(?:accept len: ([\d.]+).*?)?gen throughput \(token/s\): ([\d.]+)"
@@ -138,6 +162,9 @@ def wait_healthy(limit_s: float = 1200) -> bool:
 for i, (cfg_name, overrides) in enumerate(CONFIGS):  # the launcher exec rebinds `name`
     if i:
         precache_model_thread.start = lambda: None  # the first boot already ran it
+    overrides = dict(overrides)
+    dense_name = overrides.pop("DRAFT_DENSE", None)
+    DRAFT_MODEL_DIR = draft_with(dense_name) if dense_name else STOCK_DRAFT
     NOTEBOOK_START_TIME = time.time()
     SERVER_STARTUP_TIMEOUT = 20 * 60
     exec(LAUNCHER.replace("\nVENV = ", f"\nCFG.update({overrides!r})\nVENV = ", 1))
