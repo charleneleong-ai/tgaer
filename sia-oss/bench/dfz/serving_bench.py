@@ -130,12 +130,15 @@ def kernel(
     base_nb = json.loads(next(base_dir.glob("*.ipynb")).read_text())
     base_meta = json.loads((base_dir / "kernel-metadata.json").read_text())
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / f"{slug}.ipynb").write_text(
-        json.dumps(BenchKernel.notebook(base_nb, bench), indent=1)
-    )
-    (out_dir / "kernel-metadata.json").write_text(
-        json.dumps(BenchKernel.metadata(base_meta, slug), indent=2)
-    )
+    nb = BenchKernel.notebook(base_nb, bench)
+    if configs:
+        json.loads(configs)  # fail here, not on Kaggle
+        cell = f"%%writefile /kaggle/working/bench_configs.json\n{configs}"
+        nb["cells"].insert(-1, BenchKernel.code(cell))
+    meta = BenchKernel.metadata(base_meta, slug)
+    meta["dataset_sources"] += dataset
+    (out_dir / f"{slug}.ipynb").write_text(json.dumps(nb, indent=1))
+    (out_dir / "kernel-metadata.json").write_text(json.dumps(meta, indent=2))
     typer.echo(f"wrote {out_dir}")
 
 
