@@ -26,7 +26,11 @@ LAUNCHER_CELL = 12
 BENCHES = {
     "specbench": "Speculative-decoding settings bench: boots dfranzen's server once per config and replays the same real ARC requests. Measures tok/s and accept length; plays no games.",
     "capture_probe": "Drafter capture probe (stage 1): boots dfranzen's server without speculative decoding and checks what `return_hidden_states` returns on 20 real ARC requests. Plays no games.",
+    "drafter_stage3": "Drafter retraining (stage 3): captures the target's hyper-connection states on real ARC turns, retrains the MTP drafter's dense weights on them and exports mtp-dense.safetensors. Plays no games.",
 }
+BENCH_MODULES = {
+    "drafter_stage3": ("mtp_ref.py", "drafter_train.py")
+}  # written next to the notebook
 
 app = typer.Typer(add_completion=False)
 
@@ -81,6 +85,12 @@ class BenchKernel:
             },
             *(cells[i] for i in BASE_CELLS),
             BenchKernel.code(f"%%writefile {LAUNCHER_PATH}\n{launcher}"),
+            *(
+                BenchKernel.code(
+                    f"%%writefile /kaggle/working/{m}\n{(HERE / m).read_text()}"
+                )
+                for m in BENCH_MODULES.get(bench, ())
+            ),
             BenchKernel.code((CELLS / f"{bench}.py").read_text()),
         ]
         return nb

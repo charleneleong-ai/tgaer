@@ -83,6 +83,17 @@ def dequant_int4(packed: Tensor, scale: Tensor, group: int = 32) -> Tensor:
     )
 
 
+def hc_mix(
+    h: Tensor, norm_w: Tensor, down_w: Tensor, up_w: Tensor, cfg: MTPConfig
+) -> tuple[Tensor, tuple[Tensor, Tensor]]:
+    """Gated hyper-connection mix of the 4 streams into one hidden; also returns what combine needs."""
+    hn = gemma_rms(h, norm_w, cfg.rms_norm_eps, group=cfg.hidden_size)
+    gate = torch.sigmoid(F.linear(F.silu(F.linear(hn, down_w) / cfg.hc_count), up_w))
+    streams = (cfg.hc_count, cfg.hidden_size)
+    mixed = (gate.unflatten(-1, streams) * hn.unflatten(-1, streams)).mean(-2)
+    return mixed, (h, hn)
+
+
 class Rope:
     """NeoX partial RoPE with Qwen interleaved MRoPE; positions are [3, T] (t, h, w) or [T] for text."""
 
@@ -206,19 +217,13 @@ class MTPDrafter(nn.Module):
         return gemma_rms(x, self.w(name), self.cfg.rms_norm_eps, group)
 
     def hc_mix(self, h: Tensor, prefix: str) -> tuple[Tensor, tuple[Tensor, Tensor]]:
-        c = self.cfg
-        hn = self.norm(h, f"{prefix}hc_norm.weight", group=c.hidden_size)
-        gate = F.silu(
-            F.linear(hn, self.w(f"{prefix}input_mix_weight_down.weight")) / c.hc_count
+        return hc_mix(
+            h,
+            self.w(f"{prefix}hc_norm.weight"),
+            self.w(f"{prefix}input_mix_weight_down.weight"),
+            self.w(f"{prefix}input_mix_weight_up.weight"),
+            self.cfg,
         )
-        gate = torch.sigmoid(
-            F.linear(gate, self.w(f"{prefix}input_mix_weight_up.weight"))
-        )
-        mixed = (
-            gate.unflatten(-1, (c.hc_count, c.hidden_size))
-            * hn.unflatten(-1, (c.hc_count, c.hidden_size))
-        ).mean(-2)
-        return mixed, (h, hn)
 
     def hc_combine(
         self, out: Tensor, res: tuple[Tensor, Tensor], prefix: str

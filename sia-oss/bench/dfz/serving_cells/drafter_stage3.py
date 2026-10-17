@@ -1,0 +1,177 @@
+# ruff: noqa: F821  # runs inside the stage-3 notebook, after the base cells define WORKING_DIR, MODEL_DIR, ...
+# Drafter retraining stage 3: capture the target's hyper-connection states on real ARC turns, then retrain the MTP
+# drafter's dense weights on them and export a drop-in mtp-dense.safetensors.
+#
+# Capture patches SGLang's Qwen4ExpModel.forward to append (request slot, token id, MRoPE position, HC state) per row
+# to /tmp; CUDA graphs are off so the hook runs on every decode step, and speculative decoding is off so only the
+# target writes. Training runs in SGLang's own venv (its torch supports this GPU) after the server is shut down.
+import glob
+import json
+import os
+import shutil
+import signal
+import subprocess
+import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+LAUNCHER = Path("/kaggle/launcher_cell.py").read_text()
+WORKLOAD = json.loads(
+    Path(
+        sorted(glob.glob("/kaggle/input/**/workload.json", recursive=True))[0]
+    ).read_text()
+)
+DUMP = Path("/tmp/hc_dump")
+OUT = Path(WORKING_DIR, "drafter_stage3")
+DUMP.mkdir(parents=True, exist_ok=True)
+OUT.mkdir(parents=True, exist_ok=True)
+MAX_DUMP_GB = 60
+KEEP_TAIL_MESSAGES = 4
+REPORT: dict = {}
+
+HOOK_ANCHOR = "        hc_hidden_states = hidden_states\n        hidden_states, _ = self.hyper_connection_mixer.mix(hidden_states)\n"
+HOOK = (
+    HOOK_ANCHOR
+    + "        if _HC_DUMP and not forward_batch.forward_mode.is_idle():\n"
+    + "            _hc_dump(hc_hidden_states, input_ids, positions, forward_batch)\n"
+)
+HOOK_DEF = """
+
+import itertools as _hc_it
+import os as _hc_os
+
+import numpy as _hc_np
+
+_HC_DUMP = _hc_os.environ.get("ARC3_HC_DUMP")
+_hc_seq = _hc_it.count()
+
+
+def _hc_dump(hc, input_ids, positions, fb):
+    if fb.forward_mode.is_extend():
+        lens = fb.extend_seq_lens_cpu or fb.extend_seq_lens.tolist()
+    else:
+        lens = [1] * len(fb.req_pool_indices)
+    rows = int(sum(lens))
+    pos = positions[..., :rows]
+    try:  # a full disk must not take the server down
+        _hc_np.savez(
+            f"{_HC_DUMP}/{next(_hc_seq):09d}.npz",
+            req=_hc_np.repeat(fb.req_pool_indices.cpu().numpy().astype(_hc_np.int32), lens),
+            ids=input_ids[:rows].cpu().numpy().astype(_hc_np.int32),
+            pos=pos.cpu().numpy().astype(_hc_np.int32),
+            hc=hc[:rows].contiguous().view(torch.int16).cpu().numpy(),
+        )
+    except Exception:
+        pass
+"""
+PATCH = """
+_q = sorted(Path(VENV).glob("lib/python*/site-packages/sglang/srt/models/qwen4_exp.py"))[0]
+_src = _q.read_text()
+if "_hc_dump" not in _src:
+    assert _src.count(HOOK_ANCHOR) == 1, "capture hook anchor not found exactly once"
+    _q.write_text(_src.replace(HOOK_ANCHOR, HOOK) + HOOK_DEF)
+env["ARC3_HC_DUMP"] = str(DUMP)
+args += ["--disable-cuda-graph"]
+"""
+LAUNCH_MARK = "# ---- launch detached and wait for health ----"
+assert LAUNCHER.count(LAUNCH_MARK) == 1
+patched = LAUNCHER.replace(
+    "\nVENV = ", "\nCFG.update({'SPEC': False})\nVENV = ", 1
+).replace(LAUNCH_MARK, PATCH + LAUNCH_MARK, 1)
+SERVER_STARTUP_TIMEOUT = 40 * 60
+exec(patched)
+
+
+def wait_healthy(limit_s: float = 2400) -> bool:
+    t = time.time()
+    while time.time() - t < limit_s and proc.poll() is None:
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{SERVED_MODEL_PORT}/health", timeout=5
+            ) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(5)
+    return False
+
+
+def post(body: dict) -> dict:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{SERVED_MODEL_PORT}/v1/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=3600) as r:
+        return json.loads(r.read())
+
+
+def truncate(messages: list) -> list:
+    """System + first user turn + the last few messages, starting at an assistant turn so tool results keep their call."""
+    tail = messages[2:][-KEEP_TAIL_MESSAGES:]
+    while tail and tail[0]["role"] != "assistant":
+        tail = tail[1:]
+    return messages[:2] + tail
+
+
+def dump_gb() -> float:
+    return sum(f.stat().st_size for f in DUMP.glob("*.npz")) / 1e9
+
+
+def capture_one(r: dict) -> int:
+    if dump_gb() > MAX_DUMP_GB:
+        return 0
+    body = {
+        "model": SERVED_MODEL_NAME,
+        **r,
+        "messages": truncate(r["messages"]),
+        "temperature": 0.6,
+        "top_p": 0.95,
+        "top_k": 20,
+        "max_tokens": 2048,
+    }
+    try:
+        return post(body)["usage"]["completion_tokens"]
+    except Exception as exc:
+        REPORT.setdefault("capture_errors", []).append(repr(exc)[:200])
+        return 0
+
+
+REPORT["boot_ok"] = wait_healthy()
+t0 = time.time()
+requests = [r for lane in WORKLOAD for r in lane["requests"]]
+with ThreadPoolExecutor(max_workers=8) as pool:
+    generated = list(pool.map(capture_one, requests))
+REPORT.update(
+    capture_s=round(time.time() - t0),
+    requests=len(requests),
+    generated_tokens=sum(generated),
+    dump_files=len(list(DUMP.glob("*.npz"))),
+    dump_gb=round(dump_gb(), 1),
+    disk_free_gb=round(shutil.disk_usage("/tmp").free / 1e9, 1),
+)
+print("[stage3] capture", json.dumps(REPORT), flush=True)
+
+os.killpg(proc.pid, signal.SIGTERM)
+for _ in range(120):
+    if proc.poll() is not None:
+        break
+    time.sleep(1)
+else:
+    os.killpg(proc.pid, signal.SIGKILL)
+time.sleep(15)
+
+TRAIN = f"""
+import sys; sys.path.insert(0, "/kaggle/working")
+from pathlib import Path
+from drafter_train import main
+main(Path("{DUMP}"), Path("{DRAFT_MODEL_DIR}"), Path("{MODEL_DIR}"), Path("{OUT}"))
+"""
+t1 = time.time()
+result = subprocess.run([PYTHON, "-c", TRAIN], env=env, text=True, capture_output=True)
+print(result.stdout[-20000:], result.stderr[-6000:], flush=True)
+REPORT.update(train_returncode=result.returncode, train_s=round(time.time() - t1))
+(OUT / "stage3_report.json").write_text(json.dumps(REPORT, indent=1))
+print("[stage3] done", json.dumps(REPORT), flush=True)

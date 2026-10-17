@@ -13,6 +13,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "sia-oss/bench/dfz"))
 
 from serving_bench import (  # noqa: E402
+    BENCH_MODULES,
     BENCHES,
     CELLS,
     LAUNCHER_PATH,
@@ -94,7 +95,11 @@ class TestBenchKernel:
         srcs = ["".join(c["source"]) for c in nb["cells"]]
         assert srcs[1:4] == ["cell 2", "cell 4", "cell 6"]
         assert srcs[4] == f"%%writefile {LAUNCHER_PATH}\ncell 12"
-        assert srcs[5] == (CELLS / f"{bench}.py").read_text()
+        modules = srcs[5:-1]
+        assert [m.split("\n", 1)[0] for m in modules] == [
+            f"%%writefile /kaggle/working/{m}" for m in BENCH_MODULES.get(bench, ())
+        ]
+        assert srcs[-1] == (CELLS / f"{bench}.py").read_text()
         assert base[0]["cells"][1]["source"] == "cell 1"  # base untouched
 
     def test_metadata_adds_the_workload_dataset(self, base: tuple[dict, dict]) -> None:
