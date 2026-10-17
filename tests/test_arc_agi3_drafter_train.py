@@ -29,7 +29,9 @@ from test_arc_agi3_mtp_ref import TINY, dense_shapes  # noqa: E402
 WIDTH = TINY.hidden_size * TINY.hc_count
 
 
-def dump(path: Path, i: int, req: list[int], ids: list[int], pos: list[int]) -> None:
+def dump(
+    path: Path, i: int, req: list[int], ids: list[int], pos: list[int], dec: int = 0
+) -> None:
     hc = torch.randn(len(ids), WIDTH, dtype=torch.bfloat16).view(torch.int16).numpy()
     np.savez(
         path / f"{i:09d}.npz",
@@ -37,6 +39,7 @@ def dump(path: Path, i: int, req: list[int], ids: list[int], pos: list[int]) -> 
         ids=np.asarray(ids, np.int32),
         pos=np.asarray(pos, np.int32),
         hc=hc,
+        dec=np.full(len(ids), dec, np.int8),
     )
 
 
@@ -72,6 +75,7 @@ def segments(n: int, length: int) -> list[Segment]:
             torch.randint(0, TINY.vocab_size, (length,), generator=g),
             torch.arange(length).expand(3, -1).clone(),
             torch.randn(length, WIDTH, generator=g).bfloat16(),
+            torch.arange(length) >= length // 2,
         )
         for _ in range(n)
     ]
@@ -163,3 +167,22 @@ def test_training_lowers_loss_and_export_touches_trained_tensors_only(
     assert all(not torch.equal(saved[k], original[k]) for k in trained) and not any(
         ".indexer." in k for k in trained
     )
+
+
+def test_only_generated_tokens_are_scored(parts: tuple) -> None:
+    from drafter_train import step_inputs
+
+    _, head = parts
+    seg = segments(1, 12)[0]
+    *_, target, scored = step_inputs(seg, head, "cpu")
+    # row r targets token r+2; tokens 6..11 are generated, the last row has no token r+2
+    assert scored.tolist() == [False] * 4 + [True] * 6 + [False]
+    assert torch.equal(target[:-1], seg.ids[2:])
+
+
+def test_decode_flags_survive_the_rebuild(tmp_path: Path) -> None:
+    dump(tmp_path, 0, [3] * 64, list(range(64)), list(range(64)))
+    for step in range(4):
+        dump(tmp_path, 1 + step, [3], [64 + step], [64 + step], dec=1)
+    (seg,) = Dumps.load(tmp_path, window=4096)
+    assert seg.gen.tolist() == [False] * 64 + [True] * 4
