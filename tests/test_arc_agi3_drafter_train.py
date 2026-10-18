@@ -144,13 +144,15 @@ def test_training_lowers_loss_and_export_touches_trained_tensors_only(
             p.data = p.data.float()
     segs = segments(4, 40)
     log: list[dict] = []
-    train(drafter, segs, head, "cpu", epochs=12, lr=3e-3, log=log)
+    train(drafter, segs, head, "cpu", epochs=12, lr=3e-3, log=log, depths=2)
     first, last = (
         np.mean([r["loss"] for r in log[:4]]),
         np.mean([r["loss"] for r in log[-4:]]),
     )
     assert last < first * 0.9
-    assert 0.0 <= acceptance(drafter, segs[:1], head, "cpu") <= 1.0
+    assert all(
+        0.0 <= a <= 1.0 for a in acceptance(drafter, segs[:1], head, "cpu", depths=2)
+    )
 
     original = {k: torch.randn(s).bfloat16() for k, s in dense_shapes(TINY).items()}
     save_file(original, str(tmp_path / "orig.safetensors"))
@@ -169,15 +171,45 @@ def test_training_lowers_loss_and_export_touches_trained_tensors_only(
     )
 
 
-def test_only_generated_tokens_are_scored(parts: tuple) -> None:
-    from drafter_train import step_inputs
+def plus_one(hidden, next_tokens, positions):
+    """Stub drafter that guesses token + 1 and passes its input state through."""
+    return torch.nn.functional.one_hot(
+        (next_tokens + 1) % TINY.vocab_size, TINY.vocab_size
+    ).float(), hidden
+
+
+def test_chain_aligns_tokens_targets_and_generated_masks(parts: tuple) -> None:
+    from drafter_train import chain
 
     _, head = parts
     seg = segments(1, 12)[0]
-    *_, target, scored = step_inputs(seg, head, "cpu")
-    # row r targets token r+2; tokens 6..11 are generated, the last row has no token r+2
-    assert scored.tolist() == [False] * 4 + [True] * 6 + [False]
-    assert torch.equal(target[:-1], seg.ids[2:])
+    seg.ids = torch.arange(12)
+    out = chain(plus_one, seg, head, "cpu", depths=3)
+    assert [o[0].shape[0] for o in out] == [10, 9, 8]
+    for d, (logits, top_ids, _, target, scored) in enumerate(out, start=1):
+        assert torch.equal(
+            target, torch.arange(d + 1, 12)
+        )  # row r predicts token r+d+1
+        assert torch.equal(logits.argmax(-1), target)  # input token r+d, so +1 is right
+        assert torch.equal(scored, seg.gen[d + 1 :])
+        assert torch.equal(
+            top_ids, head.top_k(seg.hc[1:])[0][d - 1 : d - 1 + len(target)]
+        )
+
+
+def test_acceptance_is_reported_per_depth_on_generated_tokens_only(
+    parts: tuple,
+) -> None:
+    from drafter_train import acceptance
+
+    _, head = parts
+    seg = segments(1, 20)[0]
+    seg.ids = torch.arange(20)
+    seg.ids[15] = 0  # drafts of token 15 (expects 15) and token 16 (fed 0) miss
+    acc = acceptance(plus_one, [seg], head, "cpu", depths=2)
+    assert acc == pytest.approx(
+        [8 / 10, 8 / 10]
+    )  # generated tokens 10-19 at both depths
 
 
 def test_decode_flags_survive_the_rebuild(tmp_path: Path) -> None:

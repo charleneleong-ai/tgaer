@@ -113,3 +113,40 @@ class TestBenchKernel:
 @pytest.mark.parametrize("bench", sorted(BENCHES))
 def test_cells_parse(bench: str) -> None:
     ast.parse((CELLS / f"{bench}.py").read_text())
+
+
+def test_cli_adds_configs_dataset_and_jit_export(
+    base: tuple[dict, dict], tmp_path: Path
+) -> None:
+    from serving_bench import app
+    from typer.testing import CliRunner
+
+    nb, meta = base
+    src = tmp_path / "base"
+    src.mkdir()
+    (src / "base.ipynb").write_text(json.dumps(nb))
+    (src / "kernel-metadata.json").write_text(json.dumps(meta))
+    cfg = '[["stock", {}]]'
+    args = [
+        "kernel",
+        "specbench",
+        str(src),
+        str(tmp_path / "out"),
+        "arc-x",
+        "--configs",
+        cfg,
+        "--dataset",
+        "u/d",
+        "--export-jit",
+    ]
+    assert CliRunner().invoke(app, args).exit_code == 0
+    out = json.loads((tmp_path / "out" / "arc-x.ipynb").read_text())
+    srcs = ["".join(c["source"]) for c in out["cells"]]
+    assert srcs[-3] == f"%%writefile /kaggle/working/bench_configs.json\n{cfg}"
+    assert "jitcache.tar" in srcs[-1] and srcs[-2].startswith("# ruff: noqa: F821")
+    assert (
+        json.loads((tmp_path / "out" / "kernel-metadata.json").read_text())[
+            "dataset_sources"
+        ][-1]
+        == "u/d"
+    )

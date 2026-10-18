@@ -168,11 +168,19 @@ else:
     os.killpg(proc.pid, signal.SIGKILL)
 time.sleep(15)
 
+# Train 3 drafts deep, as the server drafts (SPEC_STEPS 3), continuing from the depth-1 retrained drafter if attached.
+_init = sorted(
+    glob.glob(
+        "/kaggle/input/**/arc3-drafter-r1/**/mtp-dense.safetensors", recursive=True
+    )
+)
 TRAIN = f"""
 import sys; sys.path.insert(0, "/kaggle/working")
 from pathlib import Path
 from drafter_train import main
-main(Path("{DUMP}"), Path("{DRAFT_MODEL_DIR}"), Path("{MODEL_DIR}"), Path("{OUT}"))
+DEPTHS = 3
+INIT = {f"Path({_init[0]!r})" if _init else None}
+main(Path("{DUMP}"), Path("{DRAFT_MODEL_DIR}"), Path("{MODEL_DIR}"), Path("{OUT}"), depths=DEPTHS, init_dense=INIT)
 """
 t1 = time.time()
 result = subprocess.run([PYTHON, "-c", TRAIN], env=env, text=True, capture_output=True)

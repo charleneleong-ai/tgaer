@@ -32,6 +32,13 @@ BENCH_MODULES = {
     "drafter_stage3": ("mtp_ref.py", "drafter_train.py")
 }  # written next to the notebook
 
+# Compile caches (Triton, FlashInfer, TorchInductor, SGLang JIT) from a finished boot. A warm cache cut CUDA graph
+# capture from 144 s to 10 s in earlier runs; a submission can restore it before launching the server.
+JIT_EXPORT = """import subprocess
+subprocess.run(["tar", "-C", "/tmp/sgl-intel", "-cf", "/kaggle/working/jitcache.tar", "cache"], check=True)
+print("[jit] jitcache.tar", Path("/kaggle/working/jitcache.tar").stat().st_size // 2**20, "MiB", flush=True)
+"""
+
 app = typer.Typer(add_completion=False)
 
 
@@ -124,6 +131,9 @@ def kernel(
     dataset: list[str] = typer.Option(
         [], help="Extra Kaggle dataset sources, e.g. a retrained drafter."
     ),
+    export_jit: bool = typer.Option(
+        False, help="End by saving SGLang's compile caches as jitcache.tar."
+    ),
 ) -> None:
     if bench not in BENCHES:
         raise typer.BadParameter(f"bench must be one of {sorted(BENCHES)}")
@@ -135,6 +145,8 @@ def kernel(
         json.loads(configs)  # fail here, not on Kaggle
         cell = f"%%writefile /kaggle/working/bench_configs.json\n{configs}"
         nb["cells"].insert(-1, BenchKernel.code(cell))
+    if export_jit:
+        nb["cells"].append(BenchKernel.code(JIT_EXPORT))
     meta = BenchKernel.metadata(base_meta, slug)
     meta["dataset_sources"] += dataset
     (out_dir / f"{slug}.ipynb").write_text(json.dumps(nb, indent=1))

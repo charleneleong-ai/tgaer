@@ -187,41 +187,58 @@ def kl_to_target(logits: Tensor, top_ids: Tensor, top_p: Tensor) -> Tensor:
     return (top_p * (top_p.clamp_min(1e-12).log() - logq)).sum(-1).mean()
 
 
-def step_inputs(seg: Segment, head: TargetHead, device: str) -> tuple[Tensor, ...]:
-    """Row r: (state at r, token r+1) at position r+1 -> target distribution of token r+2 (target state at r+1).
+def chain(
+    drafter: MTPDrafter, seg: Segment, head: TargetHead, device: str, depths: int
+) -> list[tuple[Tensor, Tensor, Tensor, Tensor, Tensor]]:
+    """Run the drafter `depths` steps deep over a whole segment, as the server drafts after accepted tokens.
 
-    `scored` marks rows whose token r+2 was generated: the only tokens the drafter is ever asked to guess. The last
-    row's token r+2 does not exist, so it is never scored.
+    Depth d (1-based), row r: input state is the target's at r for d = 1, else the drafter's own output state of
+    depth d-1 at row r; input token r+d at position r+d. It predicts token r+d+1, whose target distribution is the
+    target model's at state r+d. Returns per depth (logits, top_ids, top_p, target token, scored), where scored
+    marks rows whose token r+d+1 was generated (the only tokens the drafter is asked to guess).
     """
+    n = len(seg)
     hc = seg.hc.to(device)
-    top_ids, top_p = head.top_k(hc[1:])
-    scored = torch.cat([seg.gen[2:], torch.zeros(1, dtype=torch.bool)]).to(device)
-    target = torch.cat([seg.ids[2:], seg.ids[-1:]]).to(device)
-    return (
-        hc[:-1],
-        seg.ids[1:].to(device),
-        seg.pos[:, 1:].to(device),
-        top_ids,
-        top_p,
-        target,
-        scored,
-    )
+    ids, pos, gen = seg.ids.to(device), seg.pos.to(device), seg.gen.to(device)
+    top_ids, top_p = head.top_k(hc[1:])  # row j: target distribution of token j+2
+    state, out = hc, []
+    for d in range(1, depths + 1):
+        rows = n - d - 1  # rows r with token r+d+1 inside the segment
+        if rows <= 0:
+            break
+        with torch.autocast(device_type=device.split(":")[0], dtype=torch.bfloat16):
+            logits, state = drafter(
+                state[:rows], ids[d : d + rows], pos[:, d : d + rows]
+            )
+        out.append(
+            (
+                logits,
+                top_ids[d - 1 : d - 1 + rows],
+                top_p[d - 1 : d - 1 + rows],
+                ids[d + 1 : d + 1 + rows],
+                gen[d + 1 : d + 1 + rows],
+            )
+        )
+    return out
 
 
 @torch.no_grad()
 def acceptance(
-    drafter: MTPDrafter, segs: list[Segment], head: TargetHead, device: str
-) -> float:
-    hits = total = 0
+    drafter: MTPDrafter,
+    segs: list[Segment],
+    head: TargetHead,
+    device: str,
+    depths: int = 1,
+) -> list[float]:
+    """Per-depth acceptance on generated tokens, given that the earlier drafts in the chain were right."""
+    hits, total = [0] * depths, [0] * depths
     for seg in segs:
-        hc, nxt, pos, _, _, target, scored = step_inputs(seg, head, device)
-        if not scored.any():
-            continue
-        with torch.autocast(device_type=device.split(":")[0], dtype=torch.bfloat16):
-            logits, _ = drafter(hc, nxt, pos)
-        hits += int((logits.argmax(-1) == target)[scored].sum())
-        total += int(scored.sum())
-    return hits / max(total, 1)
+        for d, (logits, _, _, target, scored) in enumerate(
+            chain(drafter, seg, head, device, depths)
+        ):
+            hits[d] += int((logits.argmax(-1) == target)[scored].sum())
+            total[d] += int(scored.sum())
+    return [h / max(t, 1) for h, t in zip(hits, total)]
 
 
 def train(
@@ -232,6 +249,7 @@ def train(
     epochs: int,
     lr: float,
     log: list[dict],
+    depths: int = 1,
 ) -> None:
     params = [p for p in drafter.params.values() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=lr, betas=(0.9, 0.95), weight_decay=0.0)
@@ -245,14 +263,16 @@ def train(
         order = list(range(len(train_segs)))
         rng.shuffle(order)
         for i in order:
-            hc, nxt, pos, top_ids, top_p, _, scored = step_inputs(
-                train_segs[i], head, device
-            )
-            if not scored.any():
+            losses = [
+                kl_to_target(logits[scored], top_ids[scored], top_p[scored])
+                for logits, top_ids, top_p, _, scored in chain(
+                    drafter, train_segs[i], head, device, depths
+                )
+                if scored.any()
+            ]
+            if not losses:
                 continue
-            with torch.autocast(device_type=device.split(":")[0], dtype=torch.bfloat16):
-                logits, _ = drafter(hc, nxt, pos)
-            loss = kl_to_target(logits[scored], top_ids[scored], top_p[scored])
+            loss = torch.stack(losses).mean()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 1.0)
@@ -290,6 +310,8 @@ def main(
     lr: float = 2e-5,
     holdout: float = 0.1,
     device: str = "cuda",
+    depths: int = 3,
+    init_dense: Path | None = None,
 ) -> None:
     cfg = MTPConfig.from_json(drafter_dir / "config.json")
     segs = Dumps.load(dump_dir, window)
@@ -318,15 +340,20 @@ def main(
             )  # fp32 master weights; forward runs under bf16 autocast
     head = TargetHead.from_checkpoint(model_dir, cfg, device, dense["lm_head.weight"])
 
-    report["acceptance_before"] = acceptance(drafter, eval_segs, head, device)
+    if init_dense is not None:  # continue from an earlier retrained drafter
+        for k, v in load_dense(init_dense, device).items():
+            if drafter.params[k.replace(".", "__")].requires_grad:
+                drafter.params[k.replace(".", "__")].data = v.float()
+    report["depths"] = depths
+    report["acceptance_before"] = acceptance(drafter, eval_segs, head, device, depths)
     print(
         "[train] held-out depth-1 acceptance before",
         report["acceptance_before"],
         flush=True,
     )
     log: list[dict] = []
-    train(drafter, train_segs, head, device, epochs, lr, log)
-    report["acceptance_after"] = acceptance(drafter, eval_segs, head, device)
+    train(drafter, train_segs, head, device, epochs, lr, log, depths)
+    report["acceptance_after"] = acceptance(drafter, eval_segs, head, device, depths)
     print(
         "[train] held-out depth-1 acceptance after",
         report["acceptance_after"],
