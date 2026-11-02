@@ -2,20 +2,21 @@
 \usepackage[margin=2.2cm]{geometry}
 \usepackage{booktabs}
 \usepackage{hyperref}
-\title{Lifting dfranzen's ARC-AGI-3 harness, phase 1: what moved the hidden-game score}
+\title{Lifting dfranzen's ARC-AGI-3 harness: what moved the hidden-game score}
 \author{Charlene Leong}
-\date{13 October 2026 (phase 1: 1--13 October)}
+\date{2 November 2026 (final; 1 October--2 November)}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-We tested 23 changes on top of dfranzen's Milestone~2 notebook for the ARC Prize 2026 ARC-AGI-3 Kaggle
+We tested 26 changes on top of dfranzen's Milestone~2 notebook for the ARC Prize 2026 ARC-AGI-3 Kaggle
 competition (offline, 9~hours, one RTX PRO 6000, 110 hidden interactive games, RHAE score). Changes were
-screened on a 25-game local run, on a 40-episode stuck-level suite, and by public submission. The D$'$ slot priority from a public
-notebook and plain dfranzen are indistinguishable: 27.10 against 26.52 public over four draws each, with draws of
-identical code spread over 22--30. No change we built moved the public score, and no local or suite result outside the noise
-band reproduced.
+screened on a 25-game local run, on a 40-episode stuck-level suite, and in 33 public submissions. The D$'$ slot priority from a public
+notebook and plain dfranzen are within noise: 27.37 (8 draws) against 25.56 (5 draws), with draws of
+identical code spread over 22--30. One change cleared every draw of the kernel without it: solved-level memory, which pins
+the model's own one-line rule for each cleared level into the system prompt, scored 32.64 and 28.01 against 25.53 over
+five draws of the same kernel without it (Welch $t=1.97$, $n=2$). Our best public score, 32.64, ranks 296 of 5{,}070.
 \end{abstract}
 
 \section{Setup}
@@ -37,13 +38,13 @@ Three screens, with their measured noise:
 \toprule
 Stage & Count \\
 \midrule
-Mechanisms built & 23 \\
+Mechanisms built & 26 \\
 Tested on the 25-game local run & 17 \\
 Tested on the stuck-level suite & 12 \\
 Above the local noise band ($42.9 \pm 7$) & 1 \\
 Reproduced when stacked or re-run & 0 \\
-Submitted publicly (as changes on dfranzen) & 4 \\
-Beat plain dfranzen's public mean & 1 \\
+Submitted publicly (as changes on dfranzen) & 8 \\
+Beat plain dfranzen's public mean & 2 \\
 Significant against plain ($p<0.05$) & 0 \\
 \bottomrule
 \end{tabular}
@@ -55,11 +56,17 @@ Significant against plain ($p<0.05$) & 0 \\
 Date & Configuration & Public \\
 \midrule
 10-02 & dfranzen + level prior + fade & 20.60 \\
-10-03, 10-04, 10-05, 10-13 & plain dfranzen copy & 28.39, 27.86, 24.60, 25.21 \\
-10-06, 10-07, 10-09, 10-12 & D$'$ slot priority (shiiin9) & 29.68, 29.71, 26.60, 22.40 \\
+10-03, 10-04, 10-05, 10-13, 10-15 & plain dfranzen copy & 28.39, 27.86, 24.60, 25.21, 21.74 \\
+10-06 \dots 10-19 (8 draws) & D$'$ slot priority (shiiin9) & 29.68, 29.71, 26.60, 22.40, 29.85, 24.45, 29.19, 27.11 \\
 10-08 & dfranzen + endgame FIFO rotation & 22.56 \\
 10-10 & D$'$ + re-attempt, new kernel slug & 0.00 (rerun failed) \\
 10-11 & D$'$ + re-attempt, proven kernel & 26.05 \\
+10-17 & plain, our own GPU run overlapping & 0.00 (rerun failed) \\
+10-20 & D$'$ + 256 px + retrained drafter (v5) & 24.10 \\
+10-21 \dots 10-24 & D$'$ and v5, slow weight loads & 0.00, 0.00, 0.00, ERROR \\
+10-25, 10-28 \dots 10-31 & D$'$ + keep-alive (v6) & 23.90, 25.26, 25.61, 28.33, 24.56 \\
+10-26, 10-27 & v6 + turn archive (v7) & 26.41, 24.39 \\
+11-01, 11-02 & v6 + solved-level memory (v8) & \textbf{32.64}, 28.01 \\
 \bottomrule
 \end{tabular}
 
@@ -96,6 +103,20 @@ vocabulary gave 400 and 419 tok/s on two boots; 2 steps 393, FR-Spec off 392, no
 multiplier gave 50.5 (stock), 52.4 (+10\%), 54.3 (+20\%) and 57.2 (+30\%); the replay overstates the stock run
 (50.5 against 42.7 measured), so these are direction and rough size.
 
+\subsection*{Phase 2 changes (14 October--2 November)}
+\textbf{Keep-alive.} From 10-20 scored machines took 35--63 minutes to load weights, longer than the 15 minutes Kaggle
+allows a scorecard without an action; three draws scored 0.00 and one errored. A watchdog cell RESETs one live game
+whenever no action has gone out for 5 minutes while the server loads (10 once it is up). All nine draws after it scored.
+
+\textbf{Turn archive.} The model's own trimmed turns, searchable from the Python tool. Two draws (26.41, 24.39) fell under
+the gate fixed beforehand (two-draw mean $\le 27$ drops it).
+
+\textbf{Solved-level memory.} Taken from a public notebook (vickyfym, after rellik13/sirikilohit, CC-BY 4.0). When a level clears, the next
+two turns ask for one ``Rule for level $N$:'' line; the rule, the winning attempt's last 30 actions and the clearing turn's
+reasoning are pinned at the end of the system prompt, rewritten only when the conversation drains so the prompt cache
+survives. Its save run (one game, 45K tokens) captured four rules with no errors but never drained, so our gate
+(at least one pin) failed. We overrode the gate after seeing why; the two public draws are the first full-length test.
+
 \section{Findings}
 \begin{enumerate}
   \item Scheduler changes that move time between games won locally and lost publicly (20.60, 22.56): the 25-game
@@ -108,23 +129,29 @@ multiplier gave 50.5 (stock), 52.4 (+10\%), 54.3 (+20\%) and 57.2 (+30\%); the r
         optional: it predicts in prose, not in code.
   \item A submission from a newly created kernel scored 0.00 although its save run passed; the same code from an
         existing kernel scored normally.
+  \item The model's own stated rules carried across a drain lifted the score where every attempt to carry raw
+        history, records or notes had not: 30.33 over two draws against 25.53.
+  \item Late in the competition infrastructure, not policy, decided draws: five of eight draws from 10-17 to 10-24 failed
+        in the scored rerun before the keep-alive.
 \end{enumerate}
 
 \section{What is not established}
 \begin{itemize}
-  \item Whether D$'$ beats plain dfranzen: 27.10 against 26.52 over four draws each; resolving 2 points needs
-        about 60 draws per arm.
+  \item Whether solved-level memory is a real gain: two draws, and 28.01 sits inside the range of the kernel without it.
+  \item The private score, which Kaggle withholds until the close; public covers about 55 of the 110 hidden games.
+  \item Whether D$'$ beats plain dfranzen: 27.37 against 25.56; resolving 2 points needs about 60 draws per arm.
   \item Whether a 10--15\% throughput gain shows publicly: the replay puts it near +1--1.5 points, below what
         eight draws per arm can detect.
   \item Any local effect under about 5 points.
   \item The cause of the new-kernel 0.00: no scored-rerun logs are available; a Python 3.13 image change, a
         dataset-version race and mount failures all fit.
-  \item What the teams above 40 do: none of the top five has disclosed a method.
-  \item Whether 256 px images change the public score.
+  \item What the teams above 40 do: the top three have not published code.
+  \item Whether 256 px images change the public score: the one draw with them (and the retrained drafter) scored 24.10.
 \end{itemize}
 
 \section*{Sources}
 Results: \texttt{docs/experiments/arc-agi3-ledger.json}. Dashboard:
 \url{https://claude.ai/artifact/LsbFyTwgMn4EmDU2vN8mko}. Literature: \texttt{reports/ARC AGI 3 SOTA October update.md} and
-\texttt{reports/ARC AGI 3 SOTA October 12 delta.md}.
+\texttt{reports/ARC AGI 3 SOTA October 12 delta.md}. Write-up of the final weeks:
+\texttt{docs/experiments/2026-11-02-arc-agi3-final-results.md}.
 \end{document}

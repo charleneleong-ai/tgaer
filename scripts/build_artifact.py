@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import json
 from pathlib import Path
+from statistics import mean
 from typing import Any
 
 import typer
@@ -37,7 +38,7 @@ p{margin:.6rem 0;max-width:66ch}
 .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem}
 .phase{color:var(--muted);font-size:.9rem;margin-top:.3rem}
 .lede{font-size:1.05rem;color:var(--muted);max-width:62ch;margin-top:.8rem}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:.7rem;margin:1.8rem 0 .4rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:.7rem;margin:1.8rem 0 .4rem}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:.85rem .95rem;min-width:0}
 .tile .k{font-family:var(--mono);font-size:.68rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
 .tile .v{font-family:var(--display);font-size:1.6rem;font-weight:700;font-variant-numeric:tabular-nums;margin-top:.2rem}
@@ -182,28 +183,40 @@ class Dashboard:
         "PROMOTE": "var(--accent)",
     }
 
+    SLM = "D' + solved-level memory"
+
     def __init__(self, d: dict[str, Any]) -> None:
         self.d = d
         self.base = d["baseline"]
+        self.scored = [p for p in d["public"] if p["score"] is not None]
+
+    def scores(self, group: str) -> list[float]:
+        return [p["score"] for p in self.scored if p["group"] == group]
 
     def headline(self) -> str:
-        pub = self.d["public"]
-        dp = [p["score"] for p in pub if p["group"] == "D'"]
+        dp, slm = self.scores("D'"), self.scores(self.SLM)
+        best = max(self.scored, key=lambda p: p["score"])
+        lb = self.d["leaderboard"]
         tiles = [
             (
                 "best public draw",
-                f"{max(p['score'] for p in pub):.2f}",
-                "D' copy, 2026-10-07",
+                f"{best['score']:.2f}",
+                f"{best['group']}, {best['date']}",
+            ),
+            (
+                "solved-level memory",
+                f"{mean(slm):.2f}",
+                f"mean of n={len(slm)}, the only lift over D'",
             ),
             (
                 "baseline",
                 f"{self.base['public_mean']:.2f}",
-                f"plain dfranzen, mean of {sum(p['group'] == 'plain' for p in pub)}",
+                f"plain dfranzen, mean of {len(self.scores('plain'))}",
             ),
             (
                 "D' mean",
-                f"{sum(dp) / len(dp):.2f}",
-                f"n={len(dp)}, indistinguishable from plain",
+                f"{mean(dp):.2f}",
+                f"n={len(dp)}, within noise of plain",
             ),
             (
                 "not moved",
@@ -211,9 +224,9 @@ class Dashboard:
                 f"stuck levels cleared, {len(self.d['suite']) - 2} arms",
             ),
             (
-                "leader",
-                f"{self.d['leaderboard']['top'][0][1]:.2f}",
-                self.d["leaderboard"]["top"][0][0],
+                "public rank",
+                f"{lb['our_rank']} / {lb['teams']:,}",
+                f"leader {lb['top'][0][1]:.2f}; silver line {lb['silver_line']:.2f}",
             ),
         ]
         cells = "".join(
@@ -223,29 +236,39 @@ class Dashboard:
         return f'<div class="tiles">{cells}</div>'
 
     def public(self) -> str:
-        order = ["plain", "D'", "D' + re-attempt", "endgame rotation", "level prior"]
-        colour = {"plain": "var(--flat)", "D'": "var(--gain)"}
-        groups = [
-            (
-                g,
-                [p["score"] for p in self.d["public"] if p["group"] == g],
-                colour.get(g, "var(--loss)"),
-            )
-            for g in order
+        order = [
+            self.SLM,
+            "D'",
+            "D' + keep-alive",
+            "plain",
+            "D' + turn archive",
+            "D' + re-attempt",
+            "D' + 256 px + drafter",
+            "endgame rotation",
+            "level prior",
         ]
+        colour = {
+            self.SLM: "var(--accent)",
+            "plain": "var(--flat)",
+            "D'": "var(--gain)",
+            "D' + keep-alive": "var(--gain)",
+        }
+        groups = [(g, self.scores(g), colour.get(g, "var(--loss)")) for g in order]
+        plain = self.base["public_mean"]
         chart = Svg.dots(
-            groups,
-            18,
-            32,
-            [18, 20, 22, 24, 26, 28, 30, 32],
-            (self.base["public_mean"], f"plain mean {self.base['public_mean']:.2f}"),
+            groups, 18, 34, list(range(18, 35, 2)), (plain, f"plain mean {plain:.2f}")
         )
+        slm = " and ".join(f"{s:.2f}" for s in self.scores(self.SLM))
+        failed = sum(p["group"] == "infra failure" for p in self.d["public"])
+        gap = mean(self.scores("D'")) - plain
         return (
-            "<h2>Public score: D' and plain dfranzen are indistinguishable</h2>"
-            '<p class="take">Every change we added on top of dfranzen scored at or below the plain copies; D\' and plain differ by 0.6 points over four draws each, and draws of identical code span 22-30.</p>'
+            "<h2>Public score: solved-level memory is the one change that cleared the copies</h2>"
+            f'<p class="take">Solved-level memory scored {slm}; every other change landed at or below D\' and plain, '
+            f"which differ by {gap:.1f} points, and draws of identical code span 22-30.</p>"
             + chart
             + "<p>Each dot is one submission scored on about 55 hidden games. Identical copies vary by about 4 points. "
-            "The new-kernel submission that scored 0.00 is left out: it failed in the scored rerun, and the same code from the proven kernel scored 26.05.</p>"
+            f"Left out: {failed} draws that failed in the scored rerun (a new kernel slug, our own GPU run overlapping it, "
+            "three slow weight loads outlasting the 15-minute idle close before the keep-alive fix, and one submission ERROR).</p>"
         )
 
     def local(self) -> str:
@@ -341,8 +364,8 @@ class Dashboard:
         rows = [(name, n, "var(--accent)") for name, n in self.d["funnel"]]
         return (
             "<h2>The funnel</h2>"
-            f'<p class="take">{self.d["funnel"][0][1]} mechanisms built; one cleared the local noise band and did not reproduce; one configuration beat plain publicly, not significantly.</p>'
-            + Svg.bars(rows, 0, 25, [0, 5, 10, 15, 20, 25], "{:.0f}")
+            f'<p class="take">{self.d["funnel"][0][1]} mechanisms built; one cleared the local noise band and did not reproduce; two configurations beat plain publicly, neither significantly.</p>'
+            + Svg.bars(rows, 0, 30, list(range(0, 31, 5)), "{:.0f}")
         )
 
     def ledger(self) -> str:
@@ -350,18 +373,17 @@ class Dashboard:
             f'<tr><td>{Svg.esc(n)}</td><td><span class="pill {v}">{v}</span></td><td>{Svg.esc(w)}</td></tr>'
             for n, v, w in self.d["verdicts"]
         )
-        lb = "".join(
-            f"<li>{Svg.esc(t)}: {s:.2f}</li>" for t, s in self.d["leaderboard"]["top"]
-        )
+        lb = self.d["leaderboard"]
+        top = "".join(f"<li>{Svg.esc(t)}: {s:.2f}</li>" for t, s in lb["top"])
         ne = "".join(f"<li>{Svg.esc(x)}</li>" for x in self.d["not_established"])
         return (
             "<h2>Verdict ledger</h2>"
             '<div class="scroll"><table><thead><tr><th>experiment</th><th>verdict</th><th>why</th></tr></thead>'
             f"<tbody>{rows}</tbody></table></div>"
             f"<h2>Not established</h2><ul>{ne}</ul>"
-            f"<h2>Leaderboard context ({self.d['leaderboard']['date']})</h2>"
-            f"<ul>{lb}</ul><p>{self.d['leaderboard']['teams_at_or_above_32']} teams sit at 32 or above, mostly draws of dfranzen copies. "
-            "None of the top five has disclosed a method.</p>"
+            f"<h2>Leaderboard context ({lb['date']})</h2>"
+            f"<ul>{top}</ul><p>{lb['teams_at_or_above_32']} of {lb['teams']:,} teams sit at 32 or above, "
+            "mostly draws of dfranzen copies. The top three have not published code.</p>"
         )
 
     def audit(self) -> str:
@@ -394,6 +416,16 @@ class Dashboard:
             + "<p>Built by scripts/trajectory_audit.py from docs/figures/arc-agi3/runs_per_game.csv.</p>"
         )
 
+    def lede(self) -> str:
+        slm = " and ".join(f"{s:.2f}" for s in self.scores(self.SLM))
+        without = mean(self.scores("D' + keep-alive"))
+        return (
+            f'<p class="lede">{self.d["funnel"][0][1]} changes on top of the strongest public notebook, tested locally, '
+            f"on a stuck-level suite and in {len(self.d['public'])} public submissions. One moved the hidden-game score: "
+            f"pinning each solved level's rule into the system prompt ({slm} against {without:.2f} for the same kernel "
+            f"without it). The final picks are that build and D' at {self.d['finals'][1]['score']:.2f}.</p>"
+        )
+
     def page(self) -> str:
         body = "".join(
             [
@@ -402,8 +434,7 @@ class Dashboard:
                 + "</div>",
                 f'<p class="phase">{Svg.esc(self.d["phase"])}</p>',
                 "<h1>dfranzen's harness, and what moved the public score</h1>",
-                '<p class="lede">Twenty-three changes on top of the strongest public notebook, tested locally, on a stuck-level suite '
-                "and in public submissions. None moved the hidden-game score; D' and plain dfranzen are tied, and speed is the lever left.</p>",
+                self.lede(),
                 self.headline(),
                 self.public(),
                 self.local(),

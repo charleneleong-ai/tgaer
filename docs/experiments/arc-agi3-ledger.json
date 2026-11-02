@@ -1,8 +1,8 @@
 {
-  "as_of": "2026-10-13",
+  "as_of": "2026-11-02",
   "baseline": {
     "name": "plain dfranzen copy",
-    "public_mean": 26.52,
+    "public_mean": 25.56,
     "local_mean": 42.9,
     "local_levels": 102,
     "suite_episodes": 9.0,
@@ -15,32 +15,36 @@
     "suite_sd": 3.7
   },
   "leaderboard": {
-    "date": "2026-10-12",
+    "date": "2026-11-02",
     "top": [
       [
-        "Yi-Chia Chen",
-        67.49
+        "Yi-Chia Chen @ Fields Model",
+        75.56
       ],
       [
         "Tufa Labs",
-        56.52
+        70.24
       ],
       [
-        "mtg",
-        45.0
+        "NVARC3",
+        60.95
       ],
       [
-        "Majkel1337",
-        42.66
+        "xz",
+        58.59
       ],
       [
-        "the last dance",
-        42.55
+        "Team Turducken",
+        56.02
       ]
     ],
-    "teams_at_or_above_32": 133,
-    "gold_line": 36.89,
-    "bronze_line": 30.02
+    "teams": 5070,
+    "teams_at_or_above_32": 422,
+    "gold_line": 41.73,
+    "silver_line": 32.96,
+    "bronze_line": 31.62,
+    "our_rank": 296,
+    "our_score": 32.64
   },
   "public": [
     {
@@ -138,6 +142,156 @@
       "config": "plain dfranzen copy",
       "score": 25.21,
       "group": "plain"
+    },
+    {
+      "ref": "57160703",
+      "date": "2026-10-14",
+      "config": "D' slot priority (shiiin9)",
+      "score": 29.85,
+      "group": "D'"
+    },
+    {
+      "ref": "57199242",
+      "date": "2026-10-15",
+      "config": "plain dfranzen copy",
+      "score": 21.74,
+      "group": "plain"
+    },
+    {
+      "ref": "57247995",
+      "date": "2026-10-16",
+      "config": "D' slot priority (shiiin9)",
+      "score": 24.45,
+      "group": "D'"
+    },
+    {
+      "ref": "57288201",
+      "date": "2026-10-17",
+      "config": "plain dfranzen copy",
+      "score": 0.0,
+      "group": "infra failure",
+      "note": "own Kaggle GPU run overlapped the scored rerun"
+    },
+    {
+      "ref": "57330849",
+      "date": "2026-10-18",
+      "config": "D' slot priority (shiiin9)",
+      "score": 29.19,
+      "group": "D'"
+    },
+    {
+      "ref": "57374301",
+      "date": "2026-10-19",
+      "config": "D' slot priority (shiiin9)",
+      "score": 27.11,
+      "group": "D'"
+    },
+    {
+      "ref": "57414209",
+      "date": "2026-10-20",
+      "config": "D' + 256 px images + retrained MTP drafter (v5)",
+      "score": 24.1,
+      "group": "D' + 256 px + drafter",
+      "verdict": "DISCARD"
+    },
+    {
+      "ref": "57458054",
+      "date": "2026-10-21",
+      "config": "D' slot priority (shiiin9)",
+      "score": 0.0,
+      "group": "infra failure",
+      "note": "scored-machine weight load (35-63 min) outlasted the 15-min scorecard idle close"
+    },
+    {
+      "ref": "57502251",
+      "date": "2026-10-22",
+      "config": "D' + 256 px images + retrained MTP drafter (v5)",
+      "score": 0.0,
+      "group": "infra failure",
+      "note": "same idle close"
+    },
+    {
+      "ref": "57542297",
+      "date": "2026-10-23",
+      "config": "D' slot priority (shiiin9)",
+      "score": 0.0,
+      "group": "infra failure",
+      "note": "same idle close"
+    },
+    {
+      "ref": "57576254",
+      "date": "2026-10-24",
+      "config": "D' + 256 px images + retrained MTP drafter (v5)",
+      "score": null,
+      "group": "infra failure",
+      "note": "submission ERROR"
+    },
+    {
+      "ref": "57611124",
+      "date": "2026-10-25",
+      "config": "D' + keep-alive RESET (v6)",
+      "score": 23.9,
+      "group": "D' + keep-alive"
+    },
+    {
+      "ref": "57646996",
+      "date": "2026-10-26",
+      "config": "D' + keep-alive + turn archive (v7)",
+      "score": 26.41,
+      "group": "D' + turn archive",
+      "verdict": "DISCARD"
+    },
+    {
+      "ref": "57682756",
+      "date": "2026-10-27",
+      "config": "D' + keep-alive + turn archive (v7)",
+      "score": 24.39,
+      "group": "D' + turn archive",
+      "verdict": "DISCARD"
+    },
+    {
+      "ref": "57717189",
+      "date": "2026-10-28",
+      "config": "D' + keep-alive RESET (v6)",
+      "score": 25.26,
+      "group": "D' + keep-alive"
+    },
+    {
+      "ref": "57752525",
+      "date": "2026-10-29",
+      "config": "D' + keep-alive RESET (v6)",
+      "score": 25.61,
+      "group": "D' + keep-alive"
+    },
+    {
+      "ref": "57786561",
+      "date": "2026-10-30",
+      "config": "D' + keep-alive RESET (v6)",
+      "score": 28.33,
+      "group": "D' + keep-alive"
+    },
+    {
+      "ref": "57820768",
+      "date": "2026-10-31",
+      "config": "D' + keep-alive RESET (v6)",
+      "score": 24.56,
+      "group": "D' + keep-alive"
+    },
+    {
+      "ref": "57854829",
+      "date": "2026-11-01",
+      "config": "D' + keep-alive + solved-level memory (v8)",
+      "score": 32.64,
+      "group": "D' + solved-level memory",
+      "verdict": "PROMOTE"
+    },
+    {
+      "ref": "57888442",
+      "date": "2026-11-02",
+      "config": "D' + keep-alive + solved-level memory (v8)",
+      "score": 28.01,
+      "group": "D' + solved-level memory",
+      "verdict": "PROMOTE"
     }
   ],
   "local": [
@@ -374,7 +528,7 @@
   "funnel": [
     [
       "mechanisms built",
-      23
+      26
     ],
     [
       "tested on the 25-game local suite",
@@ -394,11 +548,11 @@
     ],
     [
       "submitted publicly",
-      4
+      8
     ],
     [
       "beat plain dfranzen's public mean",
-      1
+      2
     ],
     [
       "significant against plain (p<0.05)",
@@ -406,23 +560,33 @@
     ]
   ],
   "not_established": [
-    "Whether D' beats plain dfranzen: 27.10 vs 26.52 over 4 draws each (sd ~2.8); about 60 draws per arm would resolve 2 points.",
+    "Whether solved-level memory is a real gain: two draws (32.64, 28.01) against v6's five (23.90-28.33); Welch t 1.97, and 28.01 sits inside v6's range.",
+    "The private score: Kaggle withholds it until the close; public is scored on ~55 hidden games and private on the rest.",
+    "Whether D' beats plain dfranzen: 27.37 (n=8) vs 25.56 (n=5), sd ~2.8; about 60 draws per arm would resolve 2 points.",
     "Any local effect under ~5 points: identical 25-game runs vary by about 7.",
-    "Why the new-kernel submission scored 0.00: no scored-rerun logs; Python 3.13 image, dataset race and mount failures all fit.",
-    "What the 40+ teams do: none of the top five has disclosed a method.",
-    "Whether 256 px images change the public score; only throughput (+5%) was measured.",
-    "Whether a +10-15% throughput stack shows publicly: the sim scales it to about +1-1.5 points, below what 8 draws per arm detect."
+    "What the 40+ teams do: the top three have not published code; the public notebooks above 30 are dfranzen derivatives.",
+    "Whether the keep-alive costs score: v6 25.53 (n=5) vs D' v1 27.37 (n=8) differ by less than the noise, and v1's draws predate the slow-load period."
   ],
   "verdicts": [
     [
+      "solved-level memory (v8)",
+      "PROMOTE",
+      "public 32.64, 28.01 (mean 30.33) vs v6 25.53 over 5 (+4.8, Welch t 1.97, n=2); final pick 1"
+    ],
+    [
+      "keep-alive RESET (v6)",
+      "PROMOTE",
+      "0.00 on 10-21..10-23 (slow weight loads vs the 15-min idle close); 9 of 9 draws scored after it, none 0.00"
+    ],
+    [
       "D' slot priority (shiiin9)",
       "KEEP",
-      "public mean 27.10 vs plain 26.52 (4 draws each, indistinguishable); final pick 1"
+      "public 27.37 over 8 clean draws vs plain 25.56 over 5 (t~1.2); final pick 2 (29.85)"
     ],
     [
       "plain dfranzen copy",
-      "KEEP",
-      "safe final pick 2"
+      "BASELINE",
+      "public 25.56 over 5 clean draws; dropped as a final pick once solved-level memory scored 32.64"
     ],
     [
       "256 px board images",
@@ -495,17 +659,27 @@
       "duplicate of 11-slot test / dfranzen tested guards / 8K cap saves 3%"
     ],
     [
-      "D' + 256 px, 11 slots",
-      "running",
-      "queued for weekly GPU reset"
+      "256 px images + retrained MTP drafter (v5)",
+      "DISCARD",
+      "public 24.10 (n=1); +1.4% tok/s in a full run against +8% offline"
     ],
     [
-      "retrained MTP drafter",
-      "running",
-      "staged build; +3-8% decode reported elsewhere"
+      "turn archive, search_turns() (v7)",
+      "DISCARD",
+      "public 26.41, 24.39 vs v6 25.53; dropped after two draws by the pre-set gate (<= 27)"
+    ],
+    [
+      "Pennyroyal 3.1.2 serving bundle",
+      "DISCARD",
+      "third-party bundle broken (torch/sglang versions differ from its lock, SM120 wheels missing); not run"
+    ],
+    [
+      "context length / mamba slots / NVFP4 KV",
+      "DISCARD",
+      "logs show capacity not binding: p99 context 117K of 136K, mamba 0.67, KV >=95% on a few lines"
     ]
   ],
-  "phase": "Phase 1 (2026-10-01 to 2026-10-13): reproduce, screen harness changes, measure noise",
+  "phase": "Final (2026-10-01 to 2026-11-02): reproduce, screen harness changes, fix the scored-run timeouts, add solved-level memory",
   "speculative_bench": {
     "source": "kernel arc-agi-3-dfz-specbench, 100 real requests, 10 lanes",
     "rows": [
@@ -566,5 +740,17 @@
       ]
     ],
     "note": "optimistic: stock sim 50.5 vs measured 42.7; read as direction"
-  }
+  },
+  "finals": [
+    {
+      "ref": "57854829",
+      "score": 32.64,
+      "config": "D' + keep-alive + solved-level memory (v8)"
+    },
+    {
+      "ref": "57160703",
+      "score": 29.85,
+      "config": "D' slot priority (shiiin9)"
+    }
+  ]
 }
