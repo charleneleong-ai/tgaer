@@ -234,3 +234,92 @@ class TestTurnArchive:
             ._build_system_prompt(tool_output_tokens=1)
             .startswith("SYSTEM\n- `search_turns(")
         )
+
+
+def step(action: str, level: int) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        action=action, frame=types.SimpleNamespace(level=level)
+    )
+
+
+class TestSolvedLevelMemory:
+    @pytest.fixture
+    def ns(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        tool_agent = types.ModuleType("inference.agent.tool_agent")
+        runtime_state = types.ModuleType("inference.agent.runtime_state")
+        # level 1: a failed attempt, RESET, then the winning attempt; the last action lands on level 2
+        entries = [
+            step("ACTION1", 1),
+            step("ACTION2", 1),
+            step("RESET", 1),
+            step("ACTION3", 1),
+            step("ACTION4", 2),
+        ]
+        runtime_state.load_runtime_state = lambda path: ({}, entries)
+
+        class ToolAgent:
+            def analyze(self, state_path):
+                return "turn"
+
+            def _build_user_prompt(self):
+                return "board"
+
+            def _note_history_evicted(self):
+                pass
+
+            def _trim_messages_for_context(self, messages):
+                return messages[:1] + messages[2:]
+
+        tool_agent.ToolAgent = ToolAgent
+        install_modules(
+            monkeypatch,
+            **{
+                "inference.agent.tool_agent": tool_agent,
+                "inference.agent.runtime_state": runtime_state,
+            },
+        )
+        return run_cell("solved_level_memory")
+
+    def test_asks_for_a_rule_then_pins_it_only_when_the_history_drains(
+        self, ns
+    ) -> None:
+        agent = ns["_ta_slm"].ToolAgent()
+        agent._system_prompt = "SYSTEM"
+        agent._history_messages = [
+            {"role": "assistant", "content": "pushed the block onto the pad"}
+        ]
+        agent._last_step_summary = {"level": 2}
+
+        agent.analyze("state")
+        (rec,) = agent._slm_levels
+        assert (rec["level"], rec["actions"]) == (1, ["ACTION3", "ACTION4"])
+        assert "`Rule for level 1:`" in agent._build_user_prompt()
+
+        agent._history_messages.append(
+            {
+                "role": "assistant",
+                "content": "Rule for level 1: push the block onto the pad, then step off it.",
+            }
+        )
+        agent.analyze("state")
+        assert rec["rule"] == "push the block onto the pad, then step off it."
+        assert agent._build_user_prompt() == "board"
+        assert agent._system_prompt == "SYSTEM"  # nothing changes until a drain
+
+        agent._note_history_evicted()
+        assert agent._system_prompt.startswith("SYSTEM\n\n=== SOLVED LEVELS")
+        assert "push the block onto the pad" in agent._system_prompt
+        system, user = {"role": "system", "content": "SYSTEM"}, {"role": "user"}
+        trimmed = agent._trim_messages_for_context([system, user, user])
+        assert trimmed[0]["content"] == agent._system_prompt
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Rule for level 1: too short",
+            "Rule for level 2: right level number, but the wrong one asked for",
+            "no rule line at all",
+        ],
+    )
+    def test_ignores_missing_short_or_wrong_level_rules(self, ns, text) -> None:
+        assert ns["_slm_find_rule"](text, 1) is None
