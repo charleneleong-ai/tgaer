@@ -58,7 +58,7 @@ mise run lint             # ruff format + check
 
 | benchmark | status | results |
 | --- | --- | --- |
-| **ARC-AGI-3** (ARC Prize 2026) | active | [`docs/challenges/arc-agi-3.md`](docs/challenges/arc-agi-3.md) |
+| **ARC-AGI-3** (ARC Prize 2026) | closed 2026-11-02: best public 32.64, rank 296 / 5,070 | [`docs/challenges/arc-agi-3.md`](docs/challenges/arc-agi-3.md) · [final results](docs/experiments/2026-11-02-arc-agi3-final-results.md) · [report](docs/report.pdf) |
 | ORAK (embodied reasoning) | submodule, adapter not wired | — |
 | ARC-AGI-1/2 | adapter not wired | — |
 

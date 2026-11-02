@@ -37,7 +37,7 @@ p{margin:.6rem 0;max-width:66ch}
 .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:.6rem}
 .phase{color:var(--muted);font-size:.9rem;margin-top:.3rem}
 .lede{font-size:1.05rem;color:var(--muted);max-width:62ch;margin-top:.8rem}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:.7rem;margin:1.8rem 0 .4rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:.7rem;margin:1.8rem 0 .4rem}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:.85rem .95rem;min-width:0}
 .tile .k{font-family:var(--mono);font-size:.68rem;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
 .tile .v{font-family:var(--display);font-size:1.6rem;font-weight:700;font-variant-numeric:tabular-nums;margin-top:.2rem}
@@ -182,18 +182,28 @@ class Dashboard:
         "PROMOTE": "var(--accent)",
     }
 
+    SLM = "D' + solved-level memory"
+
     def __init__(self, d: dict[str, Any]) -> None:
         self.d = d
         self.base = d["baseline"]
 
     def headline(self) -> str:
-        pub = self.d["public"]
+        pub = [p for p in self.d["public"] if p["score"] is not None]
         dp = [p["score"] for p in pub if p["group"] == "D'"]
+        slm = [p["score"] for p in pub if p["group"] == self.SLM]
+        best = max(pub, key=lambda p: p["score"])
+        lb = self.d["leaderboard"]
         tiles = [
             (
                 "best public draw",
-                f"{max(p['score'] for p in pub):.2f}",
-                "D' copy, 2026-10-07",
+                f"{best['score']:.2f}",
+                f"{best['group']}, {best['date']}",
+            ),
+            (
+                "solved-level memory",
+                f"{sum(slm) / len(slm):.2f}",
+                f"mean of n={len(slm)}, the only lift over D'",
             ),
             (
                 "baseline",
@@ -203,7 +213,7 @@ class Dashboard:
             (
                 "D' mean",
                 f"{sum(dp) / len(dp):.2f}",
-                f"n={len(dp)}, indistinguishable from plain",
+                f"n={len(dp)}, within noise of plain",
             ),
             (
                 "not moved",
@@ -211,9 +221,9 @@ class Dashboard:
                 f"stuck levels cleared, {len(self.d['suite']) - 2} arms",
             ),
             (
-                "leader",
-                f"{self.d['leaderboard']['top'][0][1]:.2f}",
-                self.d["leaderboard"]["top"][0][0],
+                "public rank",
+                f"{lb['our_rank']} / {lb['teams']:,}",
+                f"leader {lb['top'][0][1]:.2f}; silver line {lb['silver_line']:.2f}",
             ),
         ]
         cells = "".join(
@@ -223,8 +233,23 @@ class Dashboard:
         return f'<div class="tiles">{cells}</div>'
 
     def public(self) -> str:
-        order = ["plain", "D'", "D' + re-attempt", "endgame rotation", "level prior"]
-        colour = {"plain": "var(--flat)", "D'": "var(--gain)"}
+        order = [
+            self.SLM,
+            "D'",
+            "D' + keep-alive",
+            "plain",
+            "D' + turn archive",
+            "D' + re-attempt",
+            "D' + 256 px + drafter",
+            "endgame rotation",
+            "level prior",
+        ]
+        colour = {
+            self.SLM: "var(--accent)",
+            "plain": "var(--flat)",
+            "D'": "var(--gain)",
+            "D' + keep-alive": "var(--gain)",
+        }
         groups = [
             (
                 g,
@@ -236,16 +261,17 @@ class Dashboard:
         chart = Svg.dots(
             groups,
             18,
-            32,
-            [18, 20, 22, 24, 26, 28, 30, 32],
+            34,
+            [18, 20, 22, 24, 26, 28, 30, 32, 34],
             (self.base["public_mean"], f"plain mean {self.base['public_mean']:.2f}"),
         )
         return (
-            "<h2>Public score: D' and plain dfranzen are indistinguishable</h2>"
-            '<p class="take">Every change we added on top of dfranzen scored at or below the plain copies; D\' and plain differ by 0.6 points over four draws each, and draws of identical code span 22-30.</p>'
+            "<h2>Public score: solved-level memory is the one change that cleared the copies</h2>"
+            '<p class="take">Solved-level memory scored 32.64 and 28.01; every other change landed at or below D\' and plain, which differ by 1.8 points, and draws of identical code span 22-30.</p>'
             + chart
             + "<p>Each dot is one submission scored on about 55 hidden games. Identical copies vary by about 4 points. "
-            "The new-kernel submission that scored 0.00 is left out: it failed in the scored rerun, and the same code from the proven kernel scored 26.05.</p>"
+            "Left out: five 0.00 or ERROR draws that failed in the scored rerun (a new kernel slug, our own GPU run overlapping it, "
+            "and three slow weight loads outlasting the 15-minute idle close before the keep-alive fix).</p>"
         )
 
     def local(self) -> str:
@@ -341,8 +367,8 @@ class Dashboard:
         rows = [(name, n, "var(--accent)") for name, n in self.d["funnel"]]
         return (
             "<h2>The funnel</h2>"
-            f'<p class="take">{self.d["funnel"][0][1]} mechanisms built; one cleared the local noise band and did not reproduce; one configuration beat plain publicly, not significantly.</p>'
-            + Svg.bars(rows, 0, 25, [0, 5, 10, 15, 20, 25], "{:.0f}")
+            f'<p class="take">{self.d["funnel"][0][1]} mechanisms built; one cleared the local noise band and did not reproduce; two configurations beat plain publicly, neither significantly.</p>'
+            + Svg.bars(rows, 0, 30, [0, 5, 10, 15, 20, 25, 30], "{:.0f}")
         )
 
     def ledger(self) -> str:
@@ -360,8 +386,8 @@ class Dashboard:
             f"<tbody>{rows}</tbody></table></div>"
             f"<h2>Not established</h2><ul>{ne}</ul>"
             f"<h2>Leaderboard context ({self.d['leaderboard']['date']})</h2>"
-            f"<ul>{lb}</ul><p>{self.d['leaderboard']['teams_at_or_above_32']} teams sit at 32 or above, mostly draws of dfranzen copies. "
-            "None of the top five has disclosed a method.</p>"
+            f"<ul>{lb}</ul><p>{self.d['leaderboard']['teams_at_or_above_32']} of {self.d['leaderboard']['teams']:,} teams sit at 32 or above, "
+            "mostly draws of dfranzen copies. The top three have not published code.</p>"
         )
 
     def audit(self) -> str:
@@ -402,8 +428,9 @@ class Dashboard:
                 + "</div>",
                 f'<p class="phase">{Svg.esc(self.d["phase"])}</p>',
                 "<h1>dfranzen's harness, and what moved the public score</h1>",
-                '<p class="lede">Twenty-three changes on top of the strongest public notebook, tested locally, on a stuck-level suite '
-                "and in public submissions. None moved the hidden-game score; D' and plain dfranzen are tied, and speed is the lever left.</p>",
+                '<p class="lede">Twenty-six changes on top of the strongest public notebook, tested locally, on a stuck-level suite '
+                "and in 33 public submissions. One moved the hidden-game score: pinning each solved level's rule into the system prompt "
+                "(32.64 and 28.01 against 25.53 for the same kernel without it). The final picks are that build and D' at 29.85.</p>",
                 self.headline(),
                 self.public(),
                 self.local(),
