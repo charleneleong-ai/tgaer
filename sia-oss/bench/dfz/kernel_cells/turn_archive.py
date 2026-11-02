@@ -116,7 +116,7 @@ def _ta_capture(agent, before: list, kept: list) -> None:
             }
         )
         TURN_ARCHIVE["archived"] += 1
-    store["text"] = {k: v for k, v in cache.items() if k in {id(m) for m in kept}}
+    store["text"] = {id(m): cache[id(m)] for m in kept if id(m) in cache}
     del store["entries"][: -TURN_ARCHIVE["max_entries"]]
 
 
@@ -153,9 +153,8 @@ if not getattr(_ta_cls._persistent_history_messages, "_ours_ta", False):
         agent = getattr(_ta_local, "agent", None)
         if agent is not None and isinstance(initial_state, dict):
             agent._ours_level = (initial_state.get("current_frame") or {}).get("level")
-            if getattr(
-                _ta_local, "searching", False
-            ):  # only snippets that search pay for the payload
+            # only snippets that search pay for the payload
+            if getattr(_ta_local, "searching", False):
                 entries = _ta_store(agent)["entries"][-TURN_ARCHIVE["send_entries"] :]
                 initial_state = {**initial_state, "turn_archive": entries}
         return _ta_orig_sandbox(*args, initial_state=initial_state, **kwargs)

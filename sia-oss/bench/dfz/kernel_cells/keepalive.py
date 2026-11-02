@@ -55,10 +55,9 @@ if not getattr(_ka_cls._play_inner, "_ours_ka", False):
         with KEEPALIVE["lock"]:
             KEEPALIVE["sessions"].append(self)
             first = len(KEEPALIVE["sessions"]) == 1
+        # exercises the reset path once, where it costs nothing
         if first and not TRUE_SUBMISSION:
-            _ka_reset(
-                self, "save-run self-test"
-            )  # exercises the reset path once, where it costs nothing
+            _ka_reset(self, "save-run self-test")
         return _ka_orig_play_inner(self, *args, **kwargs)
 
     def _execute_action(self, *args, **kwargs):

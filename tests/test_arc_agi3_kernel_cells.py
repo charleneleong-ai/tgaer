@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import http.server
 import sys
+import textwrap
 import threading
 import time
 import types
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,12 @@ import pytest
 
 CELLS = Path(__file__).resolve().parents[1] / "sia-oss/bench/dfz/kernel_cells"
 ANCHOR = '    _refresh_state(initial.get("state") or {})\n'
+
+
+def step(action: str, level: int) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        action=action, frame=types.SimpleNamespace(level=level)
+    )
 
 
 class FakeSession:
@@ -38,7 +46,7 @@ class FakeSession:
         self._execute_action()
 
     def _play_inner(self) -> None:
-        time.sleep(0.05)
+        pass
 
 
 class Health:
@@ -77,7 +85,7 @@ class TestKeepAlive:
     @pytest.fixture
     def cell(
         self, monkeypatch: pytest.MonkeyPatch
-    ) -> tuple[dict[str, Any], Health, list[FakeSession]]:
+    ) -> Iterator[tuple[dict[str, Any], Health, list[FakeSession]]]:
         solver = types.ModuleType("inference.framework.solver")
         solver._HarnessGameSession = type("S", (FakeSession,), {})
         install_modules(monkeypatch, **{"inference.framework.solver": solver})
@@ -98,7 +106,8 @@ class TestKeepAlive:
         sessions = [solver._HarnessGameSession(i) for i in range(3)]
         for s in sessions:
             s._play_inner()
-        return ns, health, sessions
+        yield ns, health, sessions
+        health.server.shutdown()
 
     def test_resets_while_loading_and_on_stalls_but_never_during_play(
         self, cell
@@ -158,9 +167,7 @@ class TestTurnArchive:
         agent.state = {"current_frame": {"level": level}}
         sent = agent._run_python_tool(None, {"code": "search_turns()"})["initial_state"]
         bootstrap = ns["_ta_sandbox"]._SANDBOX_BOOTSTRAP
-        snippet = bootstrap[bootstrap.index(ANCHOR) + len(ANCHOR) :].replace(
-            "\n    ", "\n"
-        )
+        snippet = textwrap.dedent(bootstrap[bootstrap.index(ANCHOR) + len(ANCHOR) :])
         frame = types.SimpleNamespace(level=level)
         env: dict[str, Any] = {
             "initial": {"state": sent},
@@ -234,12 +241,6 @@ class TestTurnArchive:
             ._build_system_prompt(tool_output_tokens=1)
             .startswith("SYSTEM\n- `search_turns(")
         )
-
-
-def step(action: str, level: int) -> types.SimpleNamespace:
-    return types.SimpleNamespace(
-        action=action, frame=types.SimpleNamespace(level=level)
-    )
 
 
 class TestSolvedLevelMemory:
